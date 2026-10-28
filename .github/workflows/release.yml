@@ -1,0 +1,42 @@
+# SPSSiteLifecycle CI Release workflow
+# Triggered by pushing a v* tag (e.g. v0.1.0). Packages the contents of the src/
+# folder into a ZIP (so the archive extracts straight to the scripts, with no src/
+# wrapper) and publishes a GitHub Release using RELEASE-NOTES.md as the body.
+# Tags that start with v0. are published as pre-releases.
+
+name: SPSSiteLifecycle CI Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Create ZIP file of src contents
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          zip_name="SPSSiteLifecycle-${TAG}.zip"
+          ( cd src && zip -r "../$zip_name" . )
+        shell: bash
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          draft: false
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          body_path: RELEASE-NOTES.md
+          files: |
+            LICENSE
+            SPSSiteLifecycle-${{ github.ref_name }}.zip
