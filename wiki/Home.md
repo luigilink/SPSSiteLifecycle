@@ -6,9 +6,9 @@ SPSSiteLifecycle is a PowerShell tool (PnP.PowerShell) that finds inactive or re
 
 ## Safeguards
 
-* **Report only by default:** nothing changes in the tenant without `-Execute`.
-* **Double confirmation:** `-Execute` asks for the tenant name, then for a phrase that carries the number of actions (`DELETE n`, `ARCHIVE n` or `APPLY n`).
-* **Capped runs:** `-MaxActions` limits the number of actions of a run (25 by default).
+* **Report only by default:** the Scan phase never changes anything, and the Act phase only simulates until `Execute = $true` is set in the `Act` section of the settings file.
+* **Double confirmation:** with `Execute = $true`, the tool shows a summary, asks for the tenant name, then for a phrase that carries the number of actions (`DELETE n`, `ARCHIVE n` or `APPLY n`). It stops if the input is redirected.
+* **Capped runs:** `MaxActions` limits the number of actions of a run (25 by default).
 * **Stops on repeated errors:** a run stops after 3 consecutive errors.
 * **Live re-check:** each site is read again from the tenant right before every action.
 * **Protected sites:** a channel site, a hub site, the root site and a system site are never deleted or archived.
@@ -17,3 +17,5 @@ SPSSiteLifecycle is a PowerShell tool (PnP.PowerShell) that finds inactive or re
 ## Pages
 
 * [Getting Started](./Getting-Started)
+* [Design decisions](./Design-Decisions)
+* [Release process](./Release-Process)

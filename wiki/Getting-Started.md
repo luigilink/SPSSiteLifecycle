@@ -13,4 +13,4 @@
 
 * Use a non-production tenant first.
 * Check the retention settings of the tenant: a deleted site or group can be restored only while the retention lasts.
-* Run the report phase, read the CSV, then start with a single action (`-MaxActions 1`).
+* Run the report phase, read the CSV, then start with a single action (`MaxActions = 1`).

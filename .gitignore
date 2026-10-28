@@ -13,8 +13,13 @@ Reports/
 **/Reports/
 private/
 
-# Local configuration (never commit tenant names, client IDs or other environment values)
+# Local configuration (never commit tenant names, client IDs or other environment values):
+# only the example settings file is tracked
 *.local.psd1
+config/*.psd1
+src/config/*.psd1
+!config/*.example.psd1
+!src/config/*.example.psd1
 
 # OSX
 .DS_Store

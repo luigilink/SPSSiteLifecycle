@@ -21,9 +21,9 @@ The inactive site policy of Microsoft 365 can make inactive sites read-only, the
 
 ## Safeguards
 
-- **Report only by default.** Nothing changes in the tenant without `-Execute`.
-- **Double confirmation.** `-Execute` asks for the tenant name, then for a phrase that carries the number of actions (`DELETE n`, `ARCHIVE n` or `APPLY n`).
-- **Capped runs.** `-MaxActions` limits the number of actions of a run (25 by default).
+- **Report only by default.** The Scan phase never changes anything, and the Act phase only simulates until `Execute = $true` is set in the `Act` section of the settings file.
+- **Double confirmation.** With `Execute = $true`, the tool shows a summary, asks for the tenant name, then for a phrase that carries the number of actions (`DELETE n`, `ARCHIVE n` or `APPLY n`). It stops if the input is redirected.
+- **Capped runs.** `MaxActions` limits the number of actions of a run (25 by default).
 - **Stops on repeated errors.** A run stops after 3 consecutive errors.
 - **Live re-check.** Each site is read again from the tenant right before every action.
 - **Protected sites.** A channel site, a hub site, the root site and a system site are never deleted or archived.
@@ -46,7 +46,7 @@ The inactive site policy of Microsoft 365 can make inactive sites read-only, the
 
 ## Disclaimer
 
-SPSSiteLifecycle deletes SharePoint sites and Microsoft 365 groups. It is provided as is, without warranty (see [LICENSE](LICENSE)). A deleted site can be restored from the recycle bin only while the retention lasts: check the retention settings of your tenant first, run the report, then start with a single action (`-MaxActions 1`).
+SPSSiteLifecycle deletes SharePoint sites and Microsoft 365 groups. It is provided as is, without warranty (see [LICENSE](LICENSE)). A deleted site can be restored from the recycle bin only while the retention lasts: check the retention settings of your tenant first, run the report, then start with a single action (`MaxActions = 1`).
 
 ## Code of conduct
 

@@ -33,8 +33,12 @@ replace it with made-up values.
 ## Coding conventions
 
 - Target PowerShell 7.4+ (required by PnP.PowerShell 3.x) and follow the existing SPS* toolkit style.
+- Shared logic lives in the `SPSSiteLifecycle.Common` module (one function per file under `Public/` or `Private/`, named `<Verb>-SPSLifecycle<Noun>`); the entry script `src/SPSSiteLifecycle.ps1` orchestrates the run.
+- Only the adapter functions under `Private/Adapters/` call PnP.PowerShell or Microsoft Graph: a test enforces it.
+- The `ModuleVersion` in `SPSSiteLifecycle.Common.psd1` is the single source of truth for the version.
+- The Configuration and Verdicts wiki pages are generated: run `tools/Update-Documentation.ps1` after changing the settings schema or the verdict catalog.
 - PowerShell files are saved as UTF-8 with a BOM and CRLF line endings (see `.editorconfig` and `.gitattributes`).
-- The safeguards of the tool (report only by default, double confirmation, `-MaxActions`, live re-check
+- The safeguards of the tool (report only by default, double confirmation, `MaxActions`, live re-check
   before every action, protected sites) are not optional: do not weaken them without discussing it first.
 - Tests run without a tenant: calls to PnP.PowerShell are mocked, and the fixtures contain made-up data only.
 - Never commit customer or tenant data: tenant names, site URLs, client IDs, e-mail addresses, site lists,

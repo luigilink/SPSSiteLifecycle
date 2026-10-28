@@ -9,6 +9,8 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'tools/**'
+      - 'wiki/**'
       - 'PSScriptAnalyzerSettings.psd1'
 
 # The "Publish Test Results" step creates a check run, which requires write
@@ -32,12 +34,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      # Pester 5 is pinned on purpose: Pester 6 is out and a plain -MinimumVersion
-      # would pick it up silently.
+      # Pester 6 is pinned on purpose: the tests use the syntax that Pester 5 and 6 share,
+      # and a future Pester 7 must be adopted deliberately.
       - name: Install Pester
         shell: pwsh
         run: |
-          Install-Module -Name Pester -MinimumVersion 5.5.0 -MaximumVersion 5.99.99 -Force -SkipPublisherCheck -Scope CurrentUser
+          Install-Module -Name Pester -MinimumVersion 6.0.0 -MaximumVersion 6.99.99 -Force -SkipPublisherCheck -Scope CurrentUser
           Import-Module Pester
 
       - name: Run Pester Tests
@@ -84,7 +86,7 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path ./src -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+          $results = @('./src', './tools') | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 }
 
           if ($results) {
             $results | Format-Table -AutoSize

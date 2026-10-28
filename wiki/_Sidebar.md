@@ -2,6 +2,8 @@
 
 - [🏠 Home](Home)
 - [🚀 Getting Started](Getting-Started)
+- [🧭 Design decisions](Design-Decisions)
+- [📦 Release Process](Release-Process)
 
 ---
 
