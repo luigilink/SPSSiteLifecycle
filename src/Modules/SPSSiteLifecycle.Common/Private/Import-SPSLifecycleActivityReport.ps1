@@ -23,7 +23,12 @@
         matched by Site Id. When both are empty, the function stops and says how to fix it.
 
         Returns an object with Kind, Name, RowCount, DeletedRowCount, ReportPeriod, RefreshDate,
-        ById and ByUrl (hashtables from the key to the last activity date, or $null).
+        ById and ByUrl (hashtables from the key to the last activity date, or $null), and ByUrlId.
+
+        ByUrlId is for the SharePoint report. It gives, for each address, the ID of the site of its row (a lowercase
+        GUID), an empty text when the row has no usable site ID, and a star when rows with different site IDs share
+        the address. A site that is looked up by its address can then be refused the row of another site: an address
+        that a new site reuses must not inherit the activity of the site that had it (see Find-SPSLifecycleActivity).
 
         .PARAMETER Path
         Path of the CSV file.
@@ -94,6 +99,7 @@
 
     $byId = @{}
     $byUrl = @{}
+    $byUrlId = @{}
     $dateCache = @{}
     $flagCache = @{}
     $deleted = 0
@@ -143,6 +149,15 @@
 
         if ($Kind -eq 'SharePoint') {
             $key = ConvertTo-SPSLifecycleUrlKey -Url $row.'Site URL'
+            if ($key) {
+                if (-not $byUrlId.ContainsKey($key)) {
+                    $byUrlId[$key] = $id
+                }
+                elseif ($byUrlId[$key] -cne $id) {
+                    $byUrlId[$key] = '*'
+                }
+            }
+
             if ($key -and (-not $byUrl.ContainsKey($key) -or ($date -and (-not $byUrl[$key] -or $date -gt $byUrl[$key])))) {
                 $byUrl[$key] = $date
             }
@@ -169,5 +184,6 @@
         RefreshDate     = $refresh
         ById            = $byId
         ByUrl           = $byUrl
+        ByUrlId         = $byUrlId
     }
 }
