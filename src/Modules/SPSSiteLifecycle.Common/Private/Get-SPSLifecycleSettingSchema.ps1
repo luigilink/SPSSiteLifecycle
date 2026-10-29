@@ -63,7 +63,7 @@
         @{
             Section = 'Shared'; Name = 'LockDateFiles'; Type = 'PathList'; Kind = 'File'; MustExist = $true; UsedIn = $both; AllowEmpty = $true
             Default = @(); DefaultText = '`@()`'
-            Description = 'CSV files that give the date each site was locked: a `Url` column, a `LockedOn` column and, optionally, a `SiteId` column. When a site appears several times, the latest date is kept.'
+            Description = 'CSV files that give the date each site was locked: a `Url` column, a `LockedOn` column and, optionally, a `SiteId` column. A row that has a site ID is matched to the site by that ID, whatever its address (a renamed site keeps its date, and a site that reuses an address does not inherit it); a row without one is matched by its URL. When a site appears several times, in these files or in the lock journal, the latest date is kept.'
         }
         @{
             Section = 'Shared'; Name = 'ExclusionFiles'; Type = 'PathList'; Kind = 'File'; MustExist = $true; UsedIn = $both; AllowEmpty = $true
@@ -73,7 +73,7 @@
         @{
             Section = 'Shared'; Name = 'LockJournal'; Type = 'Path'; Kind = 'File'; UsedIn = $both
             Default = ''; DefaultText = '`lock-journal.csv` in `OutputFolder`'
-            Description = 'CSV file where the Act phase records each site it locks (URL, site ID, lock date). Nothing is written in the tenant. Both phases read it as a source of lock dates.'
+            Description = 'CSV file where the Act phase records each site it locks (URL, site ID, lock date). Nothing is written in the tenant. Both phases read it as a source of lock dates. A journal that does not exist yet is an empty one, and one that exists is read strictly: a row that cannot be used stops the tool, because a row that is ignored could leave an older date in force. The tool adds to it in UTF-8 and keeps the separator of the file, so a person can open it in Excel, but must close it before an Act run that locks sites.'
         }
         @{
             Section = 'Shared'; Name = 'CsvDelimiter'; Type = 'Choice'; UsedIn = $both

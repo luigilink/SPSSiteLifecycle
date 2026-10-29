@@ -37,3 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is quoted, because an unquoted field loses its leading spaces when it is read.
 - Paths: a relative path of a file or a folder is resolved against the location of the PowerShell session,
   and never against the working directory of the process, which `Set-Location` does not change (#19).
+- Lock dates: the lock journal is read (a journal that does not exist yet is an empty one), and the lists
+  and the journal are merged into one index in which the latest date wins and a site is found by its ID
+  before its address: a renamed site keeps its date, a site that reuses an address does not inherit the
+  date of the old one, and a site whose ID is unknown has no date. The journal is read strictly, unlike a
+  list: a row without a date, with a bad site ID or with no site, and a quote that is never closed, stop
+  the tool, because an ignored row could leave an older date in force. A row is added to the journal
+  without damaging a file that Excel saved: its separator and columns are kept, a file that is not UTF-8
+  or that ends inside a quoted field is refused and left as it is, and the row is flushed to the disk (#4).
+- Column names are compared one character at a time, whatever the culture: a header with a hidden
+  character (a soft hyphen) is no longer the column that it looks like, and the message shows the
+  character.
