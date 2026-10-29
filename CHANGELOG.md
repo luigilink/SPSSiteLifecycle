@@ -66,3 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and its meaning lost without a message. An accent or a dot that is a separate character (a capital `I`
   and a combining dot above, which would compose into a dotted `I` that is a letter of its own) does not
   hide a lookalike either, and the message writes a combining mark as `\uXXXX`.
+- The Scan core (`ConvertTo-SPSLifecycleScanRow`): a pure function that takes the records of the listing, the
+  settings and the indexes, and gives one row per site with the columns of the report, so that the whole Scan
+  logic is tested offline (#5). The rows go down the pipeline one at a time, straight to the report writer, and a
+  summary counts the sites read, listed and left out, and the rows per verdict and per suggested action. A site is
+  matched with the SharePoint report by its ID, and by its address only when a row has no site ID: the row of another
+  site that had the address is never given to it, and the site is then in no report (`REVIEW-NO-ACTIVITY-ROW`). The
+  Teams and groups reports are matched by the ID of the group, the latest date wins, and the report that gave it is
+  named. OneDrive sites, and sites whose lock state the Scan does not ask for, are left out and counted. A record that
+  has no address, no usable site ID or a content change that is not a date stops the Scan and names the record. The
+  exclusion lists are merged into one index like the lock dates. The tests run 5,000 and 20,000 sites and compare the
+  times, so that a time that grows with the square of the size fails on any system.

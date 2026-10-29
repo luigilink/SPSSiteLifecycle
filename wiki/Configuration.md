@@ -47,7 +47,7 @@ Written inside `Scan = @{ ... }`. Only the Scan phase uses them.
 | Setting | Type | Default | Required in | Used by | Description |
 |---------|------|---------|-------------|---------|-------------|
 | `InactiveDays` | whole number, 1 to 3650 | `365` | no | Scan only | A site is a candidate when its last activity is older than this many days. |
-| `LockStates` | list of `ReadOnly`, `Unlock` | `@('ReadOnly')` | no | Scan only | Lock states that the Scan phase lists. With `ReadOnly` alone, the server filters the listing, which is much faster on a large tenant. Add `Unlock` to also look for inactive sites that are not locked (suggested action `Lock`). |
+| `LockStates` | list of `ReadOnly`, `Unlock` | `@('ReadOnly')` | no | Scan only | Lock states that the Scan phase lists. With `ReadOnly` alone, the server filters the listing, which is much faster on a large tenant. Add `Unlock` to also look for inactive sites that are not locked (suggested action `Lock`). A site in another lock state is left out of the report and counted in the summary, whether the server filtered the listing or not. |
 | `SharePointUsageReport` | file path | (none) | no | Scan only | CSV file of the SharePoint site usage report (Microsoft 365 admin center, Reports, Usage). The Scan phase needs at least one of the three activity reports. |
 | `TeamsActivityReport` | file path | (none) | no | Scan only | CSV file of the Microsoft Teams activity report (teams). It shows the activity that the SharePoint report does not see. |
 | `GroupsActivityReport` | file path | (none) | no | Scan only | CSV file of the Microsoft 365 groups activity report. |
