@@ -5,8 +5,12 @@
 
         .DESCRIPTION
         The file has a Url column, a LockedOn column and, optionally, a SiteId column. A row
-        without a date is ignored (a site without a lock date is never deleted anyway). When a
-        site appears twice, the latest date is kept: a later lock date can only delay a deletion.
+        without a date is ignored (a site without a lock date is never deleted anyway).
+
+        A row that has a site ID is that site, whatever its address, and a row that has none is
+        known by its address only. When a site appears twice, the latest date is kept: a later lock
+        date can only delay a deletion. Two site IDs that used the same address stay two entries,
+        because the second site is not the first.
 
         Returns an object with the file name, the number of rows and the entries (Url, UrlKey,
         SiteId, LockedOn, Source).
@@ -66,12 +70,13 @@
             }
         }
 
-        $key = if ($url) { ConvertTo-SPSLifecycleUrlKey -Url $url } else { $siteId }
+        $urlKey = if ($url) { ConvertTo-SPSLifecycleUrlKey -Url $url } else { '' }
+        $key = if ($siteId) { "id:$siteId" } else { "url:$urlKey" }
         $date = $dateCache[$text]
         if (-not $latest.ContainsKey($key) -or $date -gt $latest[$key].LockedOn) {
             $latest[$key] = [PSCustomObject]@{
                 Url      = $url
-                UrlKey   = if ($url) { ConvertTo-SPSLifecycleUrlKey -Url $url } else { '' }
+                UrlKey   = $urlKey
                 SiteId   = $siteId
                 LockedOn = $date
                 Source   = $name
