@@ -20,19 +20,23 @@
     [OutputType([System.Management.Automation.PSObject[]])]
     param ()
 
-    @(
-        [PSCustomObject]@{ Pattern = 'APPCATALOG#*'; Reason = 'App catalog site' }
-        [PSCustomObject]@{ Pattern = 'CENTRALADMIN#*'; Reason = 'Central admin site' }
-        [PSCustomObject]@{ Pattern = 'CSPCONTAINER#*'; Reason = 'CSP container (SharePoint Embedded)' }
-        [PSCustomObject]@{ Pattern = 'EDISC#*'; Reason = 'eDiscovery center' }
-        [PSCustomObject]@{ Pattern = 'FunSite#*'; Reason = 'SharePoint tenant fundamental site' }
-        [PSCustomObject]@{ Pattern = 'POINTPUBLISHING*'; Reason = 'PointPublishing hub, personal blog and topic sites' }
-        [PSCustomObject]@{ Pattern = 'POLICYCTR#*'; Reason = 'Compliance policy center' }
-        [PSCustomObject]@{ Pattern = 'REDIRECTSITE#*'; Reason = 'Redirect site' }
-        [PSCustomObject]@{ Pattern = 'REVIEWCTR#*'; Reason = 'Review center' }
-        [PSCustomObject]@{ Pattern = 'SPSMSITEHOST#*'; Reason = 'My Site host' }
-        [PSCustomObject]@{ Pattern = 'SRCHCEN#*'; Reason = 'Search center' }
-        [PSCustomObject]@{ Pattern = 'TENANTADMIN#*'; Reason = 'Tenant admin site' }
-        [PSCustomObject]@{ Pattern = 'TestSite#*'; Reason = 'Test site' }
-    )
+    if ($null -eq $script:ProtectedTemplateTable) {
+        $script:ProtectedTemplateTable = @(
+            [PSCustomObject]@{ Pattern = 'APPCATALOG#*'; Reason = 'App catalog site' }
+            [PSCustomObject]@{ Pattern = 'CENTRALADMIN#*'; Reason = 'Central admin site' }
+            [PSCustomObject]@{ Pattern = 'CSPCONTAINER#*'; Reason = 'CSP container (SharePoint Embedded)' }
+            [PSCustomObject]@{ Pattern = 'EDISC#*'; Reason = 'eDiscovery center' }
+            [PSCustomObject]@{ Pattern = 'FunSite#*'; Reason = 'SharePoint tenant fundamental site' }
+            [PSCustomObject]@{ Pattern = 'POINTPUBLISHING*'; Reason = 'PointPublishing hub, personal blog and topic sites' }
+            [PSCustomObject]@{ Pattern = 'POLICYCTR#*'; Reason = 'Compliance policy center' }
+            [PSCustomObject]@{ Pattern = 'REDIRECTSITE#*'; Reason = 'Redirect site' }
+            [PSCustomObject]@{ Pattern = 'REVIEWCTR#*'; Reason = 'Review center' }
+            [PSCustomObject]@{ Pattern = 'SPSMSITEHOST#*'; Reason = 'My Site host' }
+            [PSCustomObject]@{ Pattern = 'SRCHCEN#*'; Reason = 'Search center' }
+            [PSCustomObject]@{ Pattern = 'TENANTADMIN#*'; Reason = 'Tenant admin site' }
+            [PSCustomObject]@{ Pattern = 'TestSite#*'; Reason = 'Test site' }
+        )
+    }
+
+    $script:ProtectedTemplateTable
 }

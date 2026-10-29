@@ -205,7 +205,7 @@ Describe 'Add-SPSLifecycleLockJournalEntry' {
         It 'quotes a URL that holds the separator' {
             $null = Add-TestEntry -Path $script:Journal -Url 'https://contoso.sharepoint.com/sites/a,b'
 
-            @(Import-TestJournal -Path $script:Journal).Entries[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/a,b'
+            (Import-TestJournal -Path $script:Journal).Entries[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/a,b'
         }
     }
 

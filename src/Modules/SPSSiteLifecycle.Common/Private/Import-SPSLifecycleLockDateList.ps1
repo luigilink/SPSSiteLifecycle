@@ -31,8 +31,9 @@
         site ID stops the tool and names its line. There is no threshold: a journal in which 90 % of the rows are
         good is not a good journal.
 
-        Returns an object with the file name, the number of rows and the entries (Url, UrlKey,
-        SiteId, LockedOn, Source).
+        Returns an object with the file name, the number of rows and the entries (hashtables with Url, UrlKey,
+        SiteId, LockedOn and Source: they stay in memory for the whole Scan, and a hashtable weighs far less on the
+        garbage collector than an object).
 
         .PARAMETER Path
         Path of the CSV file.
@@ -137,7 +138,9 @@
         $key = if ($siteId) { "id:$siteId" } else { "url:$urlKey" }
         $date = $dateCache[$text]
         if (-not $latest.ContainsKey($key) -or $date -gt $latest[$key].LockedOn) {
-            $latest[$key] = [PSCustomObject]@{
+            # A hashtable, not a PSCustomObject: the index keeps these entries for the whole Scan, and every garbage collection
+            # costs about 20 times more while a large number of PSCustomObject are alive (measured, D7).
+            $latest[$key] = @{
                 Url      = $url
                 UrlKey   = $urlKey
                 SiteId   = $siteId
