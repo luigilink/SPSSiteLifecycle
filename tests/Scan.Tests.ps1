@@ -783,6 +783,7 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             @{ Name = 'IsHubSite written as text'; Site = 'texthub'; Message = '*record 2*sites/two*IsHubSite*' }
             @{ Name = 'no answer to IsTeamsChannelConnected'; Site = 'nochannel'; Message = '*record 2*sites/two*IsTeamsChannelConnected*' }
             @{ Name = 'no template'; Site = 'notemplate'; Message = '*record 2*sites/two*Template*' }
+            @{ Name = 'a template that is a number'; Site = 'numbertemplate'; Message = '*record 2*sites/two*Template*' }
         ) {
             $first = New-ScanSite -Name 'one'
             $bad = switch ($Site) {
@@ -797,6 +798,7 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
                 'texthub' { $s = New-ScanSite -Name 'two' -SiteId $script:SiteB; $s.IsHubSite = 'False'; $s }
                 'nochannel' { $s = New-ScanSite -Name 'two' -SiteId $script:SiteB; $s.PSObject.Properties.Remove('IsTeamsChannelConnected'); $s }
                 'notemplate' { New-ScanSite -Name 'two' -SiteId $script:SiteB -Template ' ' }
+                'numbertemplate' { $s = New-ScanSite -Name 'two' -SiteId $script:SiteB; $s.Template = 123; $s }
             }
 
             if ($Site -eq 'nourl') {
@@ -829,6 +831,15 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
                 $row.GroupId | Should -BeExactly ''
                 $row.Verdict | Should -BeExactly 'DELETE-SITE'
             }
+        }
+
+        It 'reads the template without the spaces around it, so that a protected template with spaces is still protected' {
+            $site = New-ScanSite -Template ' APPCATALOG#0 '
+
+            $row = (Invoke-TestScan -Site $site -LockIndex (New-OldLock -Site $site)).Rows[0]
+
+            $row.Verdict | Should -BeExactly 'SKIP-PROTECTED'
+            $row.Template | Should -BeExactly 'APPCATALOG#0'
         }
 
         It 'stops on a record that is empty' {

@@ -61,7 +61,7 @@
         }
     }
 
-    $template = "$($Site.Template)"
+    $template = "$($Site.Template)".Trim()
     foreach ($protected in @(Get-SPSLifecycleProtectedTemplate)) {
         if ($template -like $protected.Pattern) {
             return $true

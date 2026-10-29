@@ -238,9 +238,11 @@
                     throw 'the record does not say whether the site is a Teams channel site (IsTeamsChannelConnected must be True or False): a channel site would not be protected.'
                 }
 
-                if (-not "$($record.Template)".Trim()) {
-                    throw 'the record has no template (Template): a system site would not be recognized.'
+                if ($record.Template -isnot [System.String] -or -not $record.Template.Trim()) {
+                    throw 'the record has no template, or a template that is not a text (Template): a system site would not be recognized.'
                 }
+
+                $template = $record.Template.Trim()
 
                 try {
                     $modified = ConvertTo-SPSLifecycleUtcDateTime -Value $record.LastContentModified
@@ -255,7 +257,7 @@
 
                 $verdictSite = [PSCustomObject]@{
                     Url                     = $url
-                    Template                = $record.Template
+                    Template                = $template
                     LockState               = $lockState
                     GroupId                 = $groupId
                     IsHubSite               = $record.IsHubSite
@@ -305,7 +307,7 @@
                         Decision           = ''
                         SiteId             = $siteId
                         Title              = $record.Title
-                        Template           = $record.Template
+                        Template           = $template
                         GroupId            = $groupId
                         IsTeamsConnected   = $record.IsTeamsConnected
                         LockState          = $lockState

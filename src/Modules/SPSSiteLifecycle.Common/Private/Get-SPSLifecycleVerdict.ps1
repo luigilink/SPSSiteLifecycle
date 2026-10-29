@@ -105,7 +105,7 @@
         $HomeSiteUrl = ''
     )
 
-    $template = "$($Site.Template)"
+    $template = "$($Site.Template)".Trim()
     $lockState = "$($Site.LockState)"
     $groupId = ConvertTo-SPSLifecycleId -Value $Site.GroupId
     $accepted = @($Setting.AcceptedLockStates)
