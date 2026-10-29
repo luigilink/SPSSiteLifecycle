@@ -26,7 +26,7 @@
         The site records. A property that a record does not have gives an empty cell.
 
         .PARAMETER OutputFolder
-        The folder to write in.
+        The folder to write in. A relative folder is relative to the location of the PowerShell session.
 
         .PARAMETER Delimiter
         A comma, a semicolon or a tab. Default: the comma.
@@ -71,8 +71,8 @@
     $columns = @(Get-SPSLifecycleReportColumn)
     $runCell = ConvertTo-SPSLifecycleReportCell -Kind Run -Value $GeneratedOn
 
-    $folder = [System.IO.Path]::GetFullPath($OutputFolder)
-    $null = New-Item -Path $folder -ItemType Directory -Force
+    $folder = Resolve-SPSLifecycleFileSystemPath -Path $OutputFolder
+    $null = [System.IO.Directory]::CreateDirectory($folder)
     $path = Join-Path -Path $folder -ChildPath "$Prefix-$runCell.csv"
     if (Test-Path -LiteralPath $path) {
         throw "The report '$path' already exists and is never overwritten. Wait a second and run again, or move the file."

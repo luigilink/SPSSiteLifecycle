@@ -196,6 +196,15 @@ Describe 'Read-SPSLifecycleCsv' {
             { Read-TestCsv -Path (Join-Path -Path $TestDrive -ChildPath 'nope.csv') } | Should -Throw -ExpectedMessage '*File not found*'
         }
 
+        It 'says that the file is missing, and not that it is open, when it disappears after the check: <Name>' -ForEach @(
+            @{ Name = 'the file'; Relative = 'vanished.csv' }
+            @{ Name = 'its folder'; Relative = 'gone/vanished.csv' }
+        ) {
+            Mock -CommandName Test-Path -ModuleName $script:Module.Name -MockWith { $true }
+
+            { Read-TestCsv -Path (Join-Path -Path $TestDrive -ChildPath $Relative) -Required 'Url' } | Should -Throw -ExpectedMessage '*File not found*'
+        }
+
         It 'reads a file that another program still has open for reading and writing' {
             $path = Write-TestFile -Name 'shared.csv' -Byte (Get-TestByte -Text "Url`r`nhttps://contoso.sharepoint.com/sites/a`r`n")
             $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)

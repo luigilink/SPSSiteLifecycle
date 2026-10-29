@@ -9,7 +9,8 @@
     change to the schema or the catalog, and commit the result.
 
     .PARAMETER WikiFolder
-    The folder that holds the wiki pages. Default: the wiki folder of the repository.
+    The folder that holds the wiki pages. A relative folder is relative to the location of the PowerShell
+    session. Default: the wiki folder of the repository.
 
     .EXAMPLE
     ./tools/Update-Documentation.ps1
@@ -34,7 +35,7 @@ $pages = [ordered]@{
 }
 
 $encoding = [System.Text.UTF8Encoding]::new($false)
-$folder = [System.IO.Path]::GetFullPath($WikiFolder)
+$folder = & $module { param($path) Resolve-SPSLifecycleFileSystemPath -Path $path } $WikiFolder
 foreach ($name in $pages.Keys) {
     $path = Join-Path -Path $folder -ChildPath $name
     [System.IO.File]::WriteAllText($path, $pages[$name], $encoding)

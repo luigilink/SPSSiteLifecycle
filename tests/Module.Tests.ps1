@@ -86,6 +86,35 @@ Describe 'The SPSSiteLifecycle.Common module' {
         }
     }
 
+    Context 'Paths' {
+        It 'resolves a path in PowerShell before a .NET file method uses it, because those methods ignore Set-Location' {
+            $files = @($script:Files) + @(Get-ChildItem -Path (Join-Path -Path $PSScriptRoot -ChildPath '../tools') -Filter '*.ps1')
+            $typed = '^(System\.)?IO\.(File|Directory|FileInfo|DirectoryInfo|FileStream|StreamReader|StreamWriter)$'
+            $path = '^(System\.)?IO\.Path$'
+            $offenders = foreach ($file in $files) {
+                $tokens = $null
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+                $calls = @($ast.FindAll({
+                            param($node)
+                            $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+                            $node.Expression -is [System.Management.Automation.Language.TypeExpressionAst] -and
+                            ($node.Expression.TypeName.FullName -match $typed -or
+                            ($node.Expression.TypeName.FullName -match $path -and $node.Member.Extent.Text -eq 'GetFullPath'))
+                        }, $true))
+                $resolvers = @($ast.FindAll({
+                            param($node)
+                            $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Resolve-SPSLifecycleFileSystemPath'
+                        }, $true))
+                if ($calls.Count -gt 0 -and $resolvers.Count -eq 0) {
+                    "$($file.Name): $($calls[0].Extent.Text)"
+                }
+            }
+
+            @($offenders) | Should -HaveCount 0 -Because 'a relative path must go through Resolve-SPSLifecycleFileSystemPath first'
+        }
+    }
+
     Context 'Offline loading' {
         It 'loads without PnP.PowerShell or Microsoft Graph' {
             $pwsh = Join-Path -Path $PSHOME -ChildPath 'pwsh'
