@@ -186,13 +186,43 @@ Describe 'ConvertFrom-SPSLifecycleStrictCsv' {
     }
 
     Context 'Size' {
-        It 'reads 260,000 records, and validates them, in a reasonable time' -Tag 'Slow' {
-            $builder = [System.Text.StringBuilder]::new()
-            foreach ($i in 1..260000) {
-                $null = $builder.Append("https://contoso.sharepoint.com/sites/site$i,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2025-09-18T10:00:00Z`r`n")
+        BeforeAll {
+            function script:New-TestRecordText {
+                param([int]$Count)
+                $builder = [System.Text.StringBuilder]::new()
+                foreach ($i in 1..$Count) {
+                    $null = $builder.Append("https://contoso.sharepoint.com/sites/site$i,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2025-09-18T10:00:00Z`r`n")
+                }
+
+                $builder.ToString()
             }
 
-            $text = $builder.ToString()
+            $script:TooSlow = $false
+        }
+
+        # On Windows, PowerShell copies the string arguments of every .NET method call into a log message for AMSI (PowerShell 7.3 and
+        # later, always on, and a no-op on Linux and macOS). A reader that gives the whole text to a method at every record, as
+        # Regex.Match(text, position) does, copies the text at every record: 20,000 records took 55 s on a Windows runner, against
+        # 0.2 s on Linux, and 260,000 records stalled the CI for hours. This test stops first, and the one after it does not run
+        # when this one fails, so that a return of the problem is a failure after a minute and not a job that never ends.
+        It 'reads 20,000 records in a time that does not grow with the size of the whole text' -Tag 'Slow' {
+            $text = New-TestRecordText -Count 20000
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            $records = @(ConvertFrom-TestStrictCsv -Text $text)
+            $seconds = $watch.Elapsed.TotalSeconds
+            $script:TooSlow = $seconds -ge 15
+
+            $records | Should -HaveCount 20000
+            $seconds | Should -BeLessThan 15
+        }
+
+        It 'reads 260,000 records, and validates them, in a reasonable time' -Tag 'Slow' {
+            if ($script:TooSlow) {
+                Set-ItResult -Skipped -Because 'reading 20,000 records was too slow, and 260,000 would last for hours'
+                return
+            }
+
+            $text = New-TestRecordText -Count 260000
             $watch = [System.Diagnostics.Stopwatch]::StartNew()
             $valid = ConvertFrom-TestStrictCsv -Text $text -ValidateOnly
             $validateSeconds = $watch.Elapsed.TotalSeconds
