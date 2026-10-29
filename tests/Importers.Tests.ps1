@@ -210,6 +210,45 @@ Describe 'Import-SPSLifecycleActivityReport' {
             $report.ById.Count | Should -Be 1
         }
 
+        It 'ignores a deleted row written <Name>, and keeps a live one' -ForEach @(
+            @{ Name = 'by a French spreadsheet'; Deleted = 'VRAI'; Live = 'FAUX' }
+            @{ Name = 'by a German spreadsheet'; Deleted = 'WAHR'; Live = 'FALSCH' }
+            @{ Name = 'by a Spanish spreadsheet'; Deleted = 'VERDADERO'; Live = 'FALSO' }
+            @{ Name = 'in English'; Deleted = 'True'; Live = 'False' }
+            @{ Name = 'as a number'; Deleted = '1'; Live = '0' }
+        ) {
+            $text = "$script:UsageHeader`r`n" +
+            "2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,https://contoso.sharepoint.com/sites/a,Owner A,$Deleted,2026-10-28,Group,180`r`n" +
+            "2026-10-26,0d7b4ebb-f68c-4f29-8529-5b46655d0c3c,https://contoso.sharepoint.com/sites/b,Owner B,$Live,2026-10-28,Group,180`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'booleans.csv' -Text $text) -Kind SharePoint
+
+            $report.DeletedRowCount | Should -Be 1
+            $report.ById.Count | Should -Be 1
+            $report.ById.ContainsKey('0d7b4ebb-f68c-4f29-8529-5b46655d0c3c') | Should -BeTrue
+        }
+
+        It 'ignores a deleted group written by a German spreadsheet' {
+            $text = "Group Id,Last Activity Date,Is Deleted`r`n11111111-1111-1111-1111-111111111111,2025-01-01,WAHR`r`n22222222-2222-2222-2222-222222222222,2025-01-02,FALSCH`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'groups-de.csv' -Text $text) -Kind Groups
+
+            $report.DeletedRowCount | Should -Be 1
+            $report.ById.Count | Should -Be 1
+        }
+
+        It 'stops on an Is Deleted value that is neither true nor false, and names the file, the column and the value' {
+            $text = "$script:UsageHeader`r`n2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,https://contoso.sharepoint.com/sites/a,Owner A,maybe,2026-10-28,Group,180`r`n"
+
+            { Import-TestReport -Path (Write-TestCsv -Name 'maybe.csv' -Text $text) -Kind SharePoint } | Should -Throw -ExpectedMessage "*maybe.csv*Is Deleted*'maybe'*"
+        }
+
+        It 'reads a row whose Is Deleted cell is blank as a live row' {
+            $text = "$script:UsageHeader`r`n2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,https://contoso.sharepoint.com/sites/a,Owner A,,2026-10-28,Group,180`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'blank-flag.csv' -Text $text) -Kind SharePoint
+
+            $report.DeletedRowCount | Should -Be 0
+            $report.ById.Count | Should -Be 1
+        }
+
         It 'stops when a mandatory column is missing' {
             { Import-TestReport -Path (Write-TestCsv -Name 'nocol.csv' -Text "Site Id,Owner`r`na6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,x`r`n") -Kind SharePoint } | Should -Throw -ExpectedMessage '*Last Activity Date*'
         }

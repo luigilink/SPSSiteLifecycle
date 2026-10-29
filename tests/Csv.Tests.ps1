@@ -234,3 +234,53 @@ Describe 'Split-SPSLifecycleCsvLine' {
         ($fields -join '|') | Should -Be $Joined
     }
 }
+
+Describe 'ConvertTo-SPSLifecycleBoolean' {
+    It 'reads <Text> as true' -ForEach @(
+        @{ Text = 'True' }, @{ Text = 'TRUE' }, @{ Text = ' true ' }, @{ Text = '1' }, @{ Text = 'Yes' }
+        @{ Text = 'VRAI' }, @{ Text = 'Oui' }, @{ Text = 'WAHR' }, @{ Text = 'Ja' }
+        @{ Text = 'VERDADERO' }, @{ Text = 'VERDADEIRO' }, @{ Text = 'VERO' }, @{ Text = 'WAAR' }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleBoolean -Text $t } $Text) | Should -BeTrue
+    }
+
+    It 'reads <Text> as false' -ForEach @(
+        @{ Text = 'False' }, @{ Text = 'FALSE' }, @{ Text = ' false ' }, @{ Text = '0' }, @{ Text = 'No' }
+        @{ Text = 'FAUX' }, @{ Text = 'Non' }, @{ Text = 'FALSCH' }, @{ Text = 'Nein' }
+        @{ Text = 'FALSO' }, @{ Text = 'ONWAAR' }
+    ) {
+        $result = & $script:Module { param($t) ConvertTo-SPSLifecycleBoolean -Text $t } $Text
+
+        $result | Should -BeFalse
+        $result | Should -Not -BeNullOrEmpty -Because 'false must not be confused with an empty value'
+    }
+
+    It 'gives $null for <Name>' -ForEach @(
+        @{ Name = 'an empty text'; Text = '' }
+        @{ Name = 'spaces'; Text = '   ' }
+        @{ Name = 'a null'; Text = $null }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleBoolean -Text $t } $Text) | Should -BeNullOrEmpty
+    }
+
+    It 'refuses <Text>, which is neither true nor false, and names it' -ForEach @(
+        @{ Text = 'maybe' }, @{ Text = '2' }, @{ Text = 'Tru' }, @{ Text = 'SANT' }
+    ) {
+        { & $script:Module { param($t) ConvertTo-SPSLifecycleBoolean -Text $t } $Text } | Should -Throw -ExpectedMessage "*'$Text'*True*False*"
+    }
+
+    It 'reads the same way under <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }, @{ Culture = 'fr-FR' }, @{ Culture = 'de-DE' }, @{ Culture = 'tr-TR' }
+    ) {
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+            $values = & $script:Module { @((ConvertTo-SPSLifecycleBoolean -Text 'TRUE'), (ConvertTo-SPSLifecycleBoolean -Text 'FALSCH'), (ConvertTo-SPSLifecycleBoolean -Text 'VRAI'), (ConvertTo-SPSLifecycleBoolean -Text 'FAUX')) }
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+
+        ($values -join ',') | Should -Be 'True,False,True,False'
+    }
+}

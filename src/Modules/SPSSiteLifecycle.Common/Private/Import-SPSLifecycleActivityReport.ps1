@@ -12,7 +12,9 @@
           Microsoft 365 group behind the team.
         - Groups: the Microsoft 365 groups activity report. Rows are indexed by Group Id.
 
-        A row of a deleted site or group is ignored. When an ID appears twice, the latest date wins.
+        A row of a deleted site or group is ignored (the Is Deleted column is read as true or false in
+        the words of a spreadsheet in another language too, and any other value stops the tool, see
+        ConvertTo-SPSLifecycleBoolean). When an ID appears twice, the latest date wins.
         A row without a date stays in the index with no date: the site or group is known to the
         report but had no activity in its period.
 
@@ -93,13 +95,28 @@
     $byId = @{}
     $byUrl = @{}
     $dateCache = @{}
+    $flagCache = @{}
     $deleted = 0
     $hasDeletedColumn = @($rows[0].PSObject.Properties.Name) -contains 'Is Deleted'
 
     foreach ($row in $rows) {
-        if ($hasDeletedColumn -and "$($row.'Is Deleted')".Trim() -in 'True', 'Vrai', 'Yes', 'Oui', '1') {
-            $deleted++
-            continue
+        if ($hasDeletedColumn) {
+            $flag = "$($row.'Is Deleted')".Trim()
+            if ($flag) {
+                if (-not $flagCache.ContainsKey($flag)) {
+                    try {
+                        $flagCache[$flag] = ConvertTo-SPSLifecycleBoolean -Text $flag
+                    }
+                    catch {
+                        throw "File '$name', column 'Is Deleted': $($_.Exception.Message)"
+                    }
+                }
+
+                if ($flagCache[$flag]) {
+                    $deleted++
+                    continue
+                }
+            }
         }
 
         $text = "$($row.'Last Activity Date')".Trim()
