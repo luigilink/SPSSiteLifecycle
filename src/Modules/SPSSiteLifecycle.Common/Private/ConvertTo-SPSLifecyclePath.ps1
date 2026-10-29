@@ -12,7 +12,8 @@
         The path as written in the settings file.
 
         .PARAMETER BaseFolder
-        The folder a relative path is relative to.
+        The folder a relative path is relative to. A relative base folder is relative to the location of the
+        PowerShell session.
 
         .EXAMPLE
         ConvertTo-SPSLifecyclePath -Path 'Reports\2026' -BaseFolder 'C:\Tools\SPSSiteLifecycle'
@@ -32,7 +33,7 @@
 
     $normalized = $Path.Trim() -replace '[\\/]', [System.IO.Path]::DirectorySeparatorChar
     if (-not [System.IO.Path]::IsPathRooted($normalized)) {
-        $normalized = Join-Path -Path $BaseFolder -ChildPath $normalized
+        $normalized = Join-Path -Path (Resolve-SPSLifecycleFileSystemPath -Path $BaseFolder) -ChildPath $normalized
     }
 
     [System.IO.Path]::GetFullPath($normalized)

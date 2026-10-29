@@ -4,6 +4,7 @@
 - [🚀 Getting Started](Getting-Started)
 - [⚙️ Configuration](Configuration)
 - [🚦 Verdicts](Verdicts)
+- [📄 Report](Report)
 - [🧭 Design decisions](Design-Decisions)
 - [📦 Release Process](Release-Process)
 

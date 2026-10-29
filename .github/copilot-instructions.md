@@ -8,8 +8,9 @@ SPSSiteLifecycle is a PowerShell 7.4+ tool that deletes, archives or locks Share
 2. **Settings.** A typo, a wrong type or a key in the wrong section must stop the tool, never weaken a safeguard. The Microsoft corporate tenants are always refused.
 3. **Matching.** Sites are matched across CSV files, reports and the tenant by a normalized URL and by site ID. Look for two spellings of one URL that do not match, and for two different sites that do.
 4. **Culture and Excel.** The tool runs on fr-FR and de-DE machines, and its CSV files are opened and saved in Excel. Look for code that depends on the current culture: dates, numbers, separators, and booleans such as `VRAI` or `WAHR`.
-5. **PowerShell pitfalls.** Array unrolling and the comma operator, `$null` in pipelines, `-contains` and `-in` with `$null`, errors that do not stop the code, `-like` wildcards, scope.
-6. **Tests.** Flag a test that passes for the wrong reason, a weak assertion, state shared between tests, or a culture that is not restored. Tests use the Pester syntax that Pester 5 and 6 share.
+5. **PowerShell pitfalls.** Array unrolling and the comma operator, `$null` in pipelines, `-contains` and `-in` with `$null`, errors that do not stop the code, `-like` wildcards, scope. The .NET file methods and `Path.GetFullPath` ignore `Set-Location`: a path must go through `Resolve-SPSLifecycleFileSystemPath` first. Adding two byte arrays with `+` gives an `object[]` that boxes every byte.
+6. **Scale.** A tenant can have 260,000 sites. Flag code that holds every site, every line or every byte of a report in memory when it could stream them, and a loop that reads the tenant one site at a time without a progress or a way to resume.
+7. **Tests.** Flag a test that passes for the wrong reason, a weak assertion, state shared between tests, or a culture that is not restored. Tests use the Pester syntax that Pester 5 and 6 share.
 
 ## Rules of the repository
 

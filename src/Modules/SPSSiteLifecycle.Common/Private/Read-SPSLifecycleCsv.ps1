@@ -16,7 +16,7 @@
         the required columns. The header is checked even when the file has no row.
 
         .PARAMETER Path
-        Path of the CSV file.
+        Path of the CSV file. A relative path is relative to the location of the PowerShell session.
 
         .PARAMETER RequiredColumn
         Names of the columns that must exist (the case is ignored).
@@ -37,12 +37,13 @@
         $RequiredColumn = @()
     )
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "File not found: '$Path'."
+    $fullPath = Resolve-SPSLifecycleFileSystemPath -Path $Path
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+        throw "File not found: '$fullPath'."
     }
 
     try {
-        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $stream = [System.IO.File]::Open($fullPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
         try {
             $memory = [System.IO.MemoryStream]::new()
             $stream.CopyTo($memory)
@@ -52,8 +53,11 @@
             $stream.Dispose()
         }
     }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] {
+        throw "File not found: '$fullPath'."
+    }
     catch [System.IO.IOException] {
-        throw "Cannot read '$Path': the file is probably open in another program (Excel?). Close it, or save a copy and use the copy. ($($_.Exception.Message))"
+        throw "Cannot read '$fullPath': the file is probably open in another program (Excel?). Close it, or save a copy and use the copy. ($($_.Exception.Message))"
     }
 
     $detected = Get-SPSLifecycleCsvDelimiter -Text (ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes)
@@ -73,7 +77,7 @@
 
     $repeated = @($header | Where-Object { $_ } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
     if ($repeated.Count -gt 0) {
-        throw "Column(s) that appear more than once in '$Path' (the case and the spaces around a name do not count): $($repeated -join ', ')."
+        throw "Column(s) that appear more than once in '$fullPath' (the case and the spaces around a name do not count): $($repeated -join ', ')."
     }
 
     $rows = @()
@@ -82,14 +86,14 @@
             $rows = @(ConvertFrom-Csv -InputObject $text -Delimiter $delimiter -ErrorAction Stop)
         }
         catch {
-            throw "Cannot read '$Path' as a CSV file: $($_.Exception.Message)"
+            throw "Cannot read '$fullPath' as a CSV file: $($_.Exception.Message)"
         }
     }
 
     $missing = @($RequiredColumn | Where-Object { $header -notcontains $_ })
     if ($missing.Count -gt 0) {
         $present = if ($header.Count -gt 0) { $header -join ', ' } else { '(none: the file is empty)' }
-        throw "Column(s) not found in '$Path': $($missing -join ', '). Columns present: $present."
+        throw "Column(s) not found in '$fullPath': $($missing -join ', '). Columns present: $present."
     }
 
     $kept = [System.Collections.Generic.List[System.Object]]::new()
