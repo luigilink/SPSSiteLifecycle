@@ -92,7 +92,43 @@ Describe 'Import-SPSLifecycleExclusionList' {
     It 'stops when the Url column does not hold URLs' {
         $path = Write-TestCsv -Name 'badex.csv' -Text "Url`r`nSales`r`n"
 
-        { & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path } | Should -Throw -ExpectedMessage "*'Url' in badex.csv*"
+        { & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path } | Should -Throw -ExpectedMessage '*badex.csv*not site URLs*'
+    }
+
+    It 'stops when a single row cannot be read, even among many good ones, and names it' {
+        $good = 1..9 | ForEach-Object { "https://contoso.sharepoint.com/sites/keep$_" }
+        $path = Write-TestCsv -Name 'one-bad.csv' -Text ("Url`r`n" + (($good + 'https:/contoso.sharepoint.com/sites/important') -join "`r`n") + "`r`n")
+
+        { & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path } | Should -Throw -ExpectedMessage '*one-bad.csv*1 value*https:/contoso.sharepoint.com/sites/important*'
+    }
+
+    It 'stops on <Name>, which would leave sites unprotected' -ForEach @(
+        @{ Name = 'an unterminated quote that swallows the next rows'; Text = "Url`r`n`"https://contoso.sharepoint.com/sites/keep1`r`nhttps://contoso.sharepoint.com/sites/keep2`r`n" }
+        @{ Name = 'an address with a space in it'; Text = "Url`r`nhttps://contoso.sharepoint.com/sites/my team`r`n" }
+        @{ Name = 'a file address'; Text = "Url`r`nfile:///etc/passwd`r`n" }
+        @{ Name = 'an ftp address'; Text = "Url`r`nftp://contoso.sharepoint.com/sites/a`r`n" }
+        @{ Name = 'an address without a host'; Text = "Url`r`nhttps:///sites/a`r`n" }
+        @{ Name = 'two addresses in one cell'; Text = "Url`r`nhttps://contoso.sharepoint.com/sites/a https://contoso.sharepoint.com/sites/b`r`n" }
+        @{ Name = 'a server-relative path'; Text = "Url`r`n/sites/keep`r`n" }
+    ) {
+        $path = Write-TestCsv -Name 'strict.csv' -Text $Text
+
+        { & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path } | Should -Throw -ExpectedMessage '*strict.csv*not site URLs*'
+    }
+
+    It 'reads the addresses of an exclusion list, and ignores the blank cells' {
+        $path = Write-TestCsv -Name 'blank.csv' -Text "Url`r`nhttps://contoso.sharepoint.com/sites/a`r`n`"`"`r`n   `r`nhttp://contoso.sharepoint.com/sites/b`r`nhttps://contoso.sharepoint.com:443/sites/c/`r`n"
+        $list = & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path
+
+        $list.Keys.Count | Should -Be 3
+        $list.Keys.ContainsKey('https://contoso.sharepoint.com/sites/c') | Should -BeTrue
+    }
+
+    It 'accepts a list that has no row' {
+        $path = Write-TestCsv -Name 'norows.csv' -Text "Url`r`n"
+        $list = & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path
+
+        $list.Keys.Count | Should -Be 0
     }
 }
 

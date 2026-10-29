@@ -100,7 +100,7 @@ Always on: report only by default, double typed confirmation, `MaxActions`, a st
 SPSSiteLifecycle is a new tool. It does not read the files of any earlier script: its input formats are its own. All inputs are plain CSV files that follow the rules of D10.
 
 - **Lock date lists** (`LockDateFiles`): a `Url` column, a `LockedOn` column and an optional `SiteId` column. When a site appears in several lists or in the lock journal (D5), the latest date is kept: a later lock date can only delay a deletion.
-- **Exclusion lists** (`ExclusionFiles`): a `Url` column. A listed site gets `SKIP-EXCLUDED` in Scan, and Act checks the lists again, because a decision never lifts a safeguard (D4).
+- **Exclusion lists** (`ExclusionFiles`): a `Url` column. A listed site gets `SKIP-EXCLUDED` in Scan, and Act checks the lists again, because a decision never lifts a safeguard (D4). Every filled cell must be a full address on one line: a row that cannot be read would protect nothing, so the tool stops instead of skipping it. The lock date lists are more lenient, because a date that is not read only keeps a site safe.
 - URLs are compared in a canonical form: the case, the trailing slashes, the default port, a query and the percent-encoding do not count (`%C3%A9quipe` and `équipe` are the same address). The same form is used for the lists, the reports, the root site, the home site and the system paths, so that a safeguard cannot miss a site because of the way its address was written.
 - No saved inventory is read. The paged listing keeps its own checkpoint files to resume an interrupted Scan (D7), and the Scan CSV is the reviewed list that Act reads.
 

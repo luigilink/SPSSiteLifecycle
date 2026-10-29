@@ -68,7 +68,7 @@
         @{
             Section = 'Shared'; Name = 'ExclusionFiles'; Type = 'PathList'; Kind = 'File'; MustExist = $true; UsedIn = $both; AllowEmpty = $true
             Default = @(); DefaultText = '`@()`'
-            Description = 'CSV files with a `Url` column: the sites that must never be touched. Both phases read them, because a decision never lifts a safeguard.'
+            Description = 'CSV files with a `Url` column: the sites that must never be touched. Both phases read them, because a decision never lifts a safeguard. Every filled cell must be a full address on one line: a row that cannot be read would protect nothing, so the tool stops instead of skipping it.'
         }
         @{
             Section = 'Shared'; Name = 'LockJournal'; Type = 'Path'; Kind = 'File'; UsedIn = $both
