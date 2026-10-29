@@ -75,5 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Teams and groups reports are matched by the ID of the group, the latest date wins, and the report that gave it is
   named. OneDrive sites, and sites whose lock state the Scan does not ask for, are left out and counted. A record that
   has no address, no usable site ID or a content change that is not a date stops the Scan and names the record. The
-  exclusion lists are merged into one index like the lock dates. The tests run 5,000 and 20,000 sites and compare the
-  times, so that a time that grows with the square of the size fails on any system.
+  exclusion lists are merged into one index like the lock dates. A record whose group ID is neither empty nor a GUID,
+  whose hub flag or channel flag is not True or False, or that has no template, stops the Scan too, because a
+  safeguard would silently not apply. The OneDrive rule recognizes the host of OneDrive whatever its spelling (the
+  dot of the DNS root, a port, http, user information). The core takes 75 s for 259,000 sites instead of 250 s: the
+  constant tables of the verdict engine are built once, and the lock date entries are hashtables, because the
+  garbage collector took four fifths of the time. The tests run 5,000 and 20,000 sites and compare the times, so that
+  a time that grows with the square of the size fails on any system.
