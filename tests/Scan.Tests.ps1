@@ -679,6 +679,25 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             ($result.Summary.ByAction.Values | Measure-Object -Sum).Sum | Should -Be $result.Summary.SitesListed
         }
 
+        It 'counts a lock suggestion, per verdict and per action, as it counts the others' {
+            $sites = @(
+                (New-ScanSite -Name 'u1' -SiteId '10000000-0000-0000-0000-000000000001' -LockState 'Unlock')
+                (New-ScanSite -Name 'u2' -SiteId '10000000-0000-0000-0000-000000000002' -LockState 'Unlock')
+                (New-ScanSite -Name 'r1' -SiteId '10000000-0000-0000-0000-000000000003')
+            )
+            $ids = @{}
+            foreach ($s in $sites) { $ids[$s.SiteId] = $null }
+            $lock = New-LockIndex -Entry @(@{ Url = $sites[2].Url; SiteId = $sites[2].SiteId; LockedOn = $script:Old })
+
+            $result = Invoke-TestScan -Site $sites -Setting (New-ScanSetting -LockStates 'ReadOnly', 'Unlock') -Report @((New-TestReport -Kind SharePoint -ById $ids)) -LockIndex $lock
+
+            $result.Summary.ByVerdict['LOCK'] | Should -Be 2
+            $result.Summary.ByVerdict['DELETE-VIA-GROUP'] | Should -Be 1
+            $result.Summary.ByAction['Lock'] | Should -Be 2
+            $result.Summary.ByAction['Delete'] | Should -Be 1
+            $result.Summary.ByAction.ContainsKey('None') | Should -BeFalse
+        }
+
         It 'always satisfies: read = listed + left out' {
             $sites = 1..30 | ForEach-Object {
                 $template = if ($_ % 5 -eq 0) { 'SPSPERS#10' } else { 'GROUP#0' }
@@ -758,6 +777,12 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             @{ Name = 'a site ID that is not a GUID'; Site = 'garbage'; Message = '*record 2*sites/two*site ID*' }
             @{ Name = 'a record with no address'; Site = 'nourl'; Message = '*record 2*address*' }
             @{ Name = 'a content change that is not a date'; Site = 'badmodified'; Message = '*record 2*sites/two*LastContentModified*' }
+            @{ Name = 'a group ID that is not a GUID'; Site = 'badgroup'; Message = '*record 2*sites/two*group ID*GroupId*garbage*' }
+            @{ Name = 'half of a group ID'; Site = 'halfgroup'; Message = '*record 2*sites/two*group ID*' }
+            @{ Name = 'no answer to IsHubSite'; Site = 'nohub'; Message = '*record 2*sites/two*IsHubSite*' }
+            @{ Name = 'IsHubSite written as text'; Site = 'texthub'; Message = '*record 2*sites/two*IsHubSite*' }
+            @{ Name = 'no answer to IsTeamsChannelConnected'; Site = 'nochannel'; Message = '*record 2*sites/two*IsTeamsChannelConnected*' }
+            @{ Name = 'no template'; Site = 'notemplate'; Message = '*record 2*sites/two*Template*' }
         ) {
             $first = New-ScanSite -Name 'one'
             $bad = switch ($Site) {
@@ -766,6 +791,12 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
                 'garbage' { New-ScanSite -Name 'two' -SiteId 'not a guid' }
                 'nourl' { New-ScanSite -Name 'two' -Url ' ' }
                 'badmodified' { New-ScanSite -Name 'two' -SiteId $script:SiteB -Modified 'last tuesday' }
+                'badgroup' { New-ScanSite -Name 'two' -SiteId $script:SiteB -GroupId 'garbage' }
+                'halfgroup' { New-ScanSite -Name 'two' -SiteId $script:SiteB -GroupId '11111111-1111' }
+                'nohub' { $s = New-ScanSite -Name 'two' -SiteId $script:SiteB; $s.IsHubSite = $null; $s }
+                'texthub' { $s = New-ScanSite -Name 'two' -SiteId $script:SiteB; $s.IsHubSite = 'False'; $s }
+                'nochannel' { $s = New-ScanSite -Name 'two' -SiteId $script:SiteB; $s.PSObject.Properties.Remove('IsTeamsChannelConnected'); $s }
+                'notemplate' { New-ScanSite -Name 'two' -SiteId $script:SiteB -Template ' ' }
             }
 
             if ($Site -eq 'nourl') {
@@ -773,6 +804,31 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             }
 
             { Invoke-TestScan -Site @($first, $bad) } | Should -Throw -ExpectedMessage $Message
+        }
+
+        It 'reads a group ID that says there is no group, or a group however it is written: <Name>' -ForEach @(
+            @{ Name = 'null'; GroupId = $null; HasGroup = $false }
+            @{ Name = 'empty'; GroupId = ''; HasGroup = $false }
+            @{ Name = 'spaces'; GroupId = '   '; HasGroup = $false }
+            @{ Name = 'zeros'; GroupId = '00000000-0000-0000-0000-000000000000'; HasGroup = $false }
+            @{ Name = 'zeros in braces'; GroupId = '{00000000-0000-0000-0000-000000000000}'; HasGroup = $false }
+            @{ Name = 'a GUID in capitals'; GroupId = '11111111-1111-1111-1111-111111111111'.ToUpperInvariant(); HasGroup = $true }
+            @{ Name = 'a GUID in braces'; GroupId = '{11111111-1111-1111-1111-111111111111}'; HasGroup = $true }
+            @{ Name = 'a GUID without hyphens'; GroupId = '11111111111111111111111111111111'; HasGroup = $true }
+        ) {
+            $site = New-ScanSite -GroupId $GroupId
+            $teams = New-TestReport -Kind Teams -ById @{ $script:GroupA = (Get-TestDate '2026-10-20') }
+
+            $row = (Invoke-TestScan -Site $site -LockIndex (New-OldLock -Site $site) -Report @($script:QuietReport, $teams)).Rows[0]
+
+            if ($HasGroup) {
+                $row.GroupId | Should -BeExactly $script:GroupA
+                $row.Verdict | Should -BeExactly 'SKIP-RECENT-ACTIVITY'
+            }
+            else {
+                $row.GroupId | Should -BeExactly ''
+                $row.Verdict | Should -BeExactly 'DELETE-SITE'
+            }
         }
 
         It 'stops on a record that is empty' {
@@ -1027,6 +1083,9 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
         # runs two sizes and compares the times, so that a time that grows with the square of the size is a failure after a
         # minute, on any system, whatever the speed of the machine.
         It 'gives each site of a large listing the verdict that the rules give, in a time that grows with the size of the listing' -Tag 'Slow' {
+            # The first run pays for the compilation of the code and the first allocations: it is not timed, or the small run
+            # would look slower than it is, and the ratio would hide a time that grows too fast.
+            $null = Measure-SyntheticScan -Count 500
             $small = Measure-SyntheticScan -Count 5000
             $large = Measure-SyntheticScan -Count 20000
 

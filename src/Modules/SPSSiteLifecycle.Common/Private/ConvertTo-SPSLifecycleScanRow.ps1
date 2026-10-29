@@ -20,8 +20,10 @@
            that the Scan asks for (the Scan.LockStates setting): the listing may not have been filtered by the server.
         2. A record that cannot be used stops the Scan and names its number and its address: a record without an
            address or a usable site ID (a site that cannot be matched with the reports and the lock dates, and that the
-           Act phase could not confirm), or a content change that is not a date. These are defects of what reads the
-           tenant, and a verdict that looks plausible would hide them.
+           Act phase could not confirm), a group ID that is neither empty nor a GUID (the Teams and groups activity of
+           the site would be left out), a hub flag or a channel flag that is not True or False, a template that is
+           empty, or a content change that is not a date. In each case a safeguard would silently not apply. These are
+           defects of what reads the tenant, and a verdict that looks plausible would hide them.
         3. The lock date is found by the ID of the site, then by its address (Find-SPSLifecycleLockDate), the activity
            in the SharePoint, Teams and groups reports (Find-SPSLifecycleActivity), and the exclusion by the canonical
            form of the address.
@@ -214,7 +216,31 @@
                     throw "the record has no usable site ID (SiteId '$(ConvertTo-SPSLifecycleVisibleText -Text "$($record.SiteId)")'): it cannot be matched with the reports and the lock dates, and the Act phase could not confirm the site."
                 }
 
+                # An empty group ID, and the all-zero one that the tenant gives to a site without a group, say that there is no group.
+                # Any other value that is not a GUID is not "no group": the Teams and groups activity of the site would be left out
+                # without a message, and a site that is active there could be suggested for deletion.
                 $groupId = ConvertTo-SPSLifecycleId -Value $record.GroupId
+                if (-not $groupId) {
+                    $groupText = "$($record.GroupId)".Trim()
+                    $zero = [System.Guid]::Empty
+                    if ($groupText -and -not ([System.Guid]::TryParse($groupText, [ref]$zero) -and $zero -eq [System.Guid]::Empty)) {
+                        throw "the record has a group ID that is not a GUID (GroupId '$(ConvertTo-SPSLifecycleVisibleText -Text $groupText)'): the activity of its Teams and Microsoft 365 group cannot be found, and the site could look inactive."
+                    }
+                }
+
+                # The safeguards read these three values, and a value that is missing reads as "not protected".
+                if ($record.IsHubSite -isnot [System.Boolean]) {
+                    throw 'the record does not say whether the site is a hub site (IsHubSite must be True or False): a hub site would not be protected.'
+                }
+
+                if ($record.IsTeamsChannelConnected -isnot [System.Boolean]) {
+                    throw 'the record does not say whether the site is a Teams channel site (IsTeamsChannelConnected must be True or False): a channel site would not be protected.'
+                }
+
+                if (-not "$($record.Template)".Trim()) {
+                    throw 'the record has no template (Template): a system site would not be recognized.'
+                }
+
                 try {
                     $modified = ConvertTo-SPSLifecycleUtcDateTime -Value $record.LastContentModified
                 }
