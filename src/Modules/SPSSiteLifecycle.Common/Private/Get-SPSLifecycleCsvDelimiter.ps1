@@ -4,7 +4,8 @@
         Finds the separator of a CSV text and removes the "sep=" line that Excel may add.
 
         .DESCRIPTION
-        A first line such as sep=; names the separator and is dropped from the text. Otherwise the
+        A first line such as sep=; names the separator and is dropped from the text (FirstLine is then 2, the
+        number of the line where the text starts). Otherwise the
         header line decides: the separator among comma, semicolon and tab that gives the most
         fields wins (the comma on a tie, and when the header has a single column).
 
@@ -31,6 +32,7 @@
         return [PSCustomObject]@{
             Delimiter = [System.Char]$explicit.Groups[1].Value
             Text      = $content.Substring($explicit.Length)
+            FirstLine = 2
         }
     }
 
@@ -52,5 +54,6 @@
     [PSCustomObject]@{
         Delimiter = $best
         Text      = $content
+        FirstLine = 1
     }
 }

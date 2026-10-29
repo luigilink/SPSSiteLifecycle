@@ -25,6 +25,8 @@ jobs:
   test:
     name: Run Pester Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The suite takes about two minutes. A job that never ends (a test that stalls) would run for six hours by default.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -73,6 +75,7 @@ jobs:
   code-quality:
     name: Code Quality Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code

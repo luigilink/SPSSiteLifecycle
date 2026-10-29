@@ -12,6 +12,15 @@
         removed. Two columns with the same name stop the tool. A file that another program (Excel) has open is still read; if it cannot be, the
         message says so.
 
+        The names of the columns are compared one character at a time, whatever the case and the culture, because
+        that is how a row finds its properties: a header named Site<U+00AD>Id is not SiteId, and the message shows
+        the hidden character. A header that looks like a column the tool knows (a required or an optional one)
+        and is not spelled that way stops the tool too (see Assert-SPSLifecycleCsvHeader): an optional column that
+        is not there is normal, and the information that the lookalike carries would be lost without a message.
+
+        This reader is tolerant on purpose: it is for the files that a person gives. A file in which a row that
+        is lost or dropped is dangerous, the lock journal, is read by Read-SPSLifecycleStrictCsv.
+
         Stops with a clear message when the file is missing, cannot be read as CSV, or lacks one of
         the required columns. The header is checked even when the file has no row.
 
@@ -20,6 +29,10 @@
 
         .PARAMETER RequiredColumn
         Names of the columns that must exist (the case is ignored).
+
+        .PARAMETER OptionalColumn
+        Names of the columns that the file may have and that the tool reads if it does. They are not required, but a
+        header that looks like one of them without being spelled like it stops the tool.
 
         .EXAMPLE
         Read-SPSLifecycleCsv -Path .\lock-dates.csv -RequiredColumn 'Url', 'LockedOn'
@@ -34,31 +47,15 @@
 
         [Parameter()]
         [System.String[]]
-        $RequiredColumn = @()
+        $RequiredColumn = @(),
+
+        [Parameter()]
+        [System.String[]]
+        $OptionalColumn = @()
     )
 
     $fullPath = Resolve-SPSLifecycleFileSystemPath -Path $Path
-    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-        throw "File not found: '$fullPath'."
-    }
-
-    try {
-        $stream = [System.IO.File]::Open($fullPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-        try {
-            $memory = [System.IO.MemoryStream]::new()
-            $stream.CopyTo($memory)
-            $bytes = $memory.ToArray()
-        }
-        finally {
-            $stream.Dispose()
-        }
-    }
-    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] {
-        throw "File not found: '$fullPath'."
-    }
-    catch [System.IO.IOException] {
-        throw "Cannot read '$fullPath': the file is probably open in another program (Excel?). Close it, or save a copy and use the copy. ($($_.Exception.Message))"
-    }
+    $bytes = Read-SPSLifecycleFileByte -Path $fullPath
 
     $detected = Get-SPSLifecycleCsvDelimiter -Text (ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes)
     $delimiter = $detected.Delimiter
@@ -75,10 +72,7 @@
         $text = $rewritten + $text.Substring($first.Index + $first.Length)
     }
 
-    $repeated = @($header | Where-Object { $_ } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
-    if ($repeated.Count -gt 0) {
-        throw "Column(s) that appear more than once in '$fullPath' (the case and the spaces around a name do not count): $($repeated -join ', ')."
-    }
+    Assert-SPSLifecycleCsvHeader -Name $header -RequiredColumn $RequiredColumn -OptionalColumn $OptionalColumn -Source $fullPath
 
     $rows = @()
     if ($text.Trim()) {
@@ -88,12 +82,6 @@
         catch {
             throw "Cannot read '$fullPath' as a CSV file: $($_.Exception.Message)"
         }
-    }
-
-    $missing = @($RequiredColumn | Where-Object { $header -notcontains $_ })
-    if ($missing.Count -gt 0) {
-        $present = if ($header.Count -gt 0) { $header -join ', ' } else { '(none: the file is empty)' }
-        throw "Column(s) not found in '$fullPath': $($missing -join ', '). Columns present: $present."
     }
 
     $kept = [System.Collections.Generic.List[System.Object]]::new()

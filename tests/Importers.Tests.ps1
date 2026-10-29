@@ -38,6 +38,32 @@ Describe 'Import-SPSLifecycleLockDateList' {
         $sales.Source | Should -Be 'lock.csv'
     }
 
+    It 'keeps one entry for a site ID that has two URLs (a renamed site), with the latest date and the URL of that row' {
+        $path = Write-TestCsv -Name 'renamed.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/old,A6E20079-2D1A-4E9D-BC9F-94E3F2EFEB64,2025-03-01`r`nhttps://contoso.sharepoint.com/sites/new,{a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64},2025-09-18`r`n"
+        $list = Import-TestLockDate -Path $path
+
+        $list.RowCount | Should -Be 2
+        $list.Entries | Should -HaveCount 1
+        $list.Entries[0].Url | Should -Be 'https://contoso.sharepoint.com/sites/new'
+        $list.Entries[0].LockedOn.ToString('yyyy-MM-dd') | Should -Be '2025-09-18'
+    }
+
+    It 'keeps two entries for an address that two site IDs have used, because the second site is not the first' {
+        $path = Write-TestCsv -Name 'reused.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/sales,A6E20079-2D1A-4E9D-BC9F-94E3F2EFEB64,2025-03-01`r`nhttps://contoso.sharepoint.com/sites/sales,0D7B4EBB-F68C-4F29-8529-5B46655D0C3C,2025-09-18`r`n"
+        $list = Import-TestLockDate -Path $path
+
+        $list.Entries | Should -HaveCount 2
+        @($list.Entries.SiteId | Sort-Object) | Should -Be @('0d7b4ebb-f68c-4f29-8529-5b46655d0c3c', 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64')
+    }
+
+    It 'keeps a row that has a URL only next to a row that has a site ID, for the same address' {
+        $path = Write-TestCsv -Name 'mixed.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/sales,,2025-03-01`r`nhttps://contoso.sharepoint.com/sites/sales,A6E20079-2D1A-4E9D-BC9F-94E3F2EFEB64,2025-09-18`r`n"
+        $list = Import-TestLockDate -Path $path
+
+        $list.Entries | Should -HaveCount 2
+        @($list.Entries | Where-Object { -not $_.SiteId }).LockedOn.ToString('yyyy-MM-dd') | Should -Be '2025-03-01'
+    }
+
     It 'ignores a row without a date' {
         $path = Write-TestCsv -Name 'nodate.csv' -Text "Url,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,`r`nhttps://contoso.sharepoint.com/sites/b,2025-09-18`r`n"
         $list = Import-TestLockDate -Path $path
@@ -247,6 +273,18 @@ Describe 'Import-SPSLifecycleActivityReport' {
 
             $report.DeletedRowCount | Should -Be 0
             $report.ById.Count | Should -Be 1
+        }
+
+        It 'stops on an Is Deleted column that only looks like it, because the deleted rows would be read as live: <Name>' -ForEach @(
+            @{ Name = 'a soft hyphen'; Header = "Is$([char]0xAD) Deleted" }
+            @{ Name = 'a combining mark'; Header = "Is Deleted$([char]0x307)" }
+            @{ Name = 'no space'; Header = 'IsDeleted' }
+            @{ Name = 'an underscore'; Header = 'Is_Deleted' }
+        ) {
+            $text = "Report Refresh Date,Site Id,Site URL,Owner Display Name,$Header,Last Activity Date,Root Web Template,Report Period`r`n2026-10-27,A6E20079-2D1A-4E9D-BC9F-94E3F2EFEB64,https://contoso.sharepoint.com/sites/a,x,True,2026-01-02,Team site,180`r`n"
+            $path = Write-TestCsv -Name 'lookalike.csv' -Text $text
+
+            { Import-TestReport -Path $path -Kind SharePoint } | Should -Throw -ExpectedMessage "*looks like 'Is Deleted'*"
         }
 
         It 'stops when a mandatory column is missing' {

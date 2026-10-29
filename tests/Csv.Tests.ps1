@@ -26,8 +26,8 @@
     }
 
     function script:Read-TestCsv {
-        param([string]$Path, [string[]]$Required = @())
-        & $script:Module { param($p, $r) Read-SPSLifecycleCsv -Path $p -RequiredColumn $r } $Path $Required
+        param([string]$Path, [string[]]$Required = @(), [string[]]$Optional = @())
+        & $script:Module { param($p, $r, $o) Read-SPSLifecycleCsv -Path $p -RequiredColumn $r -OptionalColumn $o } $Path $Required $Optional
     }
 }
 
@@ -191,6 +191,56 @@ Describe 'Read-SPSLifecycleCsv' {
         }
     }
 
+    Context 'Names that only look like the names that are required' {
+        It 'does not take a name with a hidden character for a required column, and shows the character' {
+            $path = Write-TestFile -Name 'hidden.csv' -Byte (Get-TestByte -Text "Url,Site$([char]0xAD)Id`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url', 'SiteId' } | Should -Throw -ExpectedMessage "*Site\u00ADId*looks like 'SiteId'*"
+        }
+
+        It 'says that a required column is missing, and lists the columns that are there, when nothing looks like it' {
+            $path = Write-TestFile -Name 'missing.csv' -Byte (Get-TestByte -Text "Url,Owner`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url', 'SiteId' } | Should -Throw -ExpectedMessage '*not found*SiteId*Columns present: Url, Owner*'
+        }
+
+        It 'still finds a required column whatever its case and the spaces around its name' {
+            $path = Write-TestFile -Name 'case.csv' -Byte (Get-TestByte -Text " URL ;siteid`r`nhttps://contoso.sharepoint.com/sites/a;x`r`n")
+
+            @(Read-TestCsv -Path $path -Required 'Url', 'SiteId') | Should -HaveCount 1
+        }
+    }
+
+    Context 'Optional columns that only look like the ones the tool knows' {
+        It 'stops on <Name>, because the column would be read as absent and what it carries would be lost' -ForEach @(
+            @{ Name = 'a name with a space'; Header = 'Site ID' }
+            @{ Name = 'a name with an underscore'; Header = 'Site_Id' }
+            @{ Name = 'a name with a soft hyphen'; Header = "Site$([char]0xAD)Id" }
+            @{ Name = 'a name with a zero-width space'; Header = "Site$([char]0x200B)Id" }
+            @{ Name = 'a name with a no-break space'; Header = "Site$([char]0xA0)Id" }
+            @{ Name = 'a name with full-width letters'; Header = 'ＳｉｔｅＩｄ' }
+            @{ Name = 'a name with an accent that is a separate character'; Header = "Site$([char]0x301)Id" }
+            @{ Name = 'a name with a dot above that is a separate character'; Header = "SI$([char]0x307)TEID" }
+            @{ Name = 'a name with a dotted capital I'; Header = "S$([char]0x130)TEID" }
+        ) {
+            $path = Write-TestFile -Name 'lookalike.csv' -Byte (Get-TestByte -Text "Url,$Header`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url' -Optional 'SiteId' } | Should -Throw -ExpectedMessage "*looks like 'SiteId'*"
+        }
+
+        It 'reads a file that has the optional column, spelled as the tool expects, whatever its case' {
+            $path = Write-TestFile -Name 'optional.csv' -Byte (Get-TestByte -Text "Url,SITEID`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
+
+            @(Read-TestCsv -Path $path -Required 'Url' -Optional 'SiteId') | Should -HaveCount 1
+        }
+
+        It 'reads a file that has no optional column at all, and columns that are not known' {
+            $path = Write-TestFile -Name 'plain.csv' -Byte (Get-TestByte -Text "Url,Note,Owner Display Name`r`nhttps://contoso.sharepoint.com/sites/a,x,y`r`n")
+
+            @(Read-TestCsv -Path $path -Required 'Url' -Optional 'SiteId') | Should -HaveCount 1
+        }
+    }
+
     Context 'Files' {
         It 'stops with a clear message when the file does not exist' {
             { Read-TestCsv -Path (Join-Path -Path $TestDrive -ChildPath 'nope.csv') } | Should -Throw -ExpectedMessage '*File not found*'
@@ -226,6 +276,68 @@ Describe 'Read-SPSLifecycleCsv' {
                 $stream.Dispose()
             }
         }
+    }
+}
+
+Describe 'Test-SPSLifecycleColumnName' {
+    It 'finds <Column> among the names, whatever the case' -ForEach @(
+        @{ Column = 'SiteId' }
+        @{ Column = 'siteid' }
+        @{ Column = 'SITEID' }
+    ) {
+        (& $script:Module { param($c) Test-SPSLifecycleColumnName -Name 'Url', 'SiteId', 'LockedOn' -Column $c } $Column) | Should -BeTrue
+    }
+
+    It 'does not find a name that only looks like the column: <Name>' -ForEach @(
+        @{ Name = 'a soft hyphen'; Text = "Site$([char]0xAD)Id" }
+        @{ Name = 'a zero-width space'; Text = "Site$([char]0x200B)Id" }
+        @{ Name = 'a no-break space'; Text = "Site$([char]0xA0)Id" }
+        @{ Name = 'another name'; Text = 'SiteIds' }
+    ) {
+        (& $script:Module { param($t) Test-SPSLifecycleColumnName -Name 'Url', $t, 'LockedOn' -Column 'SiteId' } $Text) | Should -BeFalse
+    }
+
+    It 'finds nothing in an empty list of names' {
+        (& $script:Module { Test-SPSLifecycleColumnName -Name @() -Column 'SiteId' }) | Should -BeFalse
+    }
+
+    It 'compares the same way whatever the culture: <Culture>' -ForEach @(
+        @{ Culture = 'tr-TR' }
+        @{ Culture = 'fr-FR' }
+        @{ Culture = 'de-DE' }
+    ) {
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+
+            (& $script:Module { Test-SPSLifecycleColumnName -Name 'URL', 'SITEID' -Column 'Url' }) | Should -BeTrue
+            (& $script:Module { Test-SPSLifecycleColumnName -Name "Site$([char]0xAD)Id" -Column 'SiteId' }) | Should -BeFalse
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+    }
+}
+
+Describe 'ConvertTo-SPSLifecycleVisibleText' {
+    It 'writes <Name> as <Expected>' -ForEach @(
+        @{ Name = 'a soft hyphen'; Text = "Site$([char]0xAD)Id"; Expected = 'Site\u00ADId' }
+        @{ Name = 'a zero-width space'; Text = "a$([char]0x200B)b"; Expected = 'a\u200Bb' }
+        @{ Name = 'a byte order mark'; Text = "$([char]0xFEFF)Url"; Expected = '\uFEFFUrl' }
+        @{ Name = 'a control character'; Text = "a$([char]7)b"; Expected = 'a\u0007b' }
+        @{ Name = 'a combining mark'; Text = "SI$([char]0x307)TEID"; Expected = 'SI\u0307TEID' }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t } $Text) | Should -BeExactly $Expected
+    }
+
+    It 'leaves a text that shows everything as it is: <Text>' -ForEach @(
+        @{ Text = 'SiteId' }
+        @{ Text = 'Équipe été' }
+        @{ Text = 'a b' }
+        @{ Text = '日本' }
+        @{ Text = '' }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t } $Text) | Should -BeExactly $Text
     }
 }
 
@@ -291,5 +403,84 @@ Describe 'ConvertTo-SPSLifecycleBoolean' {
         }
 
         ($values -join ',') | Should -Be 'True,False,True,False'
+    }
+}
+
+Describe 'ConvertFrom-SPSLifecycleCsvByte' {
+    BeforeAll {
+        function script:ConvertFrom-TestByte {
+            param([byte[]]$Byte, [switch]$Strict)
+            & $script:Module { param($b, $s) ConvertFrom-SPSLifecycleCsvByte -Bytes $b -Strict:$s } $Byte ([bool]$Strict)
+        }
+
+        function script:ConvertTo-TestCode {
+            param([string]$Text)
+            # -BeExactly compares with the rules of the culture, which ignore a byte order mark: the code units are compared instead.
+            (($Text.ToCharArray() | ForEach-Object { '{0:X4}' -f [System.Int32]$_ }) -join ' ')
+        }
+
+        function script:Test-DecoderRefusal {
+            param([byte[]]$Byte)
+            $thrown = $null
+            try {
+                $null = ConvertFrom-TestByte -Byte $Byte -Strict
+            }
+            catch {
+                $thrown = $_.Exception
+            }
+
+            ($thrown -is [System.Text.DecoderFallbackException]) -or ($thrown.InnerException -is [System.Text.DecoderFallbackException])
+        }
+    }
+
+    Context 'Without Strict, as a file that a person gives is read' {
+        It 'replaces a byte that is not UTF-8 after a UTF-8 byte order mark' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Byte ([byte[]]@(0xEF, 0xBB, 0xBF, 0x61, 0xFF, 0x62))) | Should -BeExactly '0061 FFFD 0062'
+        }
+
+        It 'reads a file without a mark that is not UTF-8 as Windows-1252' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Byte ([byte[]]@(0x61, 0xE9))) | Should -BeExactly '0061 00E9'
+        }
+
+        It 'reads UTF-16 with a byte order mark' {
+            (ConvertFrom-TestByte -Byte ([System.Text.UnicodeEncoding]::new($false, $true).GetPreamble() + [System.Text.UnicodeEncoding]::new($false, $false).GetBytes('ab'))) | Should -BeExactly 'ab'
+        }
+    }
+
+    Context 'With Strict, as a file in which a character must not change is read' {
+        It 'reads UTF-8 with a byte order mark, and drops the mark' {
+            $text = ConvertFrom-TestByte -Strict -Byte ([byte[]]@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes("Url,é$([char]0x65E5)"))
+
+            ConvertTo-TestCode $text | Should -BeExactly (ConvertTo-TestCode "Url,é$([char]0x65E5)")
+        }
+
+        It 'reads UTF-8 without a byte order mark, ASCII, and nothing' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([System.Text.Encoding]::UTF8.GetBytes('Équipe'))) | Should -BeExactly (ConvertTo-TestCode 'Équipe')
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([System.Text.Encoding]::ASCII.GetBytes('Url'))) | Should -BeExactly (ConvertTo-TestCode 'Url')
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([byte[]]@())) | Should -BeExactly ''
+        }
+
+        It 'reads a file that is only a byte order mark as an empty text' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([byte[]]@(0xEF, 0xBB, 0xBF))) | Should -BeExactly ''
+        }
+
+        It 'keeps a second byte order mark, which is a character of the text' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([byte[]]@(0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x55))) | Should -BeExactly 'FEFF 0055'
+        }
+
+        It 'refuses <Name>' -ForEach @(
+            @{ Name = 'a byte that is not UTF-8 after a UTF-8 byte order mark'; Byte = [byte[]]@(0xEF, 0xBB, 0xBF, 0x61, 0xFF, 0x62) }
+            @{ Name = 'a byte that is not UTF-8 without a byte order mark'; Byte = [byte[]]@(0x61, 0xFF, 0x62) }
+            @{ Name = 'Windows-1252 with an accented letter'; Byte = [byte[]]@(0x61, 0xE9) }
+            @{ Name = 'a sequence cut short at the end'; Byte = [byte[]]@(0x61, 0xC3) }
+            @{ Name = 'an overlong sequence'; Byte = [byte[]]@(0xC0, 0xAF) }
+            @{ Name = 'half of a surrogate pair'; Byte = [byte[]]@(0xED, 0xA0, 0x80) }
+            @{ Name = 'UTF-16 with a byte order mark'; Byte = [byte[]]@(0xFF, 0xFE, 0x61, 0x00) }
+            @{ Name = 'UTF-16 big endian with a byte order mark'; Byte = [byte[]]@(0xFE, 0xFF, 0x00, 0x61) }
+            @{ Name = 'a byte order mark that is cut short'; Byte = [byte[]]@(0xEF, 0xBB) }
+            @{ Name = 'two bytes of a byte order mark and a letter'; Byte = [byte[]]@(0xEF, 0xBB, 0x41, 0x42) }
+        ) {
+            (Test-DecoderRefusal -Byte $Byte) | Should -BeTrue
+        }
     }
 }
