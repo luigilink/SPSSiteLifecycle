@@ -140,13 +140,30 @@ Describe 'Import-SPSLifecycleLockJournal' {
         $entry.Source | Should -BeExactly 'lock-journal.csv'
     }
 
-    It 'reads a journal that French Excel saved: semicolons, Windows-1252, dd/MM/yyyy' {
-        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Encoding cp1252 -Text "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;$($script:SiteA);29/10/2026`r`n"
+    It 'reads a journal that French Excel saved: semicolons, Windows-1252 (which holds only ASCII, and is UTF-8 too), dd/MM/yyyy' {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Encoding cp1252 -Text "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/equipe;$($script:SiteA);29/10/2026`r`n"
 
         $journal = Import-TestJournal -Path $path -DateFormat 'dd/MM/yyyy'
 
-        $journal.Entries[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/équipe'
+        $journal.Entries[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/equipe'
         $journal.Entries[0].LockedOn.ToString('yyyy-MM-dd') | Should -Be '2026-10-29'
+    }
+
+    It 'stops on a journal that is not UTF-8, where a list that a person gives would be read as Windows-1252' {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Encoding cp1252 -Text "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;$($script:SiteA);29/10/2026`r`n"
+        $list = Write-TestFile -Folder $script:Folder -Name 'list.csv' -Encoding cp1252 -Text "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;$($script:SiteA);29/10/2026`r`n"
+
+        { Import-TestJournal -Path $path -DateFormat 'dd/MM/yyyy' } | Should -Throw -ExpectedMessage '*lock-journal.csv*not UTF-8*CSV UTF-8*'
+        (Import-TestList -Path $list -DateFormat 'dd/MM/yyyy').Entries[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/équipe'
+    }
+
+    It 'stops on a byte that is not UTF-8 after the byte order mark, which would have become U+FFFD in the address of a row without a site ID, so that an older date of the site won' {
+        $head = [System.Text.Encoding]::ASCII.GetBytes("Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-01-01`r`nhttps://contoso.sharepoint.com/sites/a")
+        $tail = [System.Text.Encoding]::ASCII.GetBytes(",,2026-10-29`r`n")
+        $path = Join-Path -Path $script:Folder -ChildPath 'lock-journal.csv'
+        [System.IO.File]::WriteAllBytes($path, [byte[]]([byte[]]@(0xEF, 0xBB, 0xBF) + $head + [byte[]]@(0xFF) + $tail))
+
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*not UTF-8*'
     }
 
     It 'stops on a date that it cannot read, and names the journal and the column' {

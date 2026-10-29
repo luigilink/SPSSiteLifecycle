@@ -15,6 +15,13 @@
         $path
     }
 
+    function script:Write-TestBytes {
+        param([string]$Name, [byte[]]$Byte)
+        $path = Join-Path -Path $TestDrive -ChildPath $Name
+        [System.IO.File]::WriteAllBytes($path, $Byte)
+        $path
+    }
+
     function script:Read-TestStrict {
         param([string]$Path, [string[]]$Required = @(), [string[]]$Optional = @())
         & $script:Module { param($p, $r, $o) Read-SPSLifecycleStrictCsv -Path $p -RequiredColumn $r -OptionalColumn $o } $Path $Required $Optional
@@ -47,8 +54,7 @@ Describe 'Read-SPSLifecycleStrictCsv' {
         It 'reads a file saved by Excel as <Name>' -ForEach @(
             @{ Name = 'UTF-8 with a byte order mark'; Encoding = 'utf8bom'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;A6E2;29/10/2026`r`n" }
             @{ Name = 'UTF-8 without a byte order mark'; Encoding = 'utf8'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;A6E2;29/10/2026`r`n" }
-            @{ Name = 'Windows-1252 (French)'; Encoding = 'cp1252'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;A6E2;29/10/2026`r`n" }
-            @{ Name = 'UTF-16'; Encoding = 'utf16'; Text = "Url`tSiteId`tLockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe`tA6E2`t29/10/2026`r`n" }
+            @{ Name = 'Windows-1252 (French), which holds only ASCII and is UTF-8 too'; Encoding = 'cp1252'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/equipe;A6E2;29/10/2026`r`n" }
         ) {
             $path = Write-TestFile -Name 'excel.csv' -Text $Text -Encoding $Encoding
 
@@ -57,6 +63,31 @@ Describe 'Read-SPSLifecycleStrictCsv' {
             $table.Rows | Should -HaveCount 1
             $table.Rows[0].SiteId | Should -BeExactly 'A6E2'
             $table.Rows[0].LockedOn | Should -BeExactly '29/10/2026'
+        }
+
+        It 'stops on a file that is not UTF-8, as a lock journal always is, and says to save it as CSV UTF-8: <Name>' -ForEach @(
+            @{ Name = 'Windows-1252 with an accented letter'; Encoding = 'cp1252'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;A6E2;29/10/2026`r`n" }
+            @{ Name = 'UTF-16 with a byte order mark'; Encoding = 'utf16'; Text = "Url`tSiteId`tLockedOn`r`nhttps://contoso.sharepoint.com/sites/a`tA6E2`t29/10/2026`r`n" }
+        ) {
+            $path = Write-TestFile -Name 'excel.csv' -Text $Text -Encoding $Encoding
+
+            { Read-TestStrict -Path $path -Required 'Url', 'SiteId', 'LockedOn' } | Should -Throw -ExpectedMessage "*excel.csv*not UTF-8*CSV UTF-8*"
+        }
+
+        It 'stops on <Name> instead of replacing it, because a character that is replaced changes a web address and the row would no longer match its site' -ForEach @(
+            @{ Name = 'a byte that is not UTF-8 after a UTF-8 byte order mark'; Bom = $true; Tail = [byte[]]@(0xFF) }
+            @{ Name = 'a sequence cut short after a UTF-8 byte order mark'; Bom = $true; Tail = [byte[]]@(0xC3) }
+            @{ Name = 'an overlong sequence after a UTF-8 byte order mark'; Bom = $true; Tail = [byte[]]@(0xC0, 0xAF) }
+            @{ Name = 'half of a surrogate pair after a UTF-8 byte order mark'; Bom = $true; Tail = [byte[]]@(0xED, 0xA0, 0x80) }
+            @{ Name = 'a byte that is not UTF-8 without a byte order mark'; Bom = $false; Tail = [byte[]]@(0xFF) }
+            @{ Name = 'a sequence cut short without a byte order mark'; Bom = $false; Tail = [byte[]]@(0xC3) }
+        ) {
+            $mark = if ($Bom) { [byte[]]@(0xEF, 0xBB, 0xBF) } else { [byte[]]@() }
+            $head = [System.Text.Encoding]::ASCII.GetBytes("Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a")
+            $rest = [System.Text.Encoding]::ASCII.GetBytes(",,2026-10-29`r`n")
+            $path = Write-TestBytes -Name 'damaged.csv' -Byte ([byte[]]($mark + $head + $Tail + $rest))
+
+            { Read-TestStrict -Path $path -Required 'Url', 'SiteId', 'LockedOn' } | Should -Throw -ExpectedMessage '*damaged.csv*not UTF-8*'
         }
 
         It 'reads quoted values that hold a separator, a line break and doubled quotes' {

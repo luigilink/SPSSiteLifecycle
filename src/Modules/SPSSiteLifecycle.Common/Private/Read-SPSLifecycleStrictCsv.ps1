@@ -16,8 +16,12 @@
         - a column that appears twice, a required column that is missing, and a header that looks like a column
           the tool knows without being spelled like it (see Assert-SPSLifecycleCsvHeader).
 
-        The encoding (UTF-8 with or without a byte order mark, UTF-16, Windows-1252), the separator (a comma, a
-        semicolon or a tab, and a first line sep=) and the blank lines before the header are read as
+        The file must be UTF-8, with a byte order mark or not (a file that holds only ASCII, as French Excel can
+        save it, is UTF-8 too), which is what Add-SPSLifecycleLockJournalEntry requires to add to it: a byte that is
+        not valid UTF-8 is never replaced or guessed, because a character that is read wrong changes a web address,
+        and the row would no longer match its site. A file in UTF-16 or in Windows-1252 with an accented letter, and
+        a UTF-8 file that is damaged, are refused with a message that says to save it as CSV UTF-8. The separator (a
+        comma, a semicolon or a tab, and a first line sep=) and the blank lines before the header are read as
         Read-SPSLifecycleCsv reads them, because Excel changes them when it saves a file. The messages name the line of
         the file, which a person can find in Excel (the header is line 1 unless lines come before it).
 
@@ -57,7 +61,14 @@
     $name = Split-Path -Path $fullPath -Leaf
     $bytes = Read-SPSLifecycleFileByte -Path $fullPath
 
-    $detected = Get-SPSLifecycleCsvDelimiter -Text (ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes)
+    try {
+        $text = ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes -Strict
+    }
+    catch [System.Text.DecoderFallbackException] {
+        throw "File '$name' is not UTF-8 (Excel may have saved it in another encoding, or the file is damaged), so what it says cannot be trusted: a character that is read wrong changes a web address, and an older lock date would stay in force. It is not read. Save it as 'CSV UTF-8', or restore it from a copy."
+    }
+
+    $detected = Get-SPSLifecycleCsvDelimiter -Text $text
     $records = @(ConvertFrom-SPSLifecycleStrictCsv -Text $detected.Text -Delimiter $detected.Delimiter -FirstLine $detected.FirstLine -Source $name -SkipBlank)
 
     $header = @()

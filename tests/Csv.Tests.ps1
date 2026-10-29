@@ -405,3 +405,82 @@ Describe 'ConvertTo-SPSLifecycleBoolean' {
         ($values -join ',') | Should -Be 'True,False,True,False'
     }
 }
+
+Describe 'ConvertFrom-SPSLifecycleCsvByte' {
+    BeforeAll {
+        function script:ConvertFrom-TestByte {
+            param([byte[]]$Byte, [switch]$Strict)
+            & $script:Module { param($b, $s) ConvertFrom-SPSLifecycleCsvByte -Bytes $b -Strict:$s } $Byte ([bool]$Strict)
+        }
+
+        function script:ConvertTo-TestCode {
+            param([string]$Text)
+            # -BeExactly compares with the rules of the culture, which ignore a byte order mark: the code units are compared instead.
+            (($Text.ToCharArray() | ForEach-Object { '{0:X4}' -f [System.Int32]$_ }) -join ' ')
+        }
+
+        function script:Test-DecoderRefusal {
+            param([byte[]]$Byte)
+            $thrown = $null
+            try {
+                $null = ConvertFrom-TestByte -Byte $Byte -Strict
+            }
+            catch {
+                $thrown = $_.Exception
+            }
+
+            ($thrown -is [System.Text.DecoderFallbackException]) -or ($thrown.InnerException -is [System.Text.DecoderFallbackException])
+        }
+    }
+
+    Context 'Without Strict, as a file that a person gives is read' {
+        It 'replaces a byte that is not UTF-8 after a UTF-8 byte order mark' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Byte ([byte[]]@(0xEF, 0xBB, 0xBF, 0x61, 0xFF, 0x62))) | Should -BeExactly '0061 FFFD 0062'
+        }
+
+        It 'reads a file without a mark that is not UTF-8 as Windows-1252' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Byte ([byte[]]@(0x61, 0xE9))) | Should -BeExactly '0061 00E9'
+        }
+
+        It 'reads UTF-16 with a byte order mark' {
+            (ConvertFrom-TestByte -Byte ([System.Text.UnicodeEncoding]::new($false, $true).GetPreamble() + [System.Text.UnicodeEncoding]::new($false, $false).GetBytes('ab'))) | Should -BeExactly 'ab'
+        }
+    }
+
+    Context 'With Strict, as a file in which a character must not change is read' {
+        It 'reads UTF-8 with a byte order mark, and drops the mark' {
+            $text = ConvertFrom-TestByte -Strict -Byte ([byte[]]@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes("Url,é$([char]0x65E5)"))
+
+            ConvertTo-TestCode $text | Should -BeExactly (ConvertTo-TestCode "Url,é$([char]0x65E5)")
+        }
+
+        It 'reads UTF-8 without a byte order mark, ASCII, and nothing' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([System.Text.Encoding]::UTF8.GetBytes('Équipe'))) | Should -BeExactly (ConvertTo-TestCode 'Équipe')
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([System.Text.Encoding]::ASCII.GetBytes('Url'))) | Should -BeExactly (ConvertTo-TestCode 'Url')
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([byte[]]@())) | Should -BeExactly ''
+        }
+
+        It 'reads a file that is only a byte order mark as an empty text' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([byte[]]@(0xEF, 0xBB, 0xBF))) | Should -BeExactly ''
+        }
+
+        It 'keeps a second byte order mark, which is a character of the text' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -Strict -Byte ([byte[]]@(0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x55))) | Should -BeExactly 'FEFF 0055'
+        }
+
+        It 'refuses <Name>' -ForEach @(
+            @{ Name = 'a byte that is not UTF-8 after a UTF-8 byte order mark'; Byte = [byte[]]@(0xEF, 0xBB, 0xBF, 0x61, 0xFF, 0x62) }
+            @{ Name = 'a byte that is not UTF-8 without a byte order mark'; Byte = [byte[]]@(0x61, 0xFF, 0x62) }
+            @{ Name = 'Windows-1252 with an accented letter'; Byte = [byte[]]@(0x61, 0xE9) }
+            @{ Name = 'a sequence cut short at the end'; Byte = [byte[]]@(0x61, 0xC3) }
+            @{ Name = 'an overlong sequence'; Byte = [byte[]]@(0xC0, 0xAF) }
+            @{ Name = 'half of a surrogate pair'; Byte = [byte[]]@(0xED, 0xA0, 0x80) }
+            @{ Name = 'UTF-16 with a byte order mark'; Byte = [byte[]]@(0xFF, 0xFE, 0x61, 0x00) }
+            @{ Name = 'UTF-16 big endian with a byte order mark'; Byte = [byte[]]@(0xFE, 0xFF, 0x00, 0x61) }
+            @{ Name = 'a byte order mark that is cut short'; Byte = [byte[]]@(0xEF, 0xBB) }
+            @{ Name = 'two bytes of a byte order mark and a letter'; Byte = [byte[]]@(0xEF, 0xBB, 0x41, 0x42) }
+        ) {
+            (Test-DecoderRefusal -Byte $Byte) | Should -BeTrue
+        }
+    }
+}

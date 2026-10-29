@@ -5,9 +5,10 @@
 
         .DESCRIPTION
         The journal has the format of a list of lock dates (a Url column, a SiteId column and a LockedOn
-        column), so it is read with the same tolerance as the lists that a person provides: any separator,
-        UTF-8 or Windows-1252, the formats of CsvDateFormats. The tenant does not give the date a site was
-        locked, and the journal is how the tool remembers it.
+        column), and it is read with the separator that Excel may have changed and the date formats of
+        CsvDateFormats, but not with the tolerance of the lists that a person provides: it must be UTF-8 (see
+        Read-SPSLifecycleStrictCsv). The tenant does not give the date a site was locked, and the journal is how
+        the tool remembers it.
 
         A journal that does not exist yet, or that has no byte at all, is an empty one: no site was locked
         by the tool, and a site without a lock date is never deleted. A file that exists but that cannot be
