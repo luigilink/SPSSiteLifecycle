@@ -593,6 +593,8 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
         It 'leaves out a OneDrive site, however it is recognized, and counts it: <Name>' -ForEach @(
             @{ Name = 'by its template'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'SPSPERS#10' }
             @{ Name = 'by its address'; Url = 'https://contoso-my.sharepoint.com/personal/b_contoso_com'; Template = 'STS#3' }
+            @{ Name = 'by its address with the dot of the DNS root'; Url = 'https://contoso-my.sharepoint.com./personal/c_contoso_com'; Template = 'STS#3' }
+            @{ Name = 'by its address with a port'; Url = 'https://contoso-my.sharepoint.com:8443/personal/d_contoso_com'; Template = 'STS#3' }
         ) {
             $site = New-ScanSite -Url $Url -Template $Template
             $other = New-ScanSite -Name 'b' -SiteId $script:SiteB
