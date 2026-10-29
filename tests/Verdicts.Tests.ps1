@@ -226,6 +226,7 @@ Describe 'Get-SPSLifecycleVerdict' {
             @{ Name = 'a OneDrive host with a port'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso-my.sharepoint.com:8443/personal/a_contoso_com'; Template = 'STS#3' }
             @{ Name = 'a OneDrive host with a soft hyphen in it'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = "https://contoso-my.share$([char]0xAD)point.com/personal/a_contoso_com"; Template = 'STS#3' }
             @{ Name = 'a system site whose template has spaces around it'; Expected = 'SKIP-PROTECTED'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/appcatalog2'; Template = ' APPCATALOG#0 ' }
+            @{ Name = 'a channel site whose template has spaces around it'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/a-channel2'; Template = '  TEAMCHANNEL#1 ' }
             @{ Name = 'a channel site'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/a-channel'; Template = 'TEAMCHANNEL#1' }
             @{ Name = 'a channel site'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Archive'; Url = 'https://contoso.sharepoint.com/sites/a-channel'; Template = 'TEAMCHANNEL#0' }
             @{ Name = 'the root site'; Expected = 'SKIP-PROTECTED'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/'; Template = 'SITEPAGEPUBLISHING#0' }
@@ -436,6 +437,7 @@ Describe 'Test-SPSLifecycleOneDrive' {
         @{ Name = 'a combining grapheme joiner inside the host'; Url = "https://contoso-my.share$([char]0x34F)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'full-width letters in the host'; Url = "https://$([char]0xFF43)$([char]0xFF4F)$([char]0xFF4E)tos$([char]0xFF4F)-my.sharepoint.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a soft hyphen in an address that does not parse'; Url = "https://contoso-my.share$([char]0xAD)point.com../personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a soft hyphen in an address that does not parse, in http'; Url = "http://contoso-my.share$([char]0xAD)point.com../personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a soft hyphen in the host of another tenant'; Url = "https://fabrikam-my.share$([char]0xAD)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'a host that ends like the OneDrive host'; Url = 'https://notcontoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'a subdomain of the OneDrive host'; Url = 'https://eu.contoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }

@@ -242,7 +242,6 @@
                     throw 'the record has no template, or a template that is not a text (Template): a system site would not be recognized.'
                 }
 
-                $template = $record.Template.Trim()
 
                 try {
                     $modified = ConvertTo-SPSLifecycleUtcDateTime -Value $record.LastContentModified
@@ -257,7 +256,7 @@
 
                 $verdictSite = [PSCustomObject]@{
                     Url                     = $url
-                    Template                = $template
+                    Template                = $record.Template
                     LockState               = $lockState
                     GroupId                 = $groupId
                     IsHubSite               = $record.IsHubSite
@@ -307,7 +306,7 @@
                         Decision           = ''
                         SiteId             = $siteId
                         Title              = $record.Title
-                        Template           = $template
+                        Template           = $record.Template.Trim()
                         GroupId            = $groupId
                         IsTeamsConnected   = $record.IsTeamsConnected
                         LockState          = $lockState
