@@ -8,7 +8,7 @@ The measurements come from a Microsoft 365 demonstration tenant of about 10,000 
 |---|---------|----------------------|
 | D1 | Name, license, versions | Public, MIT, 0.x pre-releases until a real run is validated |
 | D2 | Architecture and settings | One script, one common module, settings in a `.psd1` file |
-| D3 | Activity sources | Usage reports and the inactive site policy report, the most recent date wins |
+| D3 | Activity sources | SharePoint, Teams and groups reports (the inactive site policy report later), the most recent date wins |
 | D4 | Who decides | A person, in the `Decision` column of the CSV |
 | D5 | Unlocked sites | Lock first, direct deletion is off by default |
 | D6 | Safeguards of the Act phase | Checks on the whole file, then on each row just before its action |
@@ -36,7 +36,7 @@ The measurements come from a Microsoft 365 demonstration tenant of about 10,000 
 
 ## D3 - Activity sources
 
-- Sources: the SharePoint site usage report, the Teams activity report, the Microsoft 365 groups activity report, and the execution report of the inactive site policy. All are optional, and at least one is required.
+- Sources: the SharePoint site usage report, the Teams activity report and the Microsoft 365 groups activity report. All are optional, and at least one is required. The execution report of the inactive site policy is planned as a fourth source, but it is not read yet: its importer waits for a real export that confirms the column names (see the open points).
 - The last activity is the most recent date across the sources that were given. The last content modification date of the site (`LastContentModifiedDate`) only adds caution: it is never a proof of inactivity.
 - A site that is absent from every report gets a `REVIEW` verdict.
 - Why: the usage report covers SharePoint only, so a team that is active only in Teams would look inactive. The inactive site policy report covers SharePoint, Teams, Exchange and Viva Engage ([Manage inactive sites using inactive site policies](https://learn.microsoft.com/sharepoint/inactive-site-policy)).
@@ -44,7 +44,7 @@ The measurements come from a Microsoft 365 demonstration tenant of about 10,000 
 
 ## D4 - A person decides
 
-- The Scan CSV has a `Decision` column, filled in by a person: `Delete`, `Archive` or `Lock`. An empty cell leaves the site untouched, and any other value stops the tool before the first action. `SuggestedAction` only helps to filter and to fill in the column.
+- The Scan CSV has a `Decision` column, filled in by a person: `Delete`, `Archive` or `Lock`. An empty cell leaves the site untouched, and any other value stops the tool before the first action. `SuggestedAction` only helps to filter and to fill in the column: `Lock` for an unlocked site, otherwise `Delete` when the size is at most `DeleteMaxSizeGB` (1 GB by default) and `Archive` above it. There is no separate size threshold for archiving, because the person decides.
 - A decision never lifts a safeguard: every check of D6 is repeated live.
 - There is no automatic rule in 0.x.
 
@@ -52,7 +52,7 @@ The measurements come from a Microsoft 365 demonstration tenant of about 10,000 
 
 - By default only a read-only site is deleted or archived: `AcceptedLockStates = @('ReadOnly')`. Adding `'Unlock'` allows the direct deletion of an unlocked site. `NoAccess` is never accepted. Only `Lock` accepts an unlocked site.
 - Safe path for an unlocked site: `Lock` (the site becomes read-only and the tool writes the date in a local lock journal with the URL, the site ID and the lock date; nothing is written in the tenant), then `Delete` once `MinLockedDays` (365 by default) have passed.
-- Lock dates come from lists given by the user (a URL and a date), from the journal, or from the "Action taken on" column of the policy report. The tenant does not return the date a site was locked.
+- Lock dates come from lists given by the user (a URL and a date) or from the journal. The "Action taken on" column of the inactive site policy report will be a third source once its importer exists (see D3). The tenant does not return the date a site was locked.
 - Why: a read-only site means that a person already made a decision, and it can be unlocked. In the lab, a read-only site refuses a direct deletion (access denied): the tool unlocks it, deletes it, and locks it back if the deletion fails.
 
 ## D6 - Safeguards of the Act phase
@@ -62,7 +62,7 @@ Two levels.
 **The whole file, before any action** (the tool stops):
 
 - a URL outside the configured tenant;
-- a refused tenant (`RefusedTenants`, which holds the Microsoft corporate tenant by default);
+- a refused tenant: the Microsoft corporate tenants (`microsoft` and `microsoftonline`) are refused by the code and cannot be removed, and the `RefusedTenants` setting only adds names to that list. The settings are checked in both phases, so Scan refuses them too;
 - a missing mandatory column (`Url`, `SiteId`, `GeneratedOn`, `Decision`);
 - an unknown decision;
 - a file older than `MaxCsvAgeDays` (30 by default).
@@ -72,6 +72,7 @@ Two levels.
 - the site still exists, with the same `SiteId` (a URL can be reused);
 - its lock state is accepted (D5);
 - it is not a channel site, a hub site, the root site, a system site, a home site or a OneDrive site;
+- for an archive, its template is one that Microsoft 365 Archive supports (`SKIP-NOT-ARCHIVABLE`). The list is a table in the module, taken from [Manage Microsoft 365 Archive](https://learn.microsoft.com/microsoft-365/archive/archive-manage#site-templates-supported). A template that Microsoft adds later is refused until the table is updated;
 - its Microsoft 365 group, if any, is active;
 - its content was not modified since `GeneratedOn`;
 - no retention policy or hold is known (best effort: the tool cannot see every Microsoft Purview policy);
@@ -98,7 +99,7 @@ Always on: report only by default, double typed confirmation, `MaxActions`, a st
 
 SPSSiteLifecycle is a new tool. It does not read the files of any earlier script: its input formats are its own. All inputs are plain CSV files that follow the rules of D10.
 
-- **Lock date lists** (`LockDateFiles`): a `Url` column, a `LockedOn` column and an optional `SiteId` column. When a site appears in several lists, in the lock journal or in the policy report (D5), the latest date is kept: a later lock date can only delay a deletion.
+- **Lock date lists** (`LockDateFiles`): a `Url` column, a `LockedOn` column and an optional `SiteId` column. When a site appears in several lists or in the lock journal (D5), the latest date is kept: a later lock date can only delay a deletion.
 - **Exclusion lists** (`ExclusionFiles`): a `Url` column. A listed site gets `SKIP-EXCLUDED` in Scan, and Act checks the lists again, because a decision never lifts a safeguard (D4).
 - No saved inventory is read. The paged listing keeps its own checkpoint files to resume an interrupted Scan (D7), and the Scan CSV is the reviewed list that Act reads.
 
@@ -117,7 +118,7 @@ SPSSiteLifecycle is a new tool. It does not read the files of any earlier script
 - **Reading is tolerant.** The separator is detected (comma, semicolon or tab, and a first line `sep=` is skipped). UTF-8 with or without a BOM is read, with a fallback to Windows-1252 (the first CSV format that French Excel offers). Dates are read in ISO 8601 (`2026-10-28`, `2026-10-28T16:30:00Z`, or the compact `20261028T163000Z`) or in the formats listed in `CsvDateFormats`, for example `dd/MM/yyyy`; the value `Culture` in that list accepts the date patterns of the current culture. The tool never guesses otherwise, because a day and a month swapped in a lock date could silently change whether a site is eligible. An unreadable date stops the tool and names the row, the column and the setting to use. Empty rows added by Excel are ignored, a duplicate `Url` or `SiteId` stops the tool, and a file still open in Excel gives a clear message.
 - **Act reads four columns only:** `Url`, `SiteId`, `GeneratedOn` and `Decision`. Everything else is read again from its source or live, so what Excel changes (dates, `VRAI` and `FAUX`, decimal commas) cannot alter an action.
 - **Writing:** UTF-8 with a BOM and the separator of the current culture (a semicolon for French) unless `CsvDelimiter` says otherwise. Sizes are whole megabytes (`StorageUsedMB`) and dates are ISO. `GeneratedOn` is written in the compact form `20261028T163000Z` (UTC), which is meant to survive a round trip through a spreadsheet unchanged. `Title` is neutralized against formula injection ([CWE-1236](https://cwe.mitre.org/data/definitions/1236.html)) and is never read by Act. There are no owners, because they are personal data.
-- **Columns:** `Url`, `Verdict`, `SuggestedAction` and `Decision` first, then `SiteId`, `Title`, `Template`, `GroupId`, `IsTeamsConnected`, `LockState`, `ArchiveStatus`, `StorageUsedMB`, `LastActivity`, `LastActivitySource`, `InactiveDays`, `SharePointActivity`, `TeamsActivity`, `GroupActivity`, `PolicyActivity`, `ContentModified`, `LockedOn`, `LockedOnSource` and `GeneratedOn`.
+- **Columns:** `Url`, `Verdict`, `SuggestedAction` and `Decision` first, then `SiteId`, `Title`, `Template`, `GroupId`, `IsTeamsConnected`, `LockState`, `ArchiveStatus`, `StorageUsedMB`, `LastActivity`, `LastActivitySource`, `InactiveDays`, `SharePointActivity`, `TeamsActivity`, `GroupActivity`, `ContentModified`, `LockedOn`, `LockedOnSource` and `GeneratedOn`.
 - **Documentation** is written in English with Microsoft Learn references only. The Configuration and Verdicts pages are generated from the settings schema and the verdict table. A test fails when a generated page differs from the committed file, so a key without documentation turns CI red.
 
 ## D11 - Graph and PnP.PowerShell
@@ -146,4 +147,5 @@ SharePoint sites only. OneDrive sites are never listed for action and never touc
 - What exactly does the `HasHolds` site property (PnP.PowerShell 3.4.1 and later) report? The retention check of D6 depends on it.
 - Does locking or unlocking a site change its last content modification date? A site that the tool locked must not look active because of it.
 - Does `GeneratedOn` survive a round trip through a spreadsheet (open the CSV, fill in `Decision`, save as CSV) unchanged, in French Excel in particular? The compact form is meant to, but it has not been tried yet.
-- Do the column names of the inactive site policy report, as exported, match the names documented on Microsoft Learn? The importer ignores case and punctuation, but it has not been tried on a real export.
+- Do the column names of the inactive site policy report, as exported, match the names documented on Microsoft Learn? Its importer, and the `PolicyActivity` column of the CSV, are written only after a real export has been checked (the header line is enough).
+- Sign-in is interactive in 0.x (PnP.PowerShell with a `ClientId`). Certificate-based sign-in, for a Scan that runs unattended, is not decided yet.
