@@ -7,8 +7,9 @@
         The reading is tolerant, because the files are meant to be opened and saved again in a
         spreadsheet: the separator is detected (comma, semicolon or tab, and a first line sep= is
         skipped), UTF-8 with or without a byte order mark and UTF-16 are read, a file that is not
-        valid UTF-8 is read as Windows-1252, and the empty rows that a spreadsheet adds are
-        ignored. A file that another program (Excel) has open is still read; if it cannot be, the
+        valid UTF-8 is read as Windows-1252, the blank lines before the header and the empty rows
+        that a spreadsheet adds are ignored, and the spaces around the names of the columns are
+        removed. Two columns with the same name stop the tool. A file that another program (Excel) has open is still read; if it cannot be, the
         message says so.
 
         Stops with a clear message when the file is missing, cannot be read as CSV, or lacks one of
@@ -57,18 +58,28 @@
 
     $detected = Get-SPSLifecycleCsvDelimiter -Text (ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes)
     $delimiter = $detected.Delimiter
+    $text = $detected.Text
 
+    # The header is the first line that is not blank. Its names are trimmed and written back, so that the names
+    # that were checked are the names of the properties of the rows (ConvertFrom-Csv keeps the spaces of a name).
     $header = @()
-    $head = $detected.Text.Substring(0, [System.Math]::Min(65536, $detected.Text.Length))
-    $firstLine = $head -split "\r\n|\n|\r" | Where-Object { $_.Trim() } | Select-Object -First 1
-    if ($firstLine) {
-        $header = @(Split-SPSLifecycleCsvLine -Line $firstLine -Delimiter $delimiter | ForEach-Object { $_.Trim() })
+    $first = [System.Text.RegularExpressions.Regex]::Match($text, '\A(?:[ \t]*(?:\r\n|\n|\r))*([^\r\n]*)')
+    $headerLine = $first.Groups[1].Value
+    if ($headerLine.Trim()) {
+        $header = @(Split-SPSLifecycleCsvLine -Line $headerLine -Delimiter $delimiter | ForEach-Object { $_.Trim() })
+        $rewritten = ($header | ForEach-Object { '"' + $_.Replace('"', '""') + '"' }) -join $delimiter
+        $text = $rewritten + $text.Substring($first.Index + $first.Length)
+    }
+
+    $repeated = @($header | Where-Object { $_ } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+    if ($repeated.Count -gt 0) {
+        throw "Column(s) that appear more than once in '$Path' (the case and the spaces around a name do not count): $($repeated -join ', ')."
     }
 
     $rows = @()
-    if ($detected.Text.Trim()) {
+    if ($text.Trim()) {
         try {
-            $rows = @(ConvertFrom-Csv -InputObject $detected.Text -Delimiter $delimiter -ErrorAction Stop)
+            $rows = @(ConvertFrom-Csv -InputObject $text -Delimiter $delimiter -ErrorAction Stop)
         }
         catch {
             throw "Cannot read '$Path' as a CSV file: $($_.Exception.Message)"

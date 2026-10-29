@@ -138,6 +138,59 @@ Describe 'Read-SPSLifecycleCsv' {
         }
     }
 
+    Context 'Header names' {
+        It 'trims the spaces around a header name, <Name>, so that the column can be read' -ForEach @(
+            @{ Name = 'quoted'; Header = 'Url;"LockedOn "' }
+            @{ Name = 'unquoted'; Header = 'Url;LockedOn ' }
+            @{ Name = 'at the start'; Header = 'Url; LockedOn' }
+        ) {
+            $path = Write-TestFile -Name 'spaces.csv' -Byte (Get-TestByte -Text "$Header`r`nhttps://contoso.sharepoint.com/sites/a;2025-09-18`r`n")
+            $rows = @(Read-TestCsv -Path $path -Required 'Url', 'LockedOn')
+
+            @($rows[0].PSObject.Properties.Name) -join '|' | Should -BeExactly 'Url|LockedOn'
+            $rows[0].LockedOn | Should -Be '2025-09-18'
+        }
+
+        It 'stops when two columns have the same name once trimmed' {
+            $path = Write-TestFile -Name 'dup.csv' -Byte (Get-TestByte -Text "Url;url ;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;x;2025-09-18`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url' } | Should -Throw -ExpectedMessage '*more than once*Url*'
+        }
+
+        It 'stops when a column appears twice' {
+            $path = Write-TestFile -Name 'dup2.csv' -Byte (Get-TestByte -Text "Url;LockedOn;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;2025-09-18;2026-01-01`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url' } | Should -Throw -ExpectedMessage '*more than once*LockedOn*'
+        }
+
+        It 'finds the header after blank lines' {
+            $path = Write-TestFile -Name 'blank-first.csv' -Byte (Get-TestByte -Text "`r`n  `r`nUrl;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;2025-09-18`r`n")
+            $rows = @(Read-TestCsv -Path $path -Required 'Url', 'LockedOn')
+
+            $rows | Should -HaveCount 1
+            $rows[0].LockedOn | Should -Be '2025-09-18'
+        }
+
+        It 'reads a header that has an empty name and a quote in a name' {
+            $path = Write-TestFile -Name 'odd.csv' -Byte (Get-TestByte -Text "Url;`"Say `"`"hi`"`"`";`r`nhttps://contoso.sharepoint.com/sites/a;x;y`r`n")
+            $rows = @(Read-TestCsv -Path $path -Required 'Url', 'Say "hi"')
+
+            $rows[0].'Say "hi"' | Should -Be 'x'
+        }
+
+        It 'reads the rows of a large file as fast as before the header is rewritten' {
+            $lines = foreach ($i in 1..20000) { "https://contoso.sharepoint.com/sites/site$i;2025-09-18" }
+            $path = Write-TestFile -Name 'big.csv' -Byte (Get-TestByte -Text ("Url ;LockedOn`r`n" + ($lines -join "`r`n") + "`r`n"))
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            $rows = @(Read-TestCsv -Path $path -Required 'Url')
+            $watch.Stop()
+
+            $rows | Should -HaveCount 20000
+            $rows[19999].Url | Should -Be 'https://contoso.sharepoint.com/sites/site20000'
+            $watch.Elapsed.TotalSeconds | Should -BeLessThan 30
+        }
+    }
+
     Context 'Files' {
         It 'stops with a clear message when the file does not exist' {
             { Read-TestCsv -Path (Join-Path -Path $TestDrive -ChildPath 'nope.csv') } | Should -Throw -ExpectedMessage '*File not found*'

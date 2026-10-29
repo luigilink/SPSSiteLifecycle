@@ -152,6 +152,28 @@ Describe 'Import-SPSLifecycleActivityReport' {
             { Import-TestReport -Path (Write-TestCsv -Name 'wrongurl.csv' -Text $text) -Kind SharePoint } | Should -Throw -ExpectedMessage "*'Site URL' in wrongurl.csv*"
         }
 
+        It 'reads the dates when the name of the column has a space around it: <Name>' -ForEach @(
+            @{ Name = 'quoted'; Column = '"Last Activity Date "' }
+            @{ Name = 'unquoted'; Column = 'Last Activity Date ' }
+        ) {
+            $header = $script:UsageHeader.Replace('Last Activity Date', $Column)
+            $text = "$header`r`n2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,https://contoso.sharepoint.com/sites/a,Owner A,False,2026-10-28,Group,180`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'spaces.csv' -Text $text) -Kind SharePoint
+
+            $report.ById['a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'].ToString('yyyy-MM-dd') | Should -Be '2026-10-28'
+        }
+
+        It 'still ignores the deleted rows when the name of the Is Deleted column has a space around it' {
+            $header = $script:UsageHeader.Replace('Is Deleted', '"Is Deleted "')
+            $text = "$header`r`n" +
+            "2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,https://contoso.sharepoint.com/sites/a,Owner A,True,2026-10-28,Group,180`r`n" +
+            "2026-10-26,0d7b4ebb-f68c-4f29-8529-5b46655d0c3c,https://contoso.sharepoint.com/sites/b,Owner B,False,2026-10-28,Group,180`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'spaces2.csv' -Text $text) -Kind SharePoint
+
+            $report.DeletedRowCount | Should -Be 1
+            $report.ById.Count | Should -Be 1
+        }
+
         It 'stops when a mandatory column is missing' {
             { Import-TestReport -Path (Write-TestCsv -Name 'nocol.csv' -Text "Site Id,Owner`r`na6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,x`r`n") -Kind SharePoint } | Should -Throw -ExpectedMessage '*Last Activity Date*'
         }
