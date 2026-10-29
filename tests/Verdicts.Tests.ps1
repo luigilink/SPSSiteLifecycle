@@ -435,6 +435,11 @@ Describe 'Test-SPSLifecycleOneDrive' {
         @{ Name = 'a zero-width space inside the host'; Url = "https://contoso-my.share$([char]0x200B)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a byte order mark inside the host'; Url = "https://contoso-my.share$([char]0xFEFF)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a combining grapheme joiner inside the host'; Url = "https://contoso-my.share$([char]0x34F)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host, which DNS refuses and a culture ignores: <U+2066>'; Url = "https://contoso-my.share$([char]0x2066)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host: <U+2067>'; Url = "https://contoso-my.share$([char]0x2067)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host: <U+2068>'; Url = "https://contoso-my.share$([char]0x2068)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host: <U+2069>'; Url = "https://contoso-my.share$([char]0x2069)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate in the host of another tenant'; Url = "https://fabrikam-my.share$([char]0x2066)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'full-width letters in the host'; Url = "https://$([char]0xFF43)$([char]0xFF4F)$([char]0xFF4E)tos$([char]0xFF4F)-my.sharepoint.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a soft hyphen in an address that does not parse'; Url = "https://contoso-my.share$([char]0xAD)point.com../personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a soft hyphen in an address that does not parse, in http'; Url = "http://contoso-my.share$([char]0xAD)point.com../personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }

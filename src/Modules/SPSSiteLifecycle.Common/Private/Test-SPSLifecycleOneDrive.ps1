@@ -50,8 +50,12 @@
     $oneDriveHost = "$TenantName-my.sharepoint.com"
     $text = "$($Site.Url)".Trim()
     $uri = $null
-    if ([System.Uri]::TryCreate($text, [System.UriKind]::Absolute, [ref]$uri) -and $uri.IdnHost.TrimEnd('.').Equals($oneDriveHost, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return $true
+    if ([System.Uri]::TryCreate($text, [System.UriKind]::Absolute, [ref]$uri)) {
+        # PowerShell gives $null when the IDNA mapping of the host fails (a bidirectional isolate, for instance): the prefix net below decides.
+        $dnsHost = $uri.IdnHost
+        if ($null -ne $dnsHost -and $dnsHost.TrimEnd('.').Equals($oneDriveHost, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
     }
 
     $text.StartsWith("https://$oneDriveHost", [System.StringComparison]::InvariantCultureIgnoreCase) -or $text.StartsWith("http://$oneDriveHost", [System.StringComparison]::InvariantCultureIgnoreCase)
