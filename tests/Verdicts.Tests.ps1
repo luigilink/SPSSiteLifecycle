@@ -426,6 +426,11 @@ Describe 'Test-SPSLifecycleOneDrive' {
         @{ Name = 'user information before the host'; Url = 'https://someone@contoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'spaces around the address'; Url = '  https://contoso-my.sharepoint.com/personal/a  '; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'user information and the dot of the DNS root'; Url = 'https://someone@contoso-my.sharepoint.com./personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information, capitals, and a tenant written in capitals'; Url = 'https://someone@CONTOSO-MY.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'Contoso'; Expected = $true }
+        @{ Name = 'a host that ends like the OneDrive host'; Url = 'https://notcontoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'a subdomain of the OneDrive host'; Url = 'https://eu.contoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'an address that does not parse, in capitals'; Url = 'HTTPS://CONTOSO-MY.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'an address that does not parse, between spaces'; Url = '   https://contoso-my.sharepoint.com../personal/a  '; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'an address that does not parse and starts with the OneDrive host'; Url = 'https://contoso-my.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'an address that does not parse, in http'; Url = 'http://contoso-my.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a team site'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }

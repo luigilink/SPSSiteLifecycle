@@ -221,9 +221,10 @@
                 # without a message, and a site that is active there could be suggested for deletion.
                 $groupId = ConvertTo-SPSLifecycleId -Value $record.GroupId
                 if (-not $groupId) {
+                    # ConvertTo-SPSLifecycleId gives an empty text for a GUID that is all zeros too, and only for that one.
                     $groupText = "$($record.GroupId)".Trim()
                     $zero = [System.Guid]::Empty
-                    if ($groupText -and -not ([System.Guid]::TryParse($groupText, [ref]$zero) -and $zero -eq [System.Guid]::Empty)) {
+                    if ($groupText -and -not [System.Guid]::TryParse($groupText, [ref]$zero)) {
                         throw "the record has a group ID that is not a GUID (GroupId '$(ConvertTo-SPSLifecycleVisibleText -Text $groupText)'): the activity of its Teams and Microsoft 365 group cannot be found, and the site could look inactive."
                     }
                 }
