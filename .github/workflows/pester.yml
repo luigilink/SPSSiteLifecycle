@@ -1,98 +1,59 @@
-# SPSSiteLifecycle CI Pester workflow to run tests and code analysis on pull requests.
+# DEBUG ONLY, never merge: finds why the Windows job stalls in the Size tests of tests/StrictCsv.Tests.ps1.
 
-name: SPSSiteLifecycle CI Pester Tests
+name: DEBUG Windows stall in StrictCsv
 
 on:
   pull_request:
     branches:
       - main
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'tools/**'
-      - 'wiki/**'
-      - 'PSScriptAnalyzerSettings.psd1'
+  workflow_dispatch:
 
-# The "Publish Test Results" step creates a check run, which requires write
-# access to checks. The default GITHUB_TOKEN is read-only on repositories
-# created with the modern default, so grant the minimum needed here.
 permissions:
   contents: read
-  checks: write
-  pull-requests: write
 
 jobs:
-  test:
-    name: Run Pester Tests (${{ matrix.os }})
+  diagnose:
+    name: ${{ matrix.case }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - { os: windows-latest, case: full }
+          - { os: windows-latest, case: file }
+          - { os: windows-latest, case: test }
+          - { os: windows-latest, case: scaling }
+          - { os: windows-latest, case: raw }
+          - { os: windows-latest, case: others }
+          - { os: ubuntu-latest, case: scaling }
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      # Pester 6 is pinned on purpose: the tests use the syntax that Pester 5 and 6 share,
-      # and a future Pester 7 must be adopted deliberately.
+      - name: Environment
+        run: ./.github/debug/environment.ps1
+
       - name: Install Pester
-        shell: pwsh
         run: |
           Install-Module -Name Pester -MinimumVersion 6.0.0 -MaximumVersion 6.99.99 -Force -SkipPublisherCheck -Scope CurrentUser
-          Import-Module Pester
 
-      - name: Run Pester Tests
-        shell: pwsh
+      - name: Install dotnet-stack
+        continue-on-error: true
         run: |
-          $config = New-PesterConfiguration
-          $config.Run.Path = './tests'
-          $config.Run.Exit = $true
-          $config.TestResult.Enabled = $true
-          $config.TestResult.OutputPath = './test-results.xml'
-          $config.Output.Verbosity = 'Detailed'
+          dotnet tool install --global dotnet-stack
 
-          Invoke-Pester -Configuration $config
+      - name: Run the case
+        run: ./.github/debug/run.ps1 -Case ${{ matrix.case }}
 
-      - name: Upload test results
+      - name: Upload the monitor log
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: test-results-${{ matrix.os }}
-          path: test-results.xml
-
-      - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action/composite@v2
-        if: always()
-        continue-on-error: true
-        with:
-          files: |
-            test-results.xml
-          check_name: Pester Test Results (${{ matrix.os }})
-
-  code-quality:
-    name: Code Quality Check
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Install PSScriptAnalyzer
-        shell: pwsh
-        run: |
-          Install-Module -Name PSScriptAnalyzer -Force -SkipPublisherCheck -Scope CurrentUser
-
-      - name: Run PSScriptAnalyzer
-        shell: pwsh
-        run: |
-          $results = @('./src', './tools') | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Recurse -Settings ./PSScriptAnalyzerSettings.psd1 }
-
-          if ($results) {
-            $results | Format-Table -AutoSize
-            Write-Error "PSScriptAnalyzer found issues"
-            exit 1
-          }
-          else {
-            Write-Host "No issues found by PSScriptAnalyzer"
-          }
+          name: monitor-${{ matrix.os }}-${{ matrix.case }}
+          path: ${{ runner.temp }}/monitor.log
+          if-no-files-found: warn
