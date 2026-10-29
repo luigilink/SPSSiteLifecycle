@@ -60,23 +60,27 @@ switch ($Stage) {
         $options = [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
         $record = [System.Text.RegularExpressions.Regex]::new("\G(?<f>$quoted|$plain)(?:$separator(?<f>$quoted|$plain))*(?:$lineEnd|\z)", $options, [System.TimeSpan]::FromSeconds(120))
 
-        foreach ($mode in 'match', 'value', 'captures') {
+        foreach ($mode in 'nextmatch', 'nextmatch-captures', 'match') {
             Write-Step "raw regex, mode $mode"
             $watch = [System.Diagnostics.Stopwatch]::StartNew()
             $position = 0
             $count = 0
+            $found = $null
             while ($position -lt $text.Length) {
-                $found = $record.Match($text, $position)
+                $found = if ($mode -like 'nextmatch*') {
+                    if ($null -eq $found) { $record.Match($text) } else { $found.NextMatch() }
+                }
+                else {
+                    $record.Match($text, $position)
+                }
+
                 if (-not $found.Success) {
                     throw "no match at $position"
                 }
 
                 $position = $found.Index + $found.Length
-                if ($mode -ne 'match') {
-                    $value = $found.Value
-                }
-
-                if ($mode -eq 'captures') {
+                $value = $found.Value
+                if ($mode -eq 'nextmatch-captures') {
                     $captures = $found.Groups['f'].Captures
                     for ($i = 0; $i -lt $captures.Count; $i++) {
                         $cell = $captures[$i].Value
@@ -84,8 +88,14 @@ switch ($Stage) {
                 }
 
                 $count++
-                if ($count % 20000 -eq 0) {
+                $every = if ($mode -eq 'match') { 500 } else { 20000 }
+                if ($count % $every -eq 0) {
                     Write-Step ('   {0} records, position {1}, {2:N1} s' -f $count, $position, $watch.Elapsed.TotalSeconds)
+                }
+
+                if ($mode -eq 'match' -and $count -ge 3000) {
+                    Write-Step '   stopped at 3000 records: the full run would last hours'
+                    break
                 }
             }
 

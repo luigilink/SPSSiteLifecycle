@@ -107,9 +107,14 @@
         $line = $FirstLine
         $emitted = 0
         $lineEndChars = [System.Char[]]@("`r", "`n")
+        $match = $null
 
         while ($position -lt $Text.Length) {
-            $match = $record.Match($Text, $position)
+            # NextMatch() starts where the previous match ended, which is where the anchor \G of the pattern holds, and it takes
+            # no argument. $record.Match($Text, $position) would pass the whole file at every record, and on Windows PowerShell
+            # copies the string arguments of every .NET method call into a log message (AMSI): a file of 26 MB would be
+            # copied 260,000 times, and the reading would last hours.
+            $match = if ($null -eq $match) { $record.Match($Text) } else { $match.NextMatch() }
             if (-not $match.Success) {
                 $excerpt = ConvertTo-SPSLifecycleVisibleText -Text $Text.Substring($position, [System.Math]::Min(30, $Text.Length - $position)).Split("`r`n".ToCharArray())[0]
                 throw "File '$Source', line ${line}: the text does not follow the CSV rules here (near '$excerpt'). A double quote must open a field and be closed, a double quote inside a field must be doubled, and only a separator or the end of the line may follow the closing quote. The file may have been cut short, or edited by hand."

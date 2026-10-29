@@ -47,3 +47,9 @@ Get-ChildItem Env: | Where-Object { $_.Name -match '^(DOTNET|COMPlus|PS|POWERSHE
 Write-Host '--- dotnet'
 dotnet --list-runtimes
 dotnet --list-sdks
+
+Write-Host '--- What PowerShell reports for a .NET method call (AMSI member invocation logging)'
+$demo = '$r = [System.Text.RegularExpressions.Regex]::new(''a''); $null = $r.Match((''abcdef'' * 3), 4)'
+$env:__PSDumpAMSILogContent = '1'
+& (Get-Process -Id $PID).Path -NoProfile -Command $demo
+Remove-Item Env:__PSDumpAMSILogContent

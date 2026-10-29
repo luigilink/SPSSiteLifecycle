@@ -15,7 +15,7 @@ jobs:
   diagnose:
     name: ${{ matrix.case }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 12
+    timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
