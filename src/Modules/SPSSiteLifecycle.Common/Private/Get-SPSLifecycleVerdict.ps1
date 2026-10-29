@@ -108,10 +108,9 @@
     $template = "$($Site.Template)"
     $lockState = "$($Site.LockState)"
     $groupId = ConvertTo-SPSLifecycleId -Value $Site.GroupId
-    $urlKey = ConvertTo-SPSLifecycleUrlKey -Url $Site.Url
     $accepted = @($Setting.AcceptedLockStates)
 
-    if ($template -like 'SPSPERS#*' -or $urlKey.StartsWith("https://$($Setting.TenantName)-my.sharepoint.com")) {
+    if (Test-SPSLifecycleOneDrive -Site $Site -TenantName $Setting.TenantName) {
         return 'SKIP-ONEDRIVE'
     }
 

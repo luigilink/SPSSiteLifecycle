@@ -399,3 +399,29 @@ Describe 'Test-SPSLifecycleArchivableTemplate' {
         $result | Should -Be $Expected
     }
 }
+
+Describe 'Test-SPSLifecycleOneDrive' {
+    BeforeAll {
+        function script:Test-TestOneDrive {
+            param([string]$Url, [string]$Template, [string]$Tenant = 'contoso')
+            $site = [PSCustomObject]@{ Url = $Url; Template = $Template }
+            & $script:Module { param($s, $t) Test-SPSLifecycleOneDrive -Site $s -TenantName $t } $site $Tenant
+        }
+    }
+
+    It 'answers <Expected> for <Name>' -ForEach @(
+        @{ Name = 'the OneDrive template'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'SPSPERS#10'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'another personal template'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'SPSPERS#2'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a template in lowercase'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'spspers#10'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a OneDrive address on a team template'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a OneDrive address in capitals, for a tenant written in capitals'; Url = 'HTTPS://CONTOSO-MY.sharepoint.com/Personal/A'; Template = 'STS#3'; Tenant = 'Contoso'; Expected = $true }
+        @{ Name = 'the root of the OneDrive host'; Url = 'https://contoso-my.sharepoint.com'; Template = ''; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a team site'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'the OneDrive host of another tenant'; Url = 'https://fabrikam-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'a host that only starts like the OneDrive host'; Url = 'https://contoso-my.sharepoint.com.example.org/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'a site whose path looks like OneDrive'; Url = 'https://contoso.sharepoint.com/sites/contoso-my.sharepoint.com'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'no template and no address'; Url = ''; Template = $null; Tenant = 'contoso'; Expected = $false }
+    ) {
+        (Test-TestOneDrive -Url $Url -Template $Template -Tenant $Tenant) | Should -Be $Expected
+    }
+}
