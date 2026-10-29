@@ -80,7 +80,7 @@
         }
     }
 
-    $earliestLockDate = [System.DateTime]::new(2000, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc)
+    $earliestLockDate = Get-SPSLifecycleEarliestLockDate
     $latest = @{}
     $dateCache = @{}
     $rowNumber = 0

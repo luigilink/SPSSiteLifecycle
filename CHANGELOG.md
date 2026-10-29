@@ -54,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong changes a web address, and the row would no longer match its site, so an older date of the site
   could win. A lock date before 2000-01-01 stops the tool, in a list and in the journal, because a
   spreadsheet writes a blank date as 1900-01-01, 1899-12-30 or 1970-01-01, and a site whose lock is read
-  as a century old would look old enough to delete. A row is added to the journal without damaging a
+  as a century old would look old enough to delete, and adding to the journal refuses such a date
+  too, so that the tool never writes a journal that it cannot read. A row is added to the journal without damaging a
   file that Excel saved: its separator and columns are kept, the whole file is checked first, a file
   that is not UTF-8 or that does not follow the CSV rules is refused and left as it is, and the row is
   flushed to the disk (#4).

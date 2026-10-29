@@ -41,7 +41,8 @@
         address is reused.
 
         .PARAMETER LockedOn
-        The date and time the site was locked.
+        The date and time the site was locked. A date before 2000-01-01 (in UTC) is refused, as the reader refuses it:
+        a journal that the tool wrote must never be a journal that it cannot read.
 
         .PARAMETER Delimiter
         The separator of a new journal: a comma, a semicolon or a tab. An existing journal keeps its own.
@@ -86,6 +87,10 @@
     }
 
     $date = ConvertTo-SPSLifecycleReportCell -Kind Date -Value $LockedOn
+    if ((ConvertTo-SPSLifecycleDate -Text $date) -lt (Get-SPSLifecycleEarliestLockDate)) {
+        throw "The lock journal takes a lock date from 2000-01-01 on, because the reader refuses an earlier one and the journal would become unreadable: '$date' is not one. Is the clock of the machine wrong, or is the date blank in a spreadsheet? Nothing was written."
+    }
+
     $fullPath = Resolve-SPSLifecycleFileSystemPath -Path $Path
     $null = [System.IO.Directory]::CreateDirectory((Split-Path -Path $fullPath -Parent))
 

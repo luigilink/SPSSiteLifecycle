@@ -281,6 +281,45 @@ Describe 'Add-SPSLifecycleLockJournalEntry' {
 
             Test-Path -LiteralPath $script:Journal | Should -BeFalse
         }
+
+        It 'refuses a date before 2000, because the reader refuses it and the journal would be unreadable: <Name>' -ForEach @(
+            @{ Name = 'day zero of a spreadsheet'; At = [System.DateTime]::new(1900, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc) }
+            @{ Name = 'the epoch'; At = [System.DateTime]::new(1970, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc) }
+            @{ Name = 'the smallest date'; At = [System.DateTime]::MinValue }
+            @{ Name = 'the last second of 1999'; At = [System.DateTime]::new(1999, 12, 31, 23, 59, 59, [System.DateTimeKind]::Utc) }
+            @{ Name = 'a date of 1999 with no kind'; At = [System.DateTime]::new(1999, 6, 1) }
+        ) {
+            { Add-TestEntry -Path $script:Journal -At $At } | Should -Throw -ExpectedMessage '*2000-01-01*'
+
+            Test-Path -LiteralPath $script:Journal | Should -BeFalse
+        }
+
+        It 'leaves a journal that exists as it was when the date is before 2000' {
+            $path = Add-TestEntry -Path $script:Journal
+            $before = [System.IO.File]::ReadAllBytes($path)
+
+            { Add-TestEntry -Path $path -Url 'https://contoso.sharepoint.com/sites/b' -SiteId $script:SiteB -At ([System.DateTime]::new(1900, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc)) } | Should -Throw -ExpectedMessage '*2000-01-01*'
+
+            [System.IO.File]::ReadAllBytes($path) | Should -Be $before
+        }
+
+        It 'accepts the first instant of 2000, and the journal that it writes is read back' {
+            $null = Add-TestEntry -Path $script:Journal -At ([System.DateTime]::new(2000, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc))
+
+            @((Import-TestJournal -Path $script:Journal).Entries) | Should -HaveCount 1
+        }
+
+        It 'decides on the date that it writes, in UTC, for a local date at the start of 2000' {
+            $local = [System.DateTime]::SpecifyKind([System.DateTime]::new(2000, 1, 1, 0, 0, 0), [System.DateTimeKind]::Local)
+
+            if ($local.ToUniversalTime() -lt [System.DateTime]::new(2000, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc)) {
+                { Add-TestEntry -Path $script:Journal -At $local } | Should -Throw -ExpectedMessage '*2000-01-01*'
+            }
+            else {
+                $null = Add-TestEntry -Path $script:Journal -At $local
+                @((Import-TestJournal -Path $script:Journal).Entries) | Should -HaveCount 1
+            }
+        }
     }
 
     Context 'What it writes' {
