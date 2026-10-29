@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads. UTF-8 with a byte order mark, the separator of the settings, sizes in whole megabytes, ISO 8601
   dates and a compact `GeneratedOn`, `Decision` always empty, no owners, a title neutralized against
   formula injection, and a file that is never overwritten. The columns are a table that the new Report
-  wiki page is generated from (#3).
+  wiki page is generated from (#3). A text that starts or ends with a space is quoted, because an
+  unquoted field loses its leading spaces when it is read.
 - Paths: a relative path of a file or a folder is resolved against the location of the PowerShell session,
   and never against the working directory of the process, which `Set-Location` does not change (#19).

@@ -225,6 +225,12 @@ Describe 'ConvertTo-SPSLifecycleCsvField' {
         @{ Text = "two`r`nlines"; Delimiter = ','; Expected = "`"two`r`nlines`"" }
         @{ Text = "one`nline"; Delimiter = ';'; Expected = "`"one`nline`"" }
         @{ Text = 'Équipe été'; Delimiter = ';'; Expected = 'Équipe été' }
+        @{ Text = 'Sales EMEA'; Delimiter = ','; Expected = 'Sales EMEA' }
+        @{ Text = ' Sales'; Delimiter = ','; Expected = '" Sales"' }
+        @{ Text = 'Sales '; Delimiter = ';'; Expected = '"Sales "' }
+        @{ Text = '   '; Delimiter = ','; Expected = '"   "' }
+        @{ Text = "`u{00A0}Sales"; Delimiter = ';'; Expected = "`"`u{00A0}Sales`"" }
+        @{ Text = "`u{3000}"; Delimiter = ','; Expected = "`"`u{3000}`"" }
     ) {
         $field = & $script:Module { param($t, $d) ConvertTo-SPSLifecycleCsvField -Text $t -Delimiter ([char]$d) } $Text $Delimiter
 
@@ -430,7 +436,11 @@ Describe 'Export-SPSLifecycleReport' {
                 "Two`r`nlines",
                 '=HYPERLINK("x")',
                 "Tab`tinside",
-                'Straße Ünïcödé 日本'
+                'Straße Ünïcödé 日本',
+                ' Leading space',
+                'Trailing space ',
+                '   ',
+                "`u{00A0}Leading no-break space"
             )
             $records = @($titles | ForEach-Object -Begin { $i = 0 } -Process { $i++; New-TestRecord -Url "https://contoso.sharepoint.com/sites/site$i" -Title $_ })
             $path = Invoke-TestExport -Row $records -Folder (New-TestFolder) -Delimiter $Delimiter
