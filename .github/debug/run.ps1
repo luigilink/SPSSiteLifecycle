@@ -2,7 +2,7 @@
 param
 (
     [Parameter(Mandatory = $true)]
-    [ValidateSet('full', 'file', 'test', 'scaling', 'raw', 'others')]
+    [ValidateSet('full', 'file', 'test', 'scaling', 'raw', 'others', 'import')]
     [string]
     $Case
 )
@@ -15,7 +15,7 @@ $logPath = Join-Path -Path $env:RUNNER_TEMP -ChildPath 'monitor.log'
 $arguments = @('-NoProfile', '-File', (Join-Path -Path $PSScriptRoot -ChildPath 'monitor.ps1'), '-TargetPid', $PID, '-Label', $Case, '-LogPath', $logPath)
 $monitor = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments -PassThru -NoNewWindow
 
-if ($Case -in 'scaling', 'raw', 'others') {
+if ($Case -in 'scaling', 'raw', 'others', 'import') {
     & (Join-Path -Path $PSScriptRoot -ChildPath 'scaling.ps1') -Stage $Case
     exit 0
 }

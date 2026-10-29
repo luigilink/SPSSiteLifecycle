@@ -1,7 +1,7 @@
 # Runs the work of the Size tests outside Pester, step by step, with a timestamp before and after every step.
 param
 (
-    [ValidateSet('scaling', 'raw', 'others')]
+    [ValidateSet('scaling', 'raw', 'others', 'import')]
     [string]
     $Stage = 'scaling'
 )
@@ -119,6 +119,28 @@ switch ($Stage) {
         $watch.Restart()
         $emitted = @(Get-Objects)
         Write-Step ('   {0} objects in {1:N1} s' -f $emitted.Count, $watch.Elapsed.TotalSeconds)
+    }
+
+    'import' {
+        foreach ($count in 20000, 100000, 260000) {
+            Write-Step "== a journal of $count rows: writing the file"
+            $path = Join-Path -Path $env:RUNNER_TEMP -ChildPath "journal-$count.csv"
+            $writer = [System.IO.StreamWriter]::new($path, $false, [System.Text.UTF8Encoding]::new($true))
+            $writer.WriteLine('Url,SiteId,LockedOn')
+            foreach ($i in 1..$count) {
+                $writer.WriteLine("https://contoso.sharepoint.com/sites/site$i,$([System.Guid]::NewGuid()),2026-10-29T10:00:00Z")
+            }
+
+            $writer.Dispose()
+            Write-Step ('   written, {0:N1} MB' -f ((Get-Item -LiteralPath $path).Length / 1MB))
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            $journal = & $module { param($p) Import-SPSLifecycleLockJournal -Path $p } $path
+            Write-Step ('   Import-SPSLifecycleLockJournal: {0} entries in {1:N1} s' -f @($journal.Entries).Count, $watch.Elapsed.TotalSeconds)
+            $watch.Restart()
+            $index = & $module { param($p) Get-SPSLifecycleLockDateIndex -LockJournal $p } $path
+            Write-Step ('   Get-SPSLifecycleLockDateIndex: {0} sites in {1:N1} s' -f $index.ById.Count, $watch.Elapsed.TotalSeconds)
+            Remove-Item -LiteralPath $path
+        }
     }
 
     'others' {

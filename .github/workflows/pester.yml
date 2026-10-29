@@ -20,13 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, case: full }
-          - { os: windows-latest, case: file }
-          - { os: windows-latest, case: test }
-          - { os: windows-latest, case: scaling }
-          - { os: windows-latest, case: raw }
-          - { os: windows-latest, case: others }
-          - { os: ubuntu-latest, case: scaling }
+          - { os: windows-latest, case: import }
     defaults:
       run:
         shell: pwsh
