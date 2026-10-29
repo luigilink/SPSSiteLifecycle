@@ -45,7 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the tool, because an ignored row could leave an older date in force. The journal goes through a strict
   CSV reader (RFC 4180 and nothing more): a stray quote, a quote that is never closed, a row too long
   or cut short and a value under a column with no name stop the tool and name the line of the file,
-  where `ConvertFrom-Csv` would have lost the row. A row is added to the journal without damaging a
+  where `ConvertFrom-Csv` would have lost the row. The reader never gives the whole file to a .NET
+  method at every record, because on Windows PowerShell copies the arguments of every .NET method call
+  into a log message (AMSI), which made the reading quadratic there (260,000 records are read in 5 s on
+  a Windows runner; the first version needed hours), and the CI jobs now have a timeout. The journal must be UTF-8, with a byte order mark or
+  not (a file that holds only ASCII, as French Excel saves it, is UTF-8 too), and a byte that is not valid
+  UTF-8 is never replaced or guessed, after a byte order mark or without one: a character that is read
+  wrong changes a web address, and the row would no longer match its site, so an older date of the site
+  could win. A lock date before 2000-01-01 stops the tool, in a list and in the journal, because a
+  spreadsheet writes a blank date as 1900-01-01, 1899-12-30 or 1970-01-01, and a site whose lock is read
+  as a century old would look old enough to delete. A row is added to the journal without damaging a
   file that Excel saved: its separator and columns are kept, the whole file is checked first, a file
   that is not UTF-8 or that does not follow the CSV rules is refused and left as it is, and the row is
   flushed to the disk (#4).
@@ -53,4 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   character (a soft hyphen) is no longer the column that it looks like, and the message shows the
   character. A header that only looks like a column that the tool knows (`Site ID`, `Site_Id`, a hidden
   character, `Is Deleted` with a soft hyphen) stops the tool, because the column would be read as absent
-  and its meaning lost without a message.
+  and its meaning lost without a message. An accent or a dot that is a separate character (a capital `I`
+  and a combining dot above, which would compose into a dotted `I` that is a letter of its own) does not
+  hide a lookalike either, and the message writes a combining mark as `\uXXXX`.
