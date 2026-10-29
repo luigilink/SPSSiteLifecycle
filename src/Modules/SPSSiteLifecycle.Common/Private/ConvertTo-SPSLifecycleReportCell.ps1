@@ -7,9 +7,10 @@
         The text never depends on the culture of the machine, so that a report written on a French
         server reads the same on an English one (see Get-SPSLifecycleReportColumn for the kinds):
 
-        - WholeNumber: rounded to a whole number, with no separator. A value that is missing, negative,
-          not a number or not finite is unknown and gives an empty cell. It never gives 0, because
-          the verdict engine reads 0 as a size that is known.
+        - WholeNumber: rounded to a whole number (half away from zero), with no separator. An integer or
+          a decimal keeps every digit; only a floating-point value goes through a double. A value that
+          is missing, negative, not a number or not finite is unknown and gives an empty cell. It never
+          gives 0, because the verdict engine reads 0 as a size that is known.
         - Date: 2026-10-28 for a date at midnight UTC, otherwise 2026-10-28T16:30:00Z. A date with no
           time zone is taken as UTC, a local date is converted to UTC.
         - Run: 20261028T163000Z, the form that survives a spreadsheet.
@@ -96,15 +97,29 @@
                 return ''
             }
 
-            $number = 0.0
+            # The number stays a decimal or a big integer when it can be one, because a double holds 15 digits and
+            # no more.
+            $number = $null
             if ($Value -is [System.String]) {
-                if (-not [System.Double]::TryParse($Value.Trim(), [System.Globalization.NumberStyles]::Float, $invariant, [ref]$number)) {
+                $decimal = [System.Decimal]::Zero
+                $double = 0.0
+                $text = $Value.Trim()
+                if ([System.Decimal]::TryParse($text, [System.Globalization.NumberStyles]::Float, $invariant, [ref]$decimal)) {
+                    $number = $decimal
+                }
+                elseif ([System.Double]::TryParse($text, [System.Globalization.NumberStyles]::Float, $invariant, [ref]$double)) {
+                    $number = $double
+                }
+                else {
                     return ''
                 }
             }
+            elseif ($Value -is [System.Numerics.BigInteger] -or $Value -is [System.Decimal] -or $Value -is [System.Double]) {
+                $number = $Value
+            }
             elseif ($Value -is [System.ValueType] -and $Value -isnot [System.DateTime]) {
                 try {
-                    $number = [System.Double]$Value
+                    $number = if ($Value -is [System.Single]) { [System.Double]$Value } else { [System.Decimal]$Value }
                 }
                 catch {
                     return ''
@@ -114,11 +129,24 @@
                 return ''
             }
 
-            if (-not [System.Double]::IsFinite($number) -or $number -lt 0) {
+            if ($number -is [System.Numerics.BigInteger]) {
+                if ($number.Sign -lt 0) {
+                    return ''
+                }
+
+                return $number.ToString('D', $invariant)
+            }
+
+            if ($number -is [System.Double] -and -not [System.Double]::IsFinite($number)) {
                 return ''
             }
 
-            return [System.Math]::Round($number, [System.MidpointRounding]::AwayFromZero).ToString('0', $invariant)
+            if ($number -lt 0) {
+                return ''
+            }
+
+            # Adding zero turns a negative zero into a zero: it would be written as -0.
+            return ([System.Math]::Round($number, [System.MidpointRounding]::AwayFromZero) + 0).ToString('0', $invariant)
         }
 
         'Date' {

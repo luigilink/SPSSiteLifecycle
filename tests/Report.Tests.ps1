@@ -142,6 +142,16 @@ Describe 'ConvertTo-SPSLifecycleReportCell' {
             @{ Value = '100.7'; Expected = '101' }
             @{ Value = '1E3'; Expected = '1000' }
             @{ Value = [System.Int64]25600000; Expected = '25600000' }
+            @{ Value = [System.Decimal]'9007199254740993'; Expected = '9007199254740993' }
+            @{ Value = [System.Int64]9007199254740993; Expected = '9007199254740993' }
+            @{ Value = [System.UInt64]::MaxValue; Expected = '18446744073709551615' }
+            @{ Value = [System.Numerics.BigInteger]::Parse('123456789012345678901234567890'); Expected = '123456789012345678901234567890' }
+            @{ Value = [System.Decimal]::Parse('0.4999999999999999999999999999', [System.Globalization.CultureInfo]::InvariantCulture); Expected = '0' }
+            @{ Value = [System.Decimal]'2.5'; Expected = '3' }
+            @{ Value = '0.4999999999999999999999999999'; Expected = '0' }
+            @{ Value = '9007199254740993'; Expected = '9007199254740993' }
+            @{ Value = [System.Single]1.5; Expected = '2' }
+            @{ Value = [System.Double]::NegativeZero; Expected = '0' }
         ) {
             Get-TestCell -Kind WholeNumber -Value $Value | Should -BeExactly $Expected
         }
@@ -154,6 +164,9 @@ Describe 'ConvertTo-SPSLifecycleReportCell' {
             @{ Name = 'text'; Value = 'unknown' }
             @{ Name = 'blank'; Value = ' ' }
             @{ Name = 'with a decimal comma'; Value = '1,5' }
+            @{ Name = 'a negative decimal'; Value = [System.Decimal]'-0.1' }
+            @{ Name = 'a negative big integer'; Value = [System.Numerics.BigInteger]::Parse('-5') }
+            @{ Name = 'a number too large for any type'; Value = '1e999' }
         ) {
             Get-TestCell -Kind WholeNumber -Value $Value | Should -BeExactly ''
         }
