@@ -21,7 +21,7 @@
 
     $both = @('Scan', 'Act')
     $rows = @(
-        , @('SKIP-ONEDRIVE', 'Skip', $both, 'A OneDrive site. The tool never touches OneDrive: Scan leaves these sites out and counts them, Act refuses the row.')
+        , @('SKIP-ONEDRIVE', 'Skip', $both, 'A OneDrive site, or a site whose address cannot be read as a plain web address (nothing can say what it is). The tool never touches them: Scan leaves these sites out and counts them, Act refuses the row.')
         , @('SKIP-CHANNEL-SITE', 'Skip', $both, 'A private or shared channel site. It goes with its channel and is never handled alone.')
         , @('SKIP-PROTECTED', 'Skip', $both, 'The root site, a hub site, the home site, or a system site (by its template or its path).')
         , @('SKIP-ALREADY-ARCHIVED', 'Skip', $both, 'The site is archived, or an archive or a reactivation is in progress.')

@@ -608,6 +608,38 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             $result.Summary.SitesListed | Should -Be 1
         }
 
+        It 'leaves out a site whose address cannot be read, and counts it with the OneDrive sites: <Name>' -ForEach @(
+            @{ Name = 'user information and a bidirectional isolate in the OneDrive host'; Url = "https://someone@contoso-my.share$([char]0x2066)point.com/personal/e_contoso_com" }
+            @{ Name = 'user information, a soft hyphen and a bidirectional isolate in the OneDrive host'; Url = "https://someone@contoso-my.share$([char]0xAD)$([char]0x2066)point.com/personal/e_contoso_com" }
+            @{ Name = 'a host that DNS refuses, of another tenant'; Url = "https://fabrikam.share$([char]0x2066)point.com/sites/e" }
+            @{ Name = 'an address that does not parse'; Url = 'https://someone@contoso-my.sharepoint.com../personal/f_contoso_com' }
+            @{ Name = 'a text that is not an address'; Url = 'not an address' }
+            @{ Name = 'another scheme'; Url = 'ftp://contoso.sharepoint.com/sites/e' }
+        ) {
+            $site = New-ScanSite -Url $Url -Template 'STS#3'
+            $other = New-ScanSite -Name 'b' -SiteId $script:SiteB
+
+            $result = Invoke-TestScan -Site @($site, $other) -LockIndex (New-OldLock -Site $other -SiteId $script:SiteB)
+
+            $result.Rows | Should -HaveCount 1
+            $result.Rows[0].SiteId | Should -BeExactly $script:SiteB
+            $result.Summary.LeftOutOneDrive | Should -Be 1
+            $result.Summary.ByVerdict.Keys | Should -Not -Contain 'DELETE-SITE' -Because 'the site whose address cannot be read must not reach an action'
+        }
+
+        It 'still lists a site whose address is plain, however the address is spelled: <Name>' -ForEach @(
+            @{ Name = 'the dot of the DNS root and the default port'; Url = 'https://contoso.sharepoint.com.:443/sites/e' }
+            @{ Name = 'user information'; Url = 'https://someone@contoso.sharepoint.com/sites/e' }
+            @{ Name = 'capitals and a path that is not ASCII'; Url = "HTTPS://CONTOSO.sharepoint.com/Sites/$([char]0xC9)quipe" }
+        ) {
+            $site = New-ScanSite -Url $Url -Template 'GROUP#0'
+
+            $result = Invoke-TestScan -Site $site
+
+            $result.Rows | Should -HaveCount 1
+            $result.Summary.LeftOutOneDrive | Should -Be 0
+        }
+
         It 'leaves out a OneDrive site that has no site ID, and does not stop on it' {
             $site = New-ScanSite -Url 'https://contoso-my.sharepoint.com/personal/a_contoso_com' -Template 'SPSPERS#10' -SiteId $null
 

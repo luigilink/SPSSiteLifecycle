@@ -12,7 +12,7 @@ Every site gets one verdict, in the `Verdict` column of the CSV and in the summa
 
 | Verdict | Kind | Phase | Meaning |
 |---------|------|-------|---------|
-| `SKIP-ONEDRIVE` | Skip | Scan and Act | A OneDrive site. The tool never touches OneDrive: Scan leaves these sites out and counts them, Act refuses the row. |
+| `SKIP-ONEDRIVE` | Skip | Scan and Act | A OneDrive site, or a site whose address cannot be read as a plain web address (nothing can say what it is). The tool never touches them: Scan leaves these sites out and counts them, Act refuses the row. |
 | `SKIP-CHANNEL-SITE` | Skip | Scan and Act | A private or shared channel site. It goes with its channel and is never handled alone. |
 | `SKIP-PROTECTED` | Skip | Scan and Act | The root site, a hub site, the home site, or a system site (by its template or its path). |
 | `SKIP-ALREADY-ARCHIVED` | Skip | Scan and Act | The site is archived, or an archive or a reactivation is in progress. |
@@ -63,7 +63,7 @@ A site with one of these templates or paths gets `SKIP-PROTECTED`. The lists fol
 | `/portal/hub` | PointPublishing hub |
 | `/search` | Search site |
 
-OneDrive sites (`SPSPERS#*`) get `SKIP-ONEDRIVE`, and Teams channel sites (`TEAMCHANNEL#*`) get `SKIP-CHANNEL-SITE`.
+OneDrive sites (`SPSPERS#*`, or the OneDrive host of the tenant) get `SKIP-ONEDRIVE`, and so does a site whose address cannot be read as a plain web address (an address that does not parse, another scheme than http and https, a host that DNS changes or refuses), because nothing can say what it is. Teams channel sites (`TEAMCHANNEL#*`) get `SKIP-CHANNEL-SITE`.
 
 ## Templates that Microsoft 365 Archive supports
 
