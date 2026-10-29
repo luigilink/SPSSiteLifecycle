@@ -15,13 +15,14 @@
         - The separator of the file is kept, and the values go under their columns, whatever the order of the
           columns and the columns that a person added (the names are read the way Read-SPSLifecycleCsv does).
         - The file must be UTF-8 (a byte order mark or not; a file that holds only ASCII, as French Excel can
-          save it, is UTF-8 too), and it must not end inside a quoted field (an odd number of double quotes):
-          the row would become part of that field and be lost. A file in another encoding, or that is not a
-          journal, is refused and left as it is, because adding to it would damage it. Save it as CSV UTF-8,
-          fix the end of the file, or move it away.
+          save it, is UTF-8 too), and it must follow the CSV rules from its first line to its last: a quote in
+          the middle of an unquoted field, or a quote that is never closed, would make the row that is added
+          part of another field, and it would be lost (see ConvertFrom-SPSLifecycleStrictCsv). A file in another
+          encoding, that breaks the rules, or that is not a journal is refused and left as it is, because adding
+          to it would damage it. Save it as CSV UTF-8, fix the line that the message names, or move it away.
         - The names of the columns are compared one character at a time, whatever the case and the culture, as
-          a row finds its properties: a column named Site<U+00AD>Id is not SiteId, and the message shows the
-          hidden character.
+          a row finds its properties: a column named Site<U+00AD>Id, or Site ID, is not SiteId, and the message
+          shows the hidden character.
         - A file that does not end with a line break gets one first.
 
         The row is written with one call and flushed to the disk, because the lock date must survive a crash
@@ -75,8 +76,8 @@
     )
 
     $address = $Url.Trim()
-    if ($address -notmatch '^https?://\S+$') {
-        throw "The lock journal takes the web address of a site on one line, without a space: '$Url' is not one."
+    if (-not (Test-SPSLifecycleWebAddress -Text $address)) {
+        throw "The lock journal takes the full web address of a site, on one line, with no space and no hidden character: '$(ConvertTo-SPSLifecycleVisibleText -Text $Url)' is not one."
     }
 
     $id = ConvertTo-SPSLifecycleId -Value $SiteId
@@ -104,79 +105,47 @@
 
         if (-not $isNew) {
             $notUtf8 = "The lock journal '$fullPath' is not UTF-8 (Excel may have saved it in another encoding), and adding to it would damage it. It is left as it is. Save it as 'CSV UTF-8', or move it away and let the tool write a new one."
-            $unclosed = "The lock journal '$fullPath' ends inside a quoted field: a double quote is never closed (the number of quotes is odd), so a row added now would become part of that field and be lost. It is left as it is. Fix the end of the file, or move it away and let the tool write a new one."
 
-            $head = [System.Byte[]]::new([System.Math]::Min(65536, [System.Int32]$stream.Length))
-            $headCount = 0
-            while ($headCount -lt $head.Length) {
-                $count = $stream.Read($head, $headCount, $head.Length - $headCount)
+            $bytes = [System.Byte[]]::new([System.Int32]$stream.Length)
+            $total = 0
+            while ($total -lt $bytes.Length) {
+                $count = $stream.Read($bytes, $total, $bytes.Length - $total)
                 if ($count -le 0) {
                     break
                 }
 
-                $headCount += $count
+                $total += $count
             }
 
-            # The whole file must be valid UTF-8, read in pieces, because one byte of another encoding in the middle
-            # would make the new row (and the file) unreadable by a reader that expects UTF-8. UTF-16 fails at its
-            # first byte, which UTF-8 never uses.
-            $decoder = [System.Text.UTF8Encoding]::new($false, $true).GetDecoder()
-            $buffer = [System.Byte[]]::new(65536)
-            $chars = [System.Char[]]::new(65536 + 8)
-            $quotes = 0
-            $countQuotes = {
-                param([System.Byte[]]$Bytes, [System.Int32]$Length)
-                $found = 0
-                $position = 0
-                while ($position -lt $Length) {
-                    $index = [System.Array]::IndexOf($Bytes, [System.Byte]0x22, $position, $Length - $position)
-                    if ($index -lt 0) {
-                        break
-                    }
-
-                    $found++
-                    $position = $index + 1
-                }
-
-                $found
-            }
-
+            # The whole file is checked, because one byte of another encoding, or one quote that is never closed, anywhere
+            # in it, would make the row that is added unreadable or part of another field.
             try {
-                $null = $decoder.GetChars($head, 0, $headCount, $chars, 0, $false)
-                $quotes += & $countQuotes $head $headCount
-                while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-                    $null = $decoder.GetChars($buffer, 0, $count, $chars, 0, $false)
-                    $quotes += & $countQuotes $buffer $count
-                }
-
-                $null = $decoder.GetChars($buffer, 0, 0, $chars, 0, $true)
+                $decoded = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $total)
             }
             catch [System.Text.DecoderFallbackException] {
                 throw $notUtf8
             }
 
-            if (($quotes % 2) -ne 0) {
-                throw $unclosed
-            }
-
-            $detected = Get-SPSLifecycleCsvDelimiter -Text ([System.Text.UTF8Encoding]::new($false).GetString($head, 0, $headCount))
+            $detected = Get-SPSLifecycleCsvDelimiter -Text $decoded
             $separator = $detected.Delimiter
-            $first = [System.Text.RegularExpressions.Regex]::Match($detected.Text, '\A(?:[ \t]*(?:\r\n|\n|\r))*([^\r\n]*)')
-            $names = @(Split-SPSLifecycleCsvLine -Line $first.Groups[1].Value -Delimiter $separator | ForEach-Object { $_.Trim() })
-
-            $missing = @($columns | Where-Object { -not (Test-SPSLifecycleColumnName -Name $names -Column $_) })
-            if ($missing.Count -gt 0) {
-                $present = if (@($names | Where-Object { $_ }).Count -gt 0) { @($names | ForEach-Object { ConvertTo-SPSLifecycleVisibleText -Text $_ }) -join ', ' } else { '(none)' }
-                throw "'$fullPath' is not a lock journal: the column(s) $($missing -join ', ') are missing. Columns present: $present. It is left as it is."
+            $leaf = Split-Path -Path $fullPath -Leaf
+            try {
+                $null = ConvertFrom-SPSLifecycleStrictCsv -Text $detected.Text -Delimiter $separator -FirstLine $detected.FirstLine -Source $leaf -ValidateOnly
+                $first = @(ConvertFrom-SPSLifecycleStrictCsv -Text $detected.Text -Delimiter $separator -FirstLine $detected.FirstLine -Source $leaf -SkipBlank -First 1)
+            }
+            catch {
+                throw "The lock journal cannot be added to, because it does not follow the CSV rules, and the row would be lost or would damage the file. It is left as it is. $($_.Exception.Message)"
             }
 
-            $repeated = @($columns | Where-Object { $column = $_; @($names | Where-Object { [System.String]::Equals($_, $column, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 1 })
-            if ($repeated.Count -gt 0) {
-                throw "Column(s) that appear more than once in '$fullPath': $($repeated -join ', '). It is left as it is."
+            $names = if ($first.Count -gt 0) { @($first[0].Fields | ForEach-Object { "$_".Trim() }) } else { @() }
+            try {
+                Assert-SPSLifecycleCsvHeader -Name $names -RequiredColumn $columns -Source $fullPath
+            }
+            catch {
+                throw "'$fullPath' is not a lock journal: $($_.Exception.Message) It is left as it is."
             }
 
-            $null = $stream.Seek(-1, [System.IO.SeekOrigin]::End)
-            $last = $stream.ReadByte()
+            $last = $bytes[$total - 1]
             if ($last -ne 10 -and $last -ne 13) {
                 $prefix = "`r`n"
             }

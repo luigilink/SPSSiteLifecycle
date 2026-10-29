@@ -12,15 +12,18 @@
         date can only delay a deletion. Two site IDs that used the same address stay two entries,
         because the second site is not the first.
 
-        A list is what a person provides, and a row that has no date says nothing about its site, so it is
-        ignored. With Strict, which the lock journal is read with, nothing is ignored: the journal is the tool's
-        own file, where every row is a lock that was recorded, so a row without a date, with a site ID that is not
-        a GUID, or with neither an address nor a site ID could hide a lock that is more recent than the other rows
-        of the site, and stops the tool. A quote that is never closed stops it too, and the SiteId column is
-        required, because a journal that lost it would attribute its dates to addresses.
+        A list is what a person provides, and it is read by Read-SPSLifecycleCsv: a row that has no date says
+        nothing about its site, so it is ignored, and the column SiteId is optional (a header that only looks like
+        it, Site ID or a hidden character, stops the tool, because the identity of every row would be lost).
 
-        The column SiteId is the one that the rows have: a header that only looks like it (a hidden character) is
-        not SiteId, and without the check the identity of every row would be lost.
+        With Strict, which the lock journal is read with, nothing is ignored. The journal is the tool's own file,
+        where every row is a lock that was recorded, and a row that is lost or dropped could leave an older date of
+        the same site in force. The file is read by Read-SPSLifecycleStrictCsv (a text that breaks the CSV rules,
+        a row that is cut short or that has a value too many, and a value under a column without a name stop the
+        tool), the SiteId column is required, and every row is checked on its own: a row without a date, with a
+        site ID that is not a GUID, with an address that is not a full web address, or with neither an address nor a
+        site ID stops the tool and names its line. There is no threshold: a journal in which 90 % of the rows are
+        good is not a good journal.
 
         Returns an object with the file name, the number of rows and the entries (Url, UrlKey,
         SiteId, LockedOn, Source).
@@ -57,12 +60,18 @@
     )
 
     $name = Split-Path -Path $Path -Leaf
-    $required = if ($Strict) { @('Url', 'SiteId', 'LockedOn') } else { @('Url', 'LockedOn') }
-    $rows = @(Read-SPSLifecycleCsv -Path $Path -RequiredColumn $required -RequireBalancedQuote:$Strict)
-    $hasSiteId = $rows.Count -gt 0 -and (Test-SPSLifecycleColumnName -Name $rows[0].PSObject.Properties.Name -Column 'SiteId')
-
-    if ($rows.Count -gt 0) {
-        Test-SPSLifecycleColumnPattern -Value $rows.Url -Pattern '^https?://' -What "'Url' in $name" -Hint 'The first column must hold the site URLs.'
+    if ($Strict) {
+        $table = Read-SPSLifecycleStrictCsv -Path $Path -RequiredColumn 'Url', 'SiteId', 'LockedOn'
+        $rows = @($table.Rows)
+        $lines = @($table.Line)
+        $hasSiteId = $true
+    }
+    else {
+        $rows = @(Read-SPSLifecycleCsv -Path $Path -RequiredColumn 'Url', 'LockedOn' -OptionalColumn 'SiteId')
+        $hasSiteId = $rows.Count -gt 0 -and (Test-SPSLifecycleColumnName -Name $rows[0].PSObject.Properties.Name -Column 'SiteId')
+        if ($rows.Count -gt 0) {
+            Test-SPSLifecycleColumnPattern -Value $rows.Url -Pattern '^https?://' -What "'Url' in $name" -Hint 'The first column must hold the site URLs.'
+        }
     }
 
     $latest = @{}
@@ -73,10 +82,16 @@
         $url = "$($row.Url)".Trim()
         $givenId = if ($hasSiteId) { "$($row.SiteId)".Trim() } else { '' }
         $siteId = if ($givenId) { ConvertTo-SPSLifecycleId -Value $givenId } else { '' }
-        $where = "File '$name', row $rowNumber (the rows that are empty are not counted)"
+        $where = if ($Strict) { "File '$name', line $($lines[$rowNumber - 1])" } else { '' }
 
-        if ($Strict -and $givenId -and -not $siteId) {
-            throw "$where`: the site ID '$givenId' is not a GUID, or is all zeros. A row that loses its site ID would be matched by its address, and could be attributed to another site. Fix the row, or delete it."
+        if ($Strict) {
+            if ($givenId -and -not $siteId) {
+                throw "$where`: the site ID '$(ConvertTo-SPSLifecycleVisibleText -Text $givenId)' is not a GUID, or is all zeros. A row that loses its site ID would be matched by its address, and could be attributed to another site. Fix the row, or delete it."
+            }
+
+            if ($url -and -not (Test-SPSLifecycleWebAddress -Text $url)) {
+                throw "$where`: '$(ConvertTo-SPSLifecycleVisibleText -Text $url)' is not a full web address (https://...). A row whose address cannot be used would be indexed under a key that no site has, and a lock could be hidden. Fix the row, or delete it."
+            }
         }
 
         if (-not $url -and -not $siteId) {
@@ -102,7 +117,7 @@
                 $dateCache[$text] = ConvertTo-SPSLifecycleDate -Text $text -DateFormat $DateFormat
             }
             catch {
-                throw "File '$name', column 'LockedOn': $($_.Exception.Message)"
+                throw "File '$name', column 'LockedOn'$(if ($Strict) { ", line $($lines[$rowNumber - 1])" }): $($_.Exception.Message)"
             }
         }
 

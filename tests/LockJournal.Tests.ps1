@@ -134,6 +134,14 @@ Describe 'Add-SPSLifecycleLockJournalEntry' {
             $rows | Should -HaveCount 2
         }
 
+        It 'finds the header after the blank lines that a spreadsheet leaves before it, as the reader does' {
+            $null = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "`r`n`r`nUrl,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/z,$($script:SiteC),2026-01-01`r`n"
+
+            $null = Add-TestEntry -Path $script:Journal
+
+            @(Import-TestJournal -Path $script:Journal).Entries | Should -HaveCount 2
+        }
+
         It 'does not add a byte order mark to a file that has none' {
             $null = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Encoding utf8 -Text "Url,SiteId,LockedOn`r`n"
 
@@ -208,9 +216,11 @@ Describe 'Add-SPSLifecycleLockJournalEntry' {
             @{ Name = 'a file with another header'; Encoding = 'utf8bom'; Text = "Name,Size`r`nSales,12`r`n"; Message = '*not a lock journal*' }
             @{ Name = 'a header that lacks the site ID'; Encoding = 'utf8bom'; Text = "Url,LockedOn`r`n"; Message = '*SiteId*' }
             @{ Name = 'a header with a column twice'; Encoding = 'utf8bom'; Text = "Url,SiteId,LockedOn,Url`r`n"; Message = '*more than once*' }
-            @{ Name = 'a header whose name only looks like SiteId'; Encoding = 'utf8bom'; Text = "Url,Site$([char]0xAD)Id,LockedOn`r`n"; Message = '*SiteId*Site\u00ADId*' }
-            @{ Name = 'a file that ends inside a quoted field'; Encoding = 'utf8bom'; Text = "Url,SiteId,LockedOn,Note`r`nhttps://contoso.sharepoint.com/sites/a,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2024-02-01,`"unfinished"; Message = '*never closed*' }
-            @{ Name = 'a quote that swallows the rows after it'; Encoding = 'utf8bom'; Text = "Url,SiteId,LockedOn,Note`r`nhttps://contoso.sharepoint.com/sites/a,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2024-02-01,`"open`r`nhttps://contoso.sharepoint.com/sites/b,0d7b4ebb-f68c-4f29-8529-5b46655d0c3c,2024-03-01,x`r`n"; Message = '*never closed*' }
+            @{ Name = 'a header whose name only looks like SiteId'; Encoding = 'utf8bom'; Text = "Url,Site$([char]0xAD)Id,LockedOn`r`n"; Message = "*Site\u00ADId*looks like 'SiteId'*" }
+            @{ Name = 'a file that ends inside a quoted field'; Encoding = 'utf8bom'; Text = "Url,SiteId,LockedOn,Note`r`nhttps://contoso.sharepoint.com/sites/a,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2024-02-01,`"unfinished"; Message = '*CSV rules*' }
+            @{ Name = 'a stray quote, then a quote that is never closed (an even number of quotes)'; Encoding = 'utf8bom'; Text = "Url,SiteId,LockedOn,Note`r`nhttps://contoso.sharepoint.com/sites/a,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2024-01-01,stray`"quote`r`nhttps://contoso.sharepoint.com/sites/a,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2024-02-01,`"unfinished"; Message = '*line 2*CSV rules*' }
+            @{ Name = 'a column named Site ID'; Encoding = 'utf8bom'; Text = "Url,Site ID,LockedOn`r`n"; Message = "*looks like 'SiteId'*" }
+            @{ Name = 'a quote that swallows the rows after it'; Encoding = 'utf8bom'; Text = "Url,SiteId,LockedOn,Note`r`nhttps://contoso.sharepoint.com/sites/a,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,2024-02-01,`"open`r`nhttps://contoso.sharepoint.com/sites/b,0d7b4ebb-f68c-4f29-8529-5b46655d0c3c,2024-03-01,x`r`n"; Message = '*CSV rules*' }
         ) {
             $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text $Text -Encoding $Encoding
             $before = [System.IO.File]::ReadAllBytes($path)
@@ -260,6 +270,8 @@ Describe 'Add-SPSLifecycleLockJournalEntry' {
     Context 'What it refuses to write' {
         It 'refuses <Name>, and creates no file' -ForEach @(
             @{ Name = 'a URL that is not a web address'; Url = 'sites/a'; SiteId = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Message = '*web address*' }
+            @{ Name = 'a URL with a zero-width space'; Url = "https://contoso.sharepoint.com/sites/a$([char]0x200B)"; SiteId = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Message = '*web address*\u200B*' }
+            @{ Name = 'a URL that is only a zero-width space'; Url = [string][char]0x200B; SiteId = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Message = '*web address*' }
             @{ Name = 'a URL on two lines'; Url = "https://contoso.sharepoint.com/sites/a`r`nhttps://contoso.sharepoint.com/sites/b"; SiteId = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Message = '*web address*' }
             @{ Name = 'a URL with a space'; Url = 'https://contoso.sharepoint.com/sites/a b'; SiteId = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Message = '*web address*' }
             @{ Name = 'a site ID that is not a GUID'; Url = 'https://contoso.sharepoint.com/sites/a'; SiteId = 'not a guid'; Message = '*site ID*' }

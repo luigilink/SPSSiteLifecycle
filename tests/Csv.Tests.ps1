@@ -26,8 +26,8 @@
     }
 
     function script:Read-TestCsv {
-        param([string]$Path, [string[]]$Required = @(), [switch]$RequireBalancedQuote)
-        & $script:Module { param($p, $r, $b) Read-SPSLifecycleCsv -Path $p -RequiredColumn $r -RequireBalancedQuote:$b } $Path $Required ([bool]$RequireBalancedQuote)
+        param([string]$Path, [string[]]$Required = @(), [string[]]$Optional = @())
+        & $script:Module { param($p, $r, $o) Read-SPSLifecycleCsv -Path $p -RequiredColumn $r -OptionalColumn $o } $Path $Required $Optional
     }
 }
 
@@ -195,7 +195,13 @@ Describe 'Read-SPSLifecycleCsv' {
         It 'does not take a name with a hidden character for a required column, and shows the character' {
             $path = Write-TestFile -Name 'hidden.csv' -Byte (Get-TestByte -Text "Url,Site$([char]0xAD)Id`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
 
-            { Read-TestCsv -Path $path -Required 'Url', 'SiteId' } | Should -Throw -ExpectedMessage '*not found*SiteId*Site\u00ADId*'
+            { Read-TestCsv -Path $path -Required 'Url', 'SiteId' } | Should -Throw -ExpectedMessage "*Site\u00ADId*looks like 'SiteId'*"
+        }
+
+        It 'says that a required column is missing, and lists the columns that are there, when nothing looks like it' {
+            $path = Write-TestFile -Name 'missing.csv' -Byte (Get-TestByte -Text "Url,Owner`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url', 'SiteId' } | Should -Throw -ExpectedMessage '*not found*SiteId*Columns present: Url, Owner*'
         }
 
         It 'still finds a required column whatever its case and the spaces around its name' {
@@ -205,32 +211,30 @@ Describe 'Read-SPSLifecycleCsv' {
         }
     }
 
-    Context 'Quotes that are never closed' {
-        It 'stops on a file that ends inside a quoted field, when it is asked to check the quotes' {
-            $path = Write-TestFile -Name 'open.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"unfinished")
+    Context 'Optional columns that only look like the ones the tool knows' {
+        It 'stops on <Name>, because the column would be read as absent and what it carries would be lost' -ForEach @(
+            @{ Name = 'a name with a space'; Header = 'Site ID' }
+            @{ Name = 'a name with an underscore'; Header = 'Site_Id' }
+            @{ Name = 'a name with a soft hyphen'; Header = "Site$([char]0xAD)Id" }
+            @{ Name = 'a name with a zero-width space'; Header = "Site$([char]0x200B)Id" }
+            @{ Name = 'a name with a no-break space'; Header = "Site$([char]0xA0)Id" }
+            @{ Name = 'a name with full-width letters'; Header = 'ＳｉｔｅＩｄ' }
+        ) {
+            $path = Write-TestFile -Name 'lookalike.csv' -Byte (Get-TestByte -Text "Url,$Header`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
 
-            { Read-TestCsv -Path $path -Required 'Url' -RequireBalancedQuote } | Should -Throw -ExpectedMessage '*never closed*'
+            { Read-TestCsv -Path $path -Required 'Url' -Optional 'SiteId' } | Should -Throw -ExpectedMessage "*looks like 'SiteId'*"
         }
 
-        It 'stops on a quote that swallows the rows after it, when it is asked to check the quotes' {
-            $path = Write-TestFile -Name 'swallow.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"open`r`nhttps://contoso.sharepoint.com/sites/b,x`r`n")
+        It 'reads a file that has the optional column, spelled as the tool expects, whatever its case' {
+            $path = Write-TestFile -Name 'optional.csv' -Byte (Get-TestByte -Text "Url,SITEID`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
 
-            { Read-TestCsv -Path $path -Required 'Url' -RequireBalancedQuote } | Should -Throw -ExpectedMessage '*never closed*'
+            @(Read-TestCsv -Path $path -Required 'Url' -Optional 'SiteId') | Should -HaveCount 1
         }
 
-        It 'reads quoted fields that hold a separator, a line break and doubled quotes, when it is asked to check the quotes' {
-            $path = Write-TestFile -Name 'quoted.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"a, `"`"b`"`"`r`nc`"`r`nhttps://contoso.sharepoint.com/sites/b,x`r`n")
+        It 'reads a file that has no optional column at all, and columns that are not known' {
+            $path = Write-TestFile -Name 'plain.csv' -Byte (Get-TestByte -Text "Url,Note,Owner Display Name`r`nhttps://contoso.sharepoint.com/sites/a,x,y`r`n")
 
-            $rows = @(Read-TestCsv -Path $path -Required 'Url' -RequireBalancedQuote)
-
-            $rows | Should -HaveCount 2
-            $rows[0].Note | Should -Be "a, `"b`"`r`nc"
-        }
-
-        It 'does not check the quotes unless it is asked to' {
-            $path = Write-TestFile -Name 'open.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"unfinished")
-
-            @(Read-TestCsv -Path $path -Required 'Url') | Should -HaveCount 1
+            @(Read-TestCsv -Path $path -Required 'Url' -Optional 'SiteId') | Should -HaveCount 1
         }
     }
 

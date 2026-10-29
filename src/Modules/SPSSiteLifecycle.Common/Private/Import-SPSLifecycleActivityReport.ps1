@@ -69,7 +69,7 @@
         $required += 'Site URL'
     }
 
-    $rows = @(Read-SPSLifecycleCsv -Path $Path -RequiredColumn $required)
+    $rows = @(Read-SPSLifecycleCsv -Path $Path -RequiredColumn $required -OptionalColumn 'Is Deleted', 'Report Period', 'Report Refresh Date')
     if ($rows.Count -eq 0) {
         throw "The $Kind report '$name' has no row. Download the report again from the Microsoft 365 admin center (Reports > Usage)."
     }
@@ -97,7 +97,7 @@
     $dateCache = @{}
     $flagCache = @{}
     $deleted = 0
-    $hasDeletedColumn = @($rows[0].PSObject.Properties.Name) -contains 'Is Deleted'
+    $hasDeletedColumn = Test-SPSLifecycleColumnName -Name $rows[0].PSObject.Properties.Name -Column 'Is Deleted'
 
     foreach ($row in $rows) {
         if ($hasDeletedColumn) {

@@ -275,6 +275,17 @@ Describe 'Import-SPSLifecycleActivityReport' {
             $report.ById.Count | Should -Be 1
         }
 
+        It 'stops on an Is Deleted column that only looks like it, because the deleted rows would be read as live: <Name>' -ForEach @(
+            @{ Name = 'a soft hyphen'; Header = "Is$([char]0xAD) Deleted" }
+            @{ Name = 'no space'; Header = 'IsDeleted' }
+            @{ Name = 'an underscore'; Header = 'Is_Deleted' }
+        ) {
+            $text = "Report Refresh Date,Site Id,Site URL,Owner Display Name,$Header,Last Activity Date,Root Web Template,Report Period`r`n2026-10-27,A6E20079-2D1A-4E9D-BC9F-94E3F2EFEB64,https://contoso.sharepoint.com/sites/a,x,True,2026-01-02,Team site,180`r`n"
+            $path = Write-TestCsv -Name 'lookalike.csv' -Text $text
+
+            { Import-TestReport -Path $path -Kind SharePoint } | Should -Throw -ExpectedMessage "*looks like 'Is Deleted'*"
+        }
+
         It 'stops when a mandatory column is missing' {
             { Import-TestReport -Path (Write-TestCsv -Name 'nocol.csv' -Text "Site Id,Owner`r`na6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,x`r`n") -Kind SharePoint } | Should -Throw -ExpectedMessage '*Last Activity Date*'
         }

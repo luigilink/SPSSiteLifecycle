@@ -158,7 +158,7 @@ Describe 'Import-SPSLifecycleLockJournal' {
     It 'stops on a row that has no date, because it could hide a lock that is more recent than the other rows of the site' {
         $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-01-01`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),`r`n"
 
-        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*row 2*no lock date*'
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 3*no lock date*'
     }
 
     It 'stops on a row whose site ID is not a GUID, because the row would lose its identity: <Name>' -ForEach @(
@@ -168,13 +168,43 @@ Describe 'Import-SPSLifecycleLockJournal' {
     ) {
         $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$Id,2026-10-29`r`n"
 
-        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*row 1*site ID*'
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 2*site ID*'
     }
 
     It 'stops on a row that has neither an address nor a site ID, because the date belongs to no site' {
         $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2026-10-28`r`n,,2026-10-29`r`n"
 
-        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*row 2*neither*'
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 3*neither*'
+    }
+
+    It 'stops on a row that has a value too many, even when the first values are empty (an overflow must not look like an empty row)' {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`n,,,https://contoso.sharepoint.com/sites/a,$($script:SiteA),2026-10-29T14:37:39Z`r`n"
+
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 2*6 value(s)*'
+    }
+
+    It 'stops on a row that is cut short' {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA)`r`n"
+
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 2*2 value(s)*'
+    }
+
+    It 'stops on an address that cannot be used, because the row would be indexed under a key that no site has: <Name>' -ForEach @(
+        @{ Name = 'a path'; Url = 'sites/a' }
+        @{ Name = 'a zero-width space'; Url = [string][char]0x200B }
+        @{ Name = 'an address with a space'; Url = 'https://contoso.sharepoint.com/sites/a b' }
+        @{ Name = 'another scheme'; Url = 'ftp://contoso.sharepoint.com/sites/a' }
+    ) {
+        $good = (1..9 | ForEach-Object { "https://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-01-01" }) -join "`r`n"
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`n$good`r`n$Url,,2026-10-29T14:37:39Z`r`n"
+
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 11*web address*'
+    }
+
+    It 'stops on a journal in which a stray quote hides an unclosed one (an even number of quotes)' {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn,Note`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-01-01,stray`"quote`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-02-01,`"unfinished"
+
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 2*CSV rules*'
     }
 
     It 'accepts a row that has an address and no site ID, as a person may write it' {
@@ -197,7 +227,7 @@ Describe 'Import-SPSLifecycleLockJournal' {
     It 'stops on a journal that ends inside a quoted field, because the rows after the quote are read as part of it' {
         $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn,Note`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-02-01,`"unfinished"
 
-        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*never closed*'
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*lock-journal.csv*line 2*CSV rules*'
     }
 
     It 'stops on a journal that has no SiteId column, because its dates would be attributed to addresses' {
@@ -206,10 +236,20 @@ Describe 'Import-SPSLifecycleLockJournal' {
         { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*not found*SiteId*'
     }
 
+    It 'stops on a list whose SiteId column only looks like it: the identity of every row would be lost' -ForEach @(
+        @{ Name = 'a soft hyphen'; Header = "Site$([char]0xAD)Id" }
+        @{ Name = 'a zero-width space'; Header = "Site$([char]0x200B)Id" }
+        @{ Name = 'a space'; Header = 'Site ID' }
+    ) {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lot1.csv' -Text "Url,$Header,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-01-01`r`n"
+
+        { Import-TestList -Path $path } | Should -Throw -ExpectedMessage "*lot1.csv*looks like 'SiteId'*"
+    }
+
     It 'does not take a column that only looks like SiteId for it: the identity is not silently lost' {
         $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,Site$([char]0xAD)Id,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2026-10-29`r`n"
 
-        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage '*SiteId*Site\u00ADId*'
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage "*Site\u00ADId*looks like 'SiteId'*"
     }
 
     It 'stops when the path is a folder' {
