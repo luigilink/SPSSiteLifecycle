@@ -172,6 +172,37 @@ Describe 'Import-SPSLifecycleLockJournal' {
         { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage "*lock-journal.csv*LockedOn*"
     }
 
+    It 'stops on a lock date before 2000, which a spreadsheet writes for a blank cell and no lock can be, in the journal: <Date>' -ForEach @(
+        @{ Date = '1900-01-01' }
+        @{ Date = '1899-12-30' }
+        @{ Date = '1970-01-01' }
+        @{ Date = '0001-01-01' }
+        @{ Date = '1999-12-31' }
+        @{ Date = '1999-12-31T23:59:59Z' }
+    ) {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2026-01-01`r`nhttps://contoso.sharepoint.com/sites/b,$($script:SiteB),$Date`r`n"
+
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage "*lock-journal.csv*LockedOn*line 3*$Date*2000*"
+    }
+
+    It 'stops on a lock date before 2000 in a list that a person gives, and names the file and the column: <Date>' -ForEach @(
+        @{ Date = '1900-01-01' }
+        @{ Date = '1970-01-01' }
+        @{ Date = '1999-12-31' }
+    ) {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lot1.csv' -Text "Url,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$Date`r`n"
+
+        { Import-TestList -Path $path } | Should -Throw -ExpectedMessage "*lot1.csv*LockedOn*$Date*2000*"
+    }
+
+    It 'accepts the first day of 2000, and a date that is in the future, which can only delay a deletion' {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2000-01-01`r`nhttps://contoso.sharepoint.com/sites/b,$($script:SiteB),2099-12-31`r`n"
+
+        $journal = Import-TestJournal -Path $path
+
+        $journal.Entries | Should -HaveCount 2
+    }
+
     It 'stops on a row that has no date, because it could hide a lock that is more recent than the other rows of the site' {
         $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-01-01`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),`r`n"
 

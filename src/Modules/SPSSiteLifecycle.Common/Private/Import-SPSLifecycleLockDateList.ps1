@@ -16,6 +16,12 @@
         nothing about its site, so it is ignored, and the column SiteId is optional (a header that only looks like
         it, Site ID or a hidden character, stops the tool, because the identity of every row would be lost).
 
+        A date before 2000-01-01 stops the tool, in a list and in the journal: SharePoint Online did not exist, so no
+        site was locked then. It is what a spreadsheet writes for a blank cell (1900-01-01, 1899-12-30,
+        1970-01-01, 0001-01-01), and a site whose date is read as a century old looks as if it had been locked for
+        ever, and passes any delay of MinLockedDays: the error whose direction is dangerous. A date in the future
+        only delays a deletion, so it is accepted.
+
         With Strict, which the lock journal is read with, nothing is ignored. The journal is the tool's own file,
         where every row is a lock that was recorded, and a row that is lost or dropped could leave an older date of
         the same site in force. The file is read by Read-SPSLifecycleStrictCsv (a text that breaks the CSV rules,
@@ -74,6 +80,7 @@
         }
     }
 
+    $earliestLockDate = [System.DateTime]::new(2000, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc)
     $latest = @{}
     $dateCache = @{}
     $rowNumber = 0
@@ -114,7 +121,12 @@
 
         if (-not $dateCache.ContainsKey($text)) {
             try {
-                $dateCache[$text] = ConvertTo-SPSLifecycleDate -Text $text -DateFormat $DateFormat
+                $parsed = ConvertTo-SPSLifecycleDate -Text $text -DateFormat $DateFormat
+                if ($parsed -lt $earliestLockDate) {
+                    throw "the date '$(ConvertTo-SPSLifecycleVisibleText -Text $text)' is before 2000-01-01, so it is not the date of a lock (SharePoint Online did not exist). A spreadsheet writes a blank date as 1900-01-01, 1899-12-30 or 1970-01-01, and the site would look as if it had been locked for ever. Fix the date, or delete the row."
+                }
+
+                $dateCache[$text] = $parsed
             }
             catch {
                 throw "File '$name', column 'LockedOn'$(if ($Strict) { ", line $($lines[$rowNumber - 1])" }): $($_.Exception.Message)"
