@@ -73,12 +73,12 @@ Two levels.
 - its lock state is accepted (D5);
 - it is not a channel site, a hub site, the root site, a system site, a home site or a OneDrive site;
 - for an archive, its template is one that Microsoft 365 Archive supports (`SKIP-NOT-ARCHIVABLE`). The list is a table in the module, taken from [Manage Microsoft 365 Archive](https://learn.microsoft.com/microsoft-365/archive/archive-manage#site-templates-supported). A template that Microsoft adds later is refused until the table is updated;
-- its Microsoft 365 group, if any, is active;
+- its Microsoft 365 group, if any, is active (a group state that was not read counts as not active);
 - its content was not modified since `GeneratedOn`;
 - no retention policy or hold is known (best effort: the tool cannot see every Microsoft Purview policy);
-- for a deletion, its size is not above `DeleteMaxSizeGB` (1 GB by default).
+- for a deletion, its size is known and not above `DeleteMaxSizeGB` (1 GB by default). A size that is missing, blank, negative or not a number is unknown, never zero.
 
-Always on: report only by default, double typed confirmation, `MaxActions`, a stop after 3 consecutive errors (not configurable), and explicit verdicts.
+Always on: report only by default, double typed confirmation, `MaxActions`, a stop after 3 consecutive errors (not configurable), and explicit verdicts. A rule of the code runs through all of them: an input that is missing or cannot be read never leads to an action, it leads to a `SKIP-` or `REVIEW-` verdict, or it stops the tool.
 
 ## D7 - Reading the tenant (Scan)
 

@@ -20,7 +20,9 @@
         Archive or Lock (the Act phase), the action is the decision of a person, and a decision never
         lifts a gate.
 
-        The function reads nothing and changes nothing: the caller gives it the state it has read.
+        The function reads nothing and changes nothing: the caller gives it the state it has read. An
+        input that is missing or cannot be read (a size that is blank, negative or not a number, a
+        group state that was not read) never leads to an action: the verdict is a REVIEW one.
 
         .PARAMETER Site
         The site record: Url, Template, LockState, GroupId, IsHubSite, IsTeamsChannelConnected,
@@ -46,7 +48,9 @@
         latest date over the reports, or $null).
 
         .PARAMETER GroupState
-        Act only: None, Active, SoftDeleted or NotFound. Leave it empty in Scan, which does not read groups.
+        Act only: None, Active, SoftDeleted or NotFound, as read live. For a site that has a group, any
+        other state than Active, an empty one included, gives a REVIEW verdict: a state that was not
+        read never lets an action through. Leave it empty in Scan, which does not read groups.
 
         .PARAMETER HomeSiteUrl
         The URL of the SharePoint home site, when known.
@@ -91,6 +95,7 @@
 
         [Parameter()]
         [AllowEmptyString()]
+        [ValidateSet('', 'None', 'Active', 'SoftDeleted', 'NotFound')]
         [System.String]
         $GroupState = '',
 
@@ -177,14 +182,17 @@
         }
     }
 
-    $sizeMB = $Site.StorageUsedMB
-    $sizeKnown = $null -ne $sizeMB -and "$sizeMB" -ne ''
+    # A size that is missing, blank, negative, not a number or not finite is unknown. It is never read as zero.
+    $sizeMB = 0.0
+    $sizeKnown = [System.Double]::TryParse("$($Site.StorageUsedMB)".Trim(), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$sizeMB) -and [System.Double]::IsFinite($sizeMB) -and $sizeMB -ge 0
     $needsSize = ($Action -eq 'Delete') -or ($Action -eq 'Suggest' -and -not $suggestLock)
     if ($needsSize -and -not $sizeKnown) {
         return 'REVIEW-NO-SIZE'
     }
 
-    if ($groupId -and $GroupState) {
+    # In Act, a group-connected site needs a group that was read and is active: a missing state is not a green light.
+    # Scan does not read groups, so it only checks a state that the caller gives.
+    if ($groupId -and ($Action -ne 'Suggest' -or $GroupState)) {
         if ($GroupState -eq 'SoftDeleted') {
             return 'REVIEW-GROUP-SOFTDELETED'
         }

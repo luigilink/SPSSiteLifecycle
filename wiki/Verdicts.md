@@ -22,9 +22,9 @@ Every site gets one verdict, in the `Verdict` column of the CSV and in the summa
 | `SKIP-TOO-RECENT-LOCK` | Skip | Scan and Act | The site was locked less than `MinLockedDays` ago. |
 | `REVIEW-NO-ACTIVITY-ROW` | Review | Scan only | The site is in none of the activity reports you gave, so nothing says whether it is active. |
 | `SKIP-RECENT-ACTIVITY` | Skip | Scan only | The last activity, or the last content change, is more recent than `InactiveDays`. |
-| `REVIEW-NO-SIZE` | Review | Scan and Act | The size of the site is unknown, and the verdict depends on it. |
+| `REVIEW-NO-SIZE` | Review | Scan and Act | The size of the site is unknown (missing, blank, negative or not a number), and the verdict depends on it. |
 | `REVIEW-GROUP-SOFTDELETED` | Review | Act only | The Microsoft 365 group of the site is in the Microsoft Entra recycle bin. Restore it or delete it for good first. |
-| `REVIEW-GROUP-NOTFOUND` | Review | Act only | The group ID of the site points to nothing (a group deleted for good, an orphan site). |
+| `REVIEW-GROUP-NOTFOUND` | Review | Act only | The group of the site cannot be confirmed active: its ID points to nothing (a group deleted for good, an orphan site), or its state was not read. |
 | `SKIP-NOT-ARCHIVABLE` | Skip | Scan and Act | An archive is wanted (or is the only option, because the site is too large to delete), but Microsoft 365 Archive does not support the template of the site. |
 | `SKIP-TOO-LARGE-TO-DELETE` | Skip | Scan and Act | The site is larger than `DeleteMaxSizeGB`: it is never deleted. |
 | `LOCK` | Action | Scan and Act | Make the site read-only. The tool records the date in the lock journal. |

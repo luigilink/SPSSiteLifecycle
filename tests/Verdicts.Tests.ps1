@@ -163,7 +163,7 @@ Describe 'Get-SPSLifecycleVerdict' {
         }
 
         It 'locks an unlocked site' {
-            Get-TestVerdict -Site (New-TestSite -LockState 'Unlock') -Action Lock -LockedOn $null | Should -Be 'LOCK'
+            Get-TestVerdict -Site (New-TestSite -LockState 'Unlock') -Action Lock -LockedOn $null -GroupState Active | Should -Be 'LOCK'
         }
 
         It 'does not lock a site that is not unlocked: <State>' -ForEach @(
@@ -258,6 +258,78 @@ Describe 'Get-SPSLifecycleVerdict' {
             @{ Path = '/sites/contenttypehub' }, @{ Path = '/sites/CompliancePolicyCenter' }, @{ Path = '/portal/hub' }, @{ Path = '/search' }
         ) {
             Get-TestVerdict -Site (New-TestSite -Url "https://contoso.sharepoint.com$Path" -Template 'STS#3') -Action Delete -GroupState Active | Should -Be 'SKIP-PROTECTED'
+        }
+    }
+
+    Context 'Unknown or unreadable input fails closed' {
+        It 'does not act on a group-connected site whose group state was not read: <Action>' -ForEach @(
+            @{ Action = 'Delete' }
+            @{ Action = 'Archive' }
+        ) {
+            Get-TestVerdict -Site (New-TestSite) -Action $Action | Should -Be 'REVIEW-GROUP-NOTFOUND'
+        }
+
+        It 'does not lock a group-connected site whose group state was not read' {
+            Get-TestVerdict -Site (New-TestSite -LockState 'Unlock') -Action Lock -LockedOn $null | Should -Be 'REVIEW-GROUP-NOTFOUND'
+        }
+
+        It 'does not act when the live read finds no group but the site has a group ID' {
+            Get-TestVerdict -Site (New-TestSite) -Action Delete -GroupState None | Should -Be 'REVIEW-GROUP-NOTFOUND'
+        }
+
+        It 'does not need a group state for a site without a group' {
+            Get-TestVerdict -Site (New-TestSite -GroupId '') -Action Delete | Should -Be 'DELETE-SITE'
+        }
+
+        It 'does not need a group state in Scan, which does not read groups' {
+            Get-TestVerdict -Site (New-TestSite) -Action Suggest -Activity $script:Quiet | Should -Be 'DELETE-VIA-GROUP'
+        }
+
+        It 'refuses a group state that does not exist, instead of reading it as not active' {
+            { Get-TestVerdict -Site (New-TestSite) -Action Delete -GroupState 'Actif' } | Should -Throw
+        }
+
+        It 'treats the size <Name> as unknown, never as zero' -ForEach @(
+            @{ Name = 'a blank text'; Size = ' ' }
+            @{ Name = 'an empty text'; Size = '' }
+            @{ Name = 'NaN'; Size = [System.Double]::NaN }
+            @{ Name = 'a text that is not a number'; Size = 'unknown' }
+            @{ Name = 'a negative number'; Size = -5 }
+            @{ Name = 'infinity'; Size = [System.Double]::PositiveInfinity }
+            @{ Name = 'a number with a decimal comma'; Size = '1,5' }
+            @{ Name = 'a boolean'; Size = $true }
+        ) {
+            Get-TestVerdict -Site (New-TestSite -GroupId '' -Size $Size) -Action Delete | Should -Be 'REVIEW-NO-SIZE'
+            Get-TestVerdict -Site (New-TestSite -GroupId '' -Size $Size) -Action Suggest -Activity $script:Quiet | Should -Be 'REVIEW-NO-SIZE'
+        }
+
+        It 'reads the size <Name>' -ForEach @(
+            @{ Name = 'zero'; Size = 0; Expected = 'DELETE-SITE' }
+            @{ Name = 'a whole number'; Size = 100; Expected = 'DELETE-SITE' }
+            @{ Name = 'a text with a decimal point'; Size = '100.5'; Expected = 'DELETE-SITE' }
+            @{ Name = 'a double'; Size = 100.5; Expected = 'DELETE-SITE' }
+            @{ Name = 'an exponent'; Size = '1E3'; Expected = 'DELETE-SITE' }
+            @{ Name = 'a double above the limit'; Size = 1500.5; Expected = 'SKIP-TOO-LARGE-TO-DELETE' }
+            @{ Name = 'a text above the limit'; Size = '1500.5'; Expected = 'SKIP-TOO-LARGE-TO-DELETE' }
+        ) {
+            Get-TestVerdict -Site (New-TestSite -GroupId '' -Size $Size) -Action Delete | Should -Be $Expected
+        }
+
+        It 'reads the size the same way under <Culture>' -ForEach @(
+            @{ Culture = 'en-US' }
+            @{ Culture = 'fr-FR' }
+            @{ Culture = 'de-DE' }
+        ) {
+            $previous = [System.Globalization.CultureInfo]::CurrentCulture
+            try {
+                [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+                Get-TestVerdict -Site (New-TestSite -GroupId '' -Size 1500.5) -Action Delete | Should -Be 'SKIP-TOO-LARGE-TO-DELETE'
+                Get-TestVerdict -Site (New-TestSite -GroupId '' -Size '1500.5') -Action Delete | Should -Be 'SKIP-TOO-LARGE-TO-DELETE'
+                Get-TestVerdict -Site (New-TestSite -GroupId '' -Size 100.5) -Action Delete | Should -Be 'DELETE-SITE'
+            }
+            finally {
+                [System.Globalization.CultureInfo]::CurrentCulture = $previous
+            }
         }
     }
 
