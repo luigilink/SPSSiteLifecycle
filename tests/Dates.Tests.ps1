@@ -44,7 +44,7 @@ Describe 'ConvertTo-SPSLifecycleDate' {
             { & $script:Module { param($t) ConvertTo-SPSLifecycleDate -Text $t } $Text } | Should -Throw -ExpectedMessage '*CsvDateFormats*'
         }
 
-        It 'reads <Text> with the format dd/MM/yyyy, not with the culture' {
+        It 'reads 03/04/2026 with the format dd/MM/yyyy, as the 3rd of April, not with the culture' {
             $date = & $script:Module { ConvertTo-SPSLifecycleDate -Text '03/04/2026' -DateFormat 'dd/MM/yyyy' }
 
             $date.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) | Should -Be '2026-04-03'
