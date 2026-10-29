@@ -14,3 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a complete, strict check (unknown key, key in the wrong section, type, range, missing file,
   refused tenant), a schema that is the single source of truth, `Get-SPSLifecycleSetting` and an
   example file. The Microsoft corporate tenants are always refused.
+- Tolerant CSV reading (separator detection, `sep=` line, UTF-8, UTF-16 and Windows-1252, empty
+  rows, a file open in Excel), ISO 8601 dates that are never guessed from the culture, and the
+  importers for lock date lists, exclusion lists and the SharePoint, Teams and Microsoft 365
+  groups activity reports (matched by site ID when a report hides the site URLs).
