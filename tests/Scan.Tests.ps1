@@ -225,3 +225,84 @@ Describe 'Find-SPSLifecycleActivity' {
         }
     }
 }
+
+Describe 'Get-SPSLifecycleExclusionIndex' {
+    BeforeAll {
+        function script:Write-TestList {
+            param([string]$Name, [string]$Text)
+            $path = Join-Path -Path $TestDrive -ChildPath $Name
+            [System.IO.File]::WriteAllText($path, $Text, [System.Text.UTF8Encoding]::new($true))
+            $path
+        }
+
+        function script:Get-TestExclusionIndex {
+            param([string[]]$File)
+            & $script:Module { param($f) Get-SPSLifecycleExclusionIndex -ExclusionFile $f } $File
+        }
+    }
+
+    It 'is empty when no list is given: <Name>' -ForEach @(
+        @{ Name = 'an empty list'; File = @() }
+        @{ Name = 'null'; File = $null }
+        @{ Name = 'an empty path'; File = @('') }
+    ) {
+        $index = Get-TestExclusionIndex -File $File
+
+        $index.Keys.Count | Should -Be 0
+        @($index.Imports) | Should -HaveCount 0
+    }
+
+    It 'merges the lists, and names the first file that holds an address' {
+        $first = Write-TestList -Name 'first.csv' -Text "Url`r`nhttps://contoso.sharepoint.com/sites/a`r`nhttps://contoso.sharepoint.com/sites/b`r`n"
+        $second = Write-TestList -Name 'second.csv' -Text "Url`r`nhttps://contoso.sharepoint.com/sites/b`r`nhttps://contoso.sharepoint.com/sites/c`r`n"
+
+        $index = Get-TestExclusionIndex -File $first, $second
+
+        $index.Keys.Count | Should -Be 3
+        $index.Keys['https://contoso.sharepoint.com/sites/a'] | Should -BeExactly 'first.csv'
+        $index.Keys['https://contoso.sharepoint.com/sites/b'] | Should -BeExactly 'first.csv'
+        $index.Keys['https://contoso.sharepoint.com/sites/c'] | Should -BeExactly 'second.csv'
+        @($index.Imports) | Should -HaveCount 2
+    }
+
+    It 'holds one key for two spellings of an address' {
+        $first = Write-TestList -Name 'first.csv' -Text "Url`r`nhttps://Contoso.sharepoint.com/Sites/A/`r`n"
+        $second = Write-TestList -Name 'second.csv' -Text "Url`r`nhttps://contoso.sharepoint.com:443/sites/%61`r`n"
+
+        (Get-TestExclusionIndex -File $first, $second).Keys.Count | Should -Be 1
+    }
+
+    It 'stops, and names the file, when a list cannot be read: a row that is lost would protect nothing' {
+        $good = Write-TestList -Name 'good.csv' -Text "Url`r`nhttps://contoso.sharepoint.com/sites/a`r`n"
+        $bad = Write-TestList -Name 'bad.csv' -Text "Url`r`nSales`r`n"
+
+        { Get-TestExclusionIndex -File $good, $bad } | Should -Throw -ExpectedMessage '*bad.csv*'
+    }
+
+    It 'stops, and names the file, when a list does not exist' {
+        { Get-TestExclusionIndex -File (Join-Path -Path $TestDrive -ChildPath 'nothing.csv') } | Should -Throw -ExpectedMessage '*nothing.csv*'
+    }
+}
+
+Describe 'Initialize-SPSLifecycleScanSummary' {
+    It 'starts with nothing counted' {
+        $summary = & $script:Module { Initialize-SPSLifecycleScanSummary }
+
+        $summary.SitesRead | Should -Be 0
+        $summary.SitesListed | Should -Be 0
+        $summary.LeftOutOneDrive | Should -Be 0
+        $summary.LeftOutLockState | Should -Be 0
+        $summary.ByVerdict.Count | Should -Be 0
+        $summary.ByAction.Count | Should -Be 0
+    }
+
+    It 'gives a new summary at each call, so that two runs never share their counts' {
+        $first = & $script:Module { Initialize-SPSLifecycleScanSummary }
+        $first.SitesRead = 5
+        $first.ByVerdict['LOCK'] = 1
+        $second = & $script:Module { Initialize-SPSLifecycleScanSummary }
+
+        $second.SitesRead | Should -Be 0
+        $second.ByVerdict.Count | Should -Be 0
+    }
+}
