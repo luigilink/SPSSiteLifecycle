@@ -485,7 +485,8 @@ Describe 'Test-SPSLifecycleOneDrive' {
         @{ Name = 'an address that does not parse, in http'; Url = 'http://contoso-my.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a team site'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'the OneDrive host of another tenant'; Url = 'https://fabrikam-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
-        @{ Name = 'a host that only starts like the OneDrive host, which is left out too: the safe direction'; Url = 'https://contoso-my.sharepoint.com.example.org/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a host that only starts like the OneDrive host is another host'; Url = 'https://contoso-my.sharepoint.com.example.org/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'user information that only looks like the OneDrive host'; Url = 'https://contoso-my.sharepoint.com@example.org/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'a site whose path looks like OneDrive'; Url = 'https://contoso.sharepoint.com/sites/contoso-my.sharepoint.com'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'no template and no address'; Url = ''; Template = $null; Tenant = 'contoso'; Expected = $false }
     ) {

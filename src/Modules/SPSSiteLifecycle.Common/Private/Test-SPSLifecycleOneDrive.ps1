@@ -18,8 +18,8 @@
         list, and they hide a OneDrive host as well as the root site, the home site or an excluded site, whose
         addresses are compared as text. An address that does not parse, a text that is not an address and another
         scheme (http included) are left out as well. A site that is left out by mistake is safe, and a site that is
-        listed by mistake is not. A host that only starts like the OneDrive host is left out too, and a site whose path
-        only looks like the OneDrive host is not.
+        listed by mistake is not. A host that only starts like the OneDrive host, or a path that only looks like it, is
+        another address.
 
         An empty address is not left out here: the caller says that it is missing.
 
@@ -60,18 +60,15 @@
     $uri = $null
     $isPlain = [System.Uri]::TryCreate($text, [System.UriKind]::Absolute, [ref]$uri) -and $uri.Scheme -eq 'https' -and $uri.IsDefaultPort
     if ($isPlain) {
-        # PowerShell gives $null for IdnHost when the IDNA mapping of the host fails. The comparison is ordinal: a culture
-        # ignores the characters that the mapping drops, and would read the two hosts as the same.
-        $dnsHost = $uri.IdnHost
-        $isPlain = $null -ne $dnsHost -and
-        -not $uri.Host.EndsWith('.', [System.StringComparison]::Ordinal) -and
-        [System.String]::Equals($dnsHost, $uri.Host, [System.StringComparison]::Ordinal)
+        # PowerShell gives $null for IdnHost when the IDNA mapping of the host fails, which is not equal to anything. The
+        # comparison is ordinal: a culture ignores the characters that the mapping drops, and would read the two hosts as the same.
+        $isPlain = -not $uri.Host.EndsWith('.', [System.StringComparison]::Ordinal) -and
+        [System.String]::Equals($uri.IdnHost, $uri.Host, [System.StringComparison]::Ordinal)
     }
 
     if (-not $isPlain) {
         return $true
     }
 
-    $oneDriveHost = "$TenantName-my.sharepoint.com"
-    $uri.Host.Equals($oneDriveHost, [System.StringComparison]::OrdinalIgnoreCase) -or $text.StartsWith("https://$oneDriveHost", [System.StringComparison]::InvariantCultureIgnoreCase)
+    $uri.Host.Equals("$TenantName-my.sharepoint.com", [System.StringComparison]::OrdinalIgnoreCase)
 }
