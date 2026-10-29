@@ -101,6 +101,7 @@ SPSSiteLifecycle is a new tool. It does not read the files of any earlier script
 
 - **Lock date lists** (`LockDateFiles`): a `Url` column, a `LockedOn` column and an optional `SiteId` column. When a site appears in several lists or in the lock journal (D5), the latest date is kept: a later lock date can only delay a deletion.
 - **Exclusion lists** (`ExclusionFiles`): a `Url` column. A listed site gets `SKIP-EXCLUDED` in Scan, and Act checks the lists again, because a decision never lifts a safeguard (D4).
+- URLs are compared in a canonical form: the case, the trailing slashes, the default port, a query and the percent-encoding do not count (`%C3%A9quipe` and `équipe` are the same address). The same form is used for the lists, the reports, the root site, the home site and the system paths, so that a safeguard cannot miss a site because of the way its address was written.
 - No saved inventory is read. The paged listing keeps its own checkpoint files to resume an interrupted Scan (D7), and the Scan CSV is the reviewed list that Act reads.
 
 ## D9 - Tests and CI

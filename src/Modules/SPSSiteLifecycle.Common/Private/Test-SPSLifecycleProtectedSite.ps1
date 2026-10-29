@@ -53,7 +53,7 @@
 
     $uri = $null
     if ([System.Uri]::TryCreate("$($Site.Url)".Trim(), [System.UriKind]::Absolute, [ref]$uri)) {
-        $path = $uri.AbsolutePath.TrimEnd('/').ToLowerInvariant()
+        $path = [System.Uri]::UnescapeDataString($uri.AbsolutePath).TrimEnd('/').ToLowerInvariant()
         foreach ($protected in @(Get-SPSLifecycleProtectedPath)) {
             if ($path -eq $protected.Path) {
                 return $true
