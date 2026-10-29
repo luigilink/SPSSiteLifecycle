@@ -12,6 +12,10 @@
         removed. Two columns with the same name stop the tool. A file that another program (Excel) has open is still read; if it cannot be, the
         message says so.
 
+        The names of the columns are compared one character at a time, whatever the case and the culture, because
+        that is how a row finds its properties: a header named Site<U+00AD>Id is not SiteId, and the message shows
+        the hidden character.
+
         Stops with a clear message when the file is missing, cannot be read as CSV, or lacks one of
         the required columns. The header is checked even when the file has no row.
 
@@ -20,6 +24,11 @@
 
         .PARAMETER RequiredColumn
         Names of the columns that must exist (the case is ignored).
+
+        .PARAMETER RequireBalancedQuote
+        Stops on a file that has an odd number of double quotes: a quote that is never closed makes the rows after
+        it part of one field, so a row can disappear without a message. A file that the tool writes, or that Excel
+        saves, always has an even number. Use it for a file in which a lost row would be dangerous.
 
         .EXAMPLE
         Read-SPSLifecycleCsv -Path .\lock-dates.csv -RequiredColumn 'Url', 'LockedOn'
@@ -34,7 +43,11 @@
 
         [Parameter()]
         [System.String[]]
-        $RequiredColumn = @()
+        $RequiredColumn = @(),
+
+        [Parameter()]
+        [System.Management.Automation.SwitchParameter]
+        $RequireBalancedQuote
     )
 
     $fullPath = Resolve-SPSLifecycleFileSystemPath -Path $Path
@@ -64,6 +77,10 @@
     $delimiter = $detected.Delimiter
     $text = $detected.Text
 
+    if ($RequireBalancedQuote -and (($text.Length - $text.Replace('"', '').Length) % 2) -ne 0) {
+        throw "Cannot read '$fullPath' reliably: a double quote is never closed (the number of quotes is odd), so the rows after it would be read as part of one field. Fix the end of the file, or the quote that is not closed."
+    }
+
     # The header is the first line that is not blank. Its names are trimmed and written back, so that the names
     # that were checked are the names of the properties of the rows (ConvertFrom-Csv keeps the spaces of a name).
     $header = @()
@@ -75,9 +92,16 @@
         $text = $rewritten + $text.Substring($first.Index + $first.Length)
     }
 
-    $repeated = @($header | Where-Object { $_ } | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+    $seen = [System.Collections.Generic.HashSet[System.String]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $repeated = [System.Collections.Generic.HashSet[System.String]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in $header) {
+        if ($name -and -not $seen.Add($name)) {
+            $null = $repeated.Add($name)
+        }
+    }
+
     if ($repeated.Count -gt 0) {
-        throw "Column(s) that appear more than once in '$fullPath' (the case and the spaces around a name do not count): $($repeated -join ', ')."
+        throw "Column(s) that appear more than once in '$fullPath' (the case and the spaces around a name do not count): $(@($repeated | ForEach-Object { ConvertTo-SPSLifecycleVisibleText -Text $_ }) -join ', ')."
     }
 
     $rows = @()
@@ -90,9 +114,9 @@
         }
     }
 
-    $missing = @($RequiredColumn | Where-Object { $header -notcontains $_ })
+    $missing = @($RequiredColumn | Where-Object { -not (Test-SPSLifecycleColumnName -Name $header -Column $_) })
     if ($missing.Count -gt 0) {
-        $present = if ($header.Count -gt 0) { $header -join ', ' } else { '(none: the file is empty)' }
+        $present = if ($header.Count -gt 0) { @($header | ForEach-Object { ConvertTo-SPSLifecycleVisibleText -Text $_ }) -join ', ' } else { '(none: the file is empty)' }
         throw "Column(s) not found in '$fullPath': $($missing -join ', '). Columns present: $present."
     }
 

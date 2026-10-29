@@ -26,8 +26,8 @@
     }
 
     function script:Read-TestCsv {
-        param([string]$Path, [string[]]$Required = @())
-        & $script:Module { param($p, $r) Read-SPSLifecycleCsv -Path $p -RequiredColumn $r } $Path $Required
+        param([string]$Path, [string[]]$Required = @(), [switch]$RequireBalancedQuote)
+        & $script:Module { param($p, $r, $b) Read-SPSLifecycleCsv -Path $p -RequiredColumn $r -RequireBalancedQuote:$b } $Path $Required ([bool]$RequireBalancedQuote)
     }
 }
 
@@ -191,6 +191,49 @@ Describe 'Read-SPSLifecycleCsv' {
         }
     }
 
+    Context 'Names that only look like the names that are required' {
+        It 'does not take a name with a hidden character for a required column, and shows the character' {
+            $path = Write-TestFile -Name 'hidden.csv' -Byte (Get-TestByte -Text "Url,Site$([char]0xAD)Id`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url', 'SiteId' } | Should -Throw -ExpectedMessage '*not found*SiteId*Site\u00ADId*'
+        }
+
+        It 'still finds a required column whatever its case and the spaces around its name' {
+            $path = Write-TestFile -Name 'case.csv' -Byte (Get-TestByte -Text " URL ;siteid`r`nhttps://contoso.sharepoint.com/sites/a;x`r`n")
+
+            @(Read-TestCsv -Path $path -Required 'Url', 'SiteId') | Should -HaveCount 1
+        }
+    }
+
+    Context 'Quotes that are never closed' {
+        It 'stops on a file that ends inside a quoted field, when it is asked to check the quotes' {
+            $path = Write-TestFile -Name 'open.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"unfinished")
+
+            { Read-TestCsv -Path $path -Required 'Url' -RequireBalancedQuote } | Should -Throw -ExpectedMessage '*never closed*'
+        }
+
+        It 'stops on a quote that swallows the rows after it, when it is asked to check the quotes' {
+            $path = Write-TestFile -Name 'swallow.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"open`r`nhttps://contoso.sharepoint.com/sites/b,x`r`n")
+
+            { Read-TestCsv -Path $path -Required 'Url' -RequireBalancedQuote } | Should -Throw -ExpectedMessage '*never closed*'
+        }
+
+        It 'reads quoted fields that hold a separator, a line break and doubled quotes, when it is asked to check the quotes' {
+            $path = Write-TestFile -Name 'quoted.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"a, `"`"b`"`"`r`nc`"`r`nhttps://contoso.sharepoint.com/sites/b,x`r`n")
+
+            $rows = @(Read-TestCsv -Path $path -Required 'Url' -RequireBalancedQuote)
+
+            $rows | Should -HaveCount 2
+            $rows[0].Note | Should -Be "a, `"b`"`r`nc"
+        }
+
+        It 'does not check the quotes unless it is asked to' {
+            $path = Write-TestFile -Name 'open.csv' -Byte (Get-TestByte -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,`"unfinished")
+
+            @(Read-TestCsv -Path $path -Required 'Url') | Should -HaveCount 1
+        }
+    }
+
     Context 'Files' {
         It 'stops with a clear message when the file does not exist' {
             { Read-TestCsv -Path (Join-Path -Path $TestDrive -ChildPath 'nope.csv') } | Should -Throw -ExpectedMessage '*File not found*'
@@ -226,6 +269,67 @@ Describe 'Read-SPSLifecycleCsv' {
                 $stream.Dispose()
             }
         }
+    }
+}
+
+Describe 'Test-SPSLifecycleColumnName' {
+    It 'finds <Column> among the names, whatever the case' -ForEach @(
+        @{ Column = 'SiteId' }
+        @{ Column = 'siteid' }
+        @{ Column = 'SITEID' }
+    ) {
+        (& $script:Module { param($c) Test-SPSLifecycleColumnName -Name 'Url', 'SiteId', 'LockedOn' -Column $c } $Column) | Should -BeTrue
+    }
+
+    It 'does not find a name that only looks like the column: <Name>' -ForEach @(
+        @{ Name = 'a soft hyphen'; Text = "Site$([char]0xAD)Id" }
+        @{ Name = 'a zero-width space'; Text = "Site$([char]0x200B)Id" }
+        @{ Name = 'a no-break space'; Text = "Site$([char]0xA0)Id" }
+        @{ Name = 'another name'; Text = 'SiteIds' }
+    ) {
+        (& $script:Module { param($t) Test-SPSLifecycleColumnName -Name 'Url', $t, 'LockedOn' -Column 'SiteId' } $Text) | Should -BeFalse
+    }
+
+    It 'finds nothing in an empty list of names' {
+        (& $script:Module { Test-SPSLifecycleColumnName -Name @() -Column 'SiteId' }) | Should -BeFalse
+    }
+
+    It 'compares the same way whatever the culture: <Culture>' -ForEach @(
+        @{ Culture = 'tr-TR' }
+        @{ Culture = 'fr-FR' }
+        @{ Culture = 'de-DE' }
+    ) {
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+
+            (& $script:Module { Test-SPSLifecycleColumnName -Name 'URL', 'SITEID' -Column 'Url' }) | Should -BeTrue
+            (& $script:Module { Test-SPSLifecycleColumnName -Name "Site$([char]0xAD)Id" -Column 'SiteId' }) | Should -BeFalse
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+    }
+}
+
+Describe 'ConvertTo-SPSLifecycleVisibleText' {
+    It 'writes <Name> as <Expected>' -ForEach @(
+        @{ Name = 'a soft hyphen'; Text = "Site$([char]0xAD)Id"; Expected = 'Site\u00ADId' }
+        @{ Name = 'a zero-width space'; Text = "a$([char]0x200B)b"; Expected = 'a\u200Bb' }
+        @{ Name = 'a byte order mark'; Text = "$([char]0xFEFF)Url"; Expected = '\uFEFFUrl' }
+        @{ Name = 'a control character'; Text = "a$([char]7)b"; Expected = 'a\u0007b' }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t } $Text) | Should -BeExactly $Expected
+    }
+
+    It 'leaves a text that shows everything as it is: <Text>' -ForEach @(
+        @{ Text = 'SiteId' }
+        @{ Text = 'Équipe été' }
+        @{ Text = 'a b' }
+        @{ Text = '日本' }
+        @{ Text = '' }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t } $Text) | Should -BeExactly $Text
     }
 }
 
