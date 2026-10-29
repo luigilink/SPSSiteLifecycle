@@ -277,6 +277,7 @@ Describe 'Import-SPSLifecycleActivityReport' {
 
         It 'stops on an Is Deleted column that only looks like it, because the deleted rows would be read as live: <Name>' -ForEach @(
             @{ Name = 'a soft hyphen'; Header = "Is$([char]0xAD) Deleted" }
+            @{ Name = 'a combining mark'; Header = "Is Deleted$([char]0x307)" }
             @{ Name = 'no space'; Header = 'IsDeleted' }
             @{ Name = 'an underscore'; Header = 'Is_Deleted' }
         ) {

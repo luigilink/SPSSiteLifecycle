@@ -2,12 +2,14 @@
     <#
         .SYNOPSIS
         Writes the characters that a message would not show (a soft hyphen, a zero-width space, a control
-        character, a space that is not a plain space) as \uXXXX.
+        character, a space that is not a plain space) and the combining marks as \uXXXX.
 
         .DESCRIPTION
         A column named Site<U+00AD>Id is displayed as SiteId, so a message that says that SiteId is missing
         from "Url, SiteId, LockedOn" looks absurd. With this function the same message says
-        "Url, Site\u00ADId, LockedOn", and the reader can see what is wrong with the header.
+        "Url, Site\u00ADId, LockedOn", and the reader can see what is wrong with the header. A combining mark (the
+        dot above that turns a capital I into a dotted one) is drawn on the letter before it, so it is written
+        out as well.
 
         .PARAMETER Text
         The text to show.
@@ -30,5 +32,5 @@
         return ''
     }
 
-    [System.Text.RegularExpressions.Regex]::Replace($Text, '[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Zs}-[ ]]', { param($match) '\u{0:X4}' -f [System.Int32][System.Char]$match.Value })
+    [System.Text.RegularExpressions.Regex]::Replace($Text, '[\p{Cc}\p{Cf}\p{M}\p{Zl}\p{Zp}\p{Zs}-[ ]]', { param($match) '\u{0:X4}' -f [System.Int32][System.Char]$match.Value })
 }

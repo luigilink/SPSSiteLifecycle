@@ -240,16 +240,21 @@ Describe 'Import-SPSLifecycleLockJournal' {
         @{ Name = 'a soft hyphen'; Header = "Site$([char]0xAD)Id" }
         @{ Name = 'a zero-width space'; Header = "Site$([char]0x200B)Id" }
         @{ Name = 'a space'; Header = 'Site ID' }
+        @{ Name = 'an accent that is a separate character'; Header = "Site$([char]0x301)Id" }
+        @{ Name = 'a dot above that is a separate character'; Header = "SI$([char]0x307)TEID" }
     ) {
         $path = Write-TestFile -Folder $script:Folder -Name 'lot1.csv' -Text "Url,$Header,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2024-01-01`r`n"
 
         { Import-TestList -Path $path } | Should -Throw -ExpectedMessage "*lot1.csv*looks like 'SiteId'*"
     }
 
-    It 'does not take a column that only looks like SiteId for it: the identity is not silently lost' {
-        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,Site$([char]0xAD)Id,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2026-10-29`r`n"
+    It 'does not take a column that only looks like SiteId for it: the identity is not silently lost: <Name>' -ForEach @(
+        @{ Name = 'a soft hyphen'; Header = "Site$([char]0xAD)Id"; Shown = 'Site\u00ADId' }
+        @{ Name = 'a dot above that is a separate character'; Header = "SI$([char]0x307)TEID"; Shown = 'SI\u0307TEID' }
+    ) {
+        $path = Write-TestFile -Folder $script:Folder -Name 'lock-journal.csv' -Text "Url,$Header,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,$($script:SiteA),2026-10-29`r`n"
 
-        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage "*Site\u00ADId*looks like 'SiteId'*"
+        { Import-TestJournal -Path $path } | Should -Throw -ExpectedMessage "*$Shown*looks like 'SiteId'*"
     }
 
     It 'stops when the path is a folder' {

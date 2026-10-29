@@ -219,6 +219,9 @@ Describe 'Read-SPSLifecycleCsv' {
             @{ Name = 'a name with a zero-width space'; Header = "Site$([char]0x200B)Id" }
             @{ Name = 'a name with a no-break space'; Header = "Site$([char]0xA0)Id" }
             @{ Name = 'a name with full-width letters'; Header = 'ＳｉｔｅＩｄ' }
+            @{ Name = 'a name with an accent that is a separate character'; Header = "Site$([char]0x301)Id" }
+            @{ Name = 'a name with a dot above that is a separate character'; Header = "SI$([char]0x307)TEID" }
+            @{ Name = 'a name with a dotted capital I'; Header = "S$([char]0x130)TEID" }
         ) {
             $path = Write-TestFile -Name 'lookalike.csv' -Byte (Get-TestByte -Text "Url,$Header`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n")
 
@@ -322,6 +325,7 @@ Describe 'ConvertTo-SPSLifecycleVisibleText' {
         @{ Name = 'a zero-width space'; Text = "a$([char]0x200B)b"; Expected = 'a\u200Bb' }
         @{ Name = 'a byte order mark'; Text = "$([char]0xFEFF)Url"; Expected = '\uFEFFUrl' }
         @{ Name = 'a control character'; Text = "a$([char]7)b"; Expected = 'a\u0007b' }
+        @{ Name = 'a combining mark'; Text = "SI$([char]0x307)TEID"; Expected = 'SI\u0307TEID' }
     ) {
         (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t } $Text) | Should -BeExactly $Expected
     }

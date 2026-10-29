@@ -1,6 +1,12 @@
 ﻿BeforeAll {
     $manifest = Join-Path -Path $PSScriptRoot -ChildPath '../src/Modules/SPSSiteLifecycle.Common/SPSSiteLifecycle.Common.psd1'
     $script:Module = Import-Module -Name $manifest -Force -PassThru
+
+    # -BeExactly compares with the rules of the culture, which ignore a soft hyphen or a zero-width space: the code units are compared instead.
+    function script:ConvertTo-TestCode {
+        param([string]$Text)
+        (($Text.ToCharArray() | ForEach-Object { '{0:X4}' -f [System.Int32]$_ }) -join ' ')
+    }
 }
 
 Describe 'ConvertTo-SPSLifecycleColumnKey' {
@@ -14,12 +20,16 @@ Describe 'ConvertTo-SPSLifecycleColumnKey' {
         @{ Name = "Site$([char]0xA0)Id"; Expected = 'siteid' }
         @{ Name = 'ＳｉｔｅＩｄ'; Expected = 'siteid' }
         @{ Name = 'Locked On'; Expected = 'lockedon' }
-        @{ Name = 'Équipe'; Expected = 'équipe' }
+        @{ Name = 'Équipe'; Expected = 'equipe' }
+        @{ Name = "E$([char]0x301)quipe"; Expected = 'equipe' }
+        @{ Name = "Site$([char]0x301)Id"; Expected = 'siteid' }
+        @{ Name = "SI$([char]0x307)TEID"; Expected = 'siteid' }
+        @{ Name = "S$([char]0x130)TEID"; Expected = 'siteid' }
         @{ Name = '日本'; Expected = '日本' }
         @{ Name = ''; Expected = '' }
         @{ Name = '---'; Expected = '' }
     ) {
-        (& $script:Module { param($n) ConvertTo-SPSLifecycleColumnKey -Name $n } $Name) | Should -BeExactly $Expected
+        ConvertTo-TestCode (& $script:Module { param($n) ConvertTo-SPSLifecycleColumnKey -Name $n } $Name) | Should -BeExactly (ConvertTo-TestCode $Expected)
     }
 
     It 'gives two different names two different keys' {
@@ -35,7 +45,7 @@ Describe 'ConvertTo-SPSLifecycleColumnKey' {
         try {
             [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
 
-            (& $script:Module { ConvertTo-SPSLifecycleColumnKey -Name 'SITE ID' }) | Should -BeExactly 'siteid'
+            ConvertTo-TestCode (& $script:Module { ConvertTo-SPSLifecycleColumnKey -Name 'SITE ID' }) | Should -BeExactly (ConvertTo-TestCode 'siteid')
         }
         finally {
             [System.Globalization.CultureInfo]::CurrentCulture = $previous
@@ -84,6 +94,9 @@ Describe 'Assert-SPSLifecycleCsvHeader' {
         @{ Header = 'Site_Id' }
         @{ Header = "Site$([char]0xAD)Id" }
         @{ Header = "Site$([char]0x200B)Id" }
+        @{ Header = "Site$([char]0x301)Id" }
+        @{ Header = "SI$([char]0x307)TEID" }
+        @{ Header = "S$([char]0x130)TEID" }
     ) {
         { Assert-TestHeader -Name 'Url', $Header -Required 'Url' -Optional 'SiteId' } | Should -Throw -ExpectedMessage "*test.csv*looks like 'SiteId'*Rename*"
     }
@@ -98,6 +111,10 @@ Describe 'Assert-SPSLifecycleCsvHeader' {
 
     It 'shows the hidden character of the lookalike' {
         { Assert-TestHeader -Name 'Url', "Site$([char]0xAD)Id" -Required 'Url' -Optional 'SiteId' } | Should -Throw -ExpectedMessage '*Site\u00ADId*'
+    }
+
+    It 'shows the combining mark of the lookalike, which changes the letter before it' {
+        { Assert-TestHeader -Name 'Url', "SI$([char]0x307)TEID" -Required 'Url' -Optional 'SiteId' } | Should -Throw -ExpectedMessage '*SI\u0307TEID*looks like*'
     }
 }
 
