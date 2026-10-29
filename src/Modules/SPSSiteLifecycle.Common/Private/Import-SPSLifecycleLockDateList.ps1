@@ -12,6 +12,16 @@
         date can only delay a deletion. Two site IDs that used the same address stay two entries,
         because the second site is not the first.
 
+        A list is what a person provides, and a row that has no date says nothing about its site, so it is
+        ignored. With Strict, which the lock journal is read with, nothing is ignored: the journal is the tool's
+        own file, where every row is a lock that was recorded, so a row without a date, with a site ID that is not
+        a GUID, or with neither an address nor a site ID could hide a lock that is more recent than the other rows
+        of the site, and stops the tool. A quote that is never closed stops it too, and the SiteId column is
+        required, because a journal that lost it would attribute its dates to addresses.
+
+        The column SiteId is the one that the rows have: a header that only looks like it (a hidden character) is
+        not SiteId, and without the check the identity of every row would be lost.
+
         Returns an object with the file name, the number of rows and the entries (Url, UrlKey,
         SiteId, LockedOn, Source).
 
@@ -20,6 +30,9 @@
 
         .PARAMETER DateFormat
         Extra date formats from the CsvDateFormats setting.
+
+        .PARAMETER Strict
+        Stops on a row that cannot be used, instead of ignoring it. Used for the lock journal.
 
         .EXAMPLE
         Import-SPSLifecycleLockDateList -Path .\lock-dates.csv -DateFormat 'dd/MM/yyyy'
@@ -36,12 +49,17 @@
         [AllowNull()]
         [AllowEmptyCollection()]
         [System.String[]]
-        $DateFormat = @()
+        $DateFormat = @(),
+
+        [Parameter()]
+        [System.Management.Automation.SwitchParameter]
+        $Strict
     )
 
     $name = Split-Path -Path $Path -Leaf
-    $rows = @(Read-SPSLifecycleCsv -Path $Path -RequiredColumn 'Url', 'LockedOn')
-    $hasSiteId = $rows.Count -gt 0 -and @($rows[0].PSObject.Properties.Name) -contains 'SiteId'
+    $required = if ($Strict) { @('Url', 'SiteId', 'LockedOn') } else { @('Url', 'LockedOn') }
+    $rows = @(Read-SPSLifecycleCsv -Path $Path -RequiredColumn $required -RequireBalancedQuote:$Strict)
+    $hasSiteId = $rows.Count -gt 0 -and (Test-SPSLifecycleColumnName -Name $rows[0].PSObject.Properties.Name -Column 'SiteId')
 
     if ($rows.Count -gt 0) {
         Test-SPSLifecycleColumnPattern -Value $rows.Url -Pattern '^https?://' -What "'Url' in $name" -Hint 'The first column must hold the site URLs.'
@@ -49,15 +67,33 @@
 
     $latest = @{}
     $dateCache = @{}
+    $rowNumber = 0
     foreach ($row in $rows) {
+        $rowNumber++
         $url = "$($row.Url)".Trim()
-        $siteId = if ($hasSiteId) { ConvertTo-SPSLifecycleId -Value $row.SiteId } else { '' }
+        $givenId = if ($hasSiteId) { "$($row.SiteId)".Trim() } else { '' }
+        $siteId = if ($givenId) { ConvertTo-SPSLifecycleId -Value $givenId } else { '' }
+        $where = "File '$name', row $rowNumber (the rows that are empty are not counted)"
+
+        if ($Strict -and $givenId -and -not $siteId) {
+            throw "$where`: the site ID '$givenId' is not a GUID, or is all zeros. A row that loses its site ID would be matched by its address, and could be attributed to another site. Fix the row, or delete it."
+        }
+
         if (-not $url -and -not $siteId) {
+            if ($Strict) {
+                throw "$where has neither an address nor a site ID: its date belongs to no site, and a lock could be hidden. Fix the row, or delete it."
+            }
+
             continue
         }
 
         $text = "$($row.LockedOn)".Trim()
         if (-not $text) {
+            if ($Strict) {
+                $who = if ($siteId) { $siteId } else { $url }
+                throw "$where ($who): no lock date. The lock journal is written by the tool, so a row without a date was cut short or cleared, and an older date of the same site could be used in its place. Fix the row, or delete it."
+            }
+
             continue
         }
 
