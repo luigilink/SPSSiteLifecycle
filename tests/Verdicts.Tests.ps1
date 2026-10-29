@@ -229,6 +229,9 @@ Describe 'Get-SPSLifecycleVerdict' {
             @{ Name = 'a OneDrive host with user information and a bidirectional isolate in it'; Expected = 'SKIP-ONEDRIVE'; Action = 'Archive'; Url = "https://someone@contoso-my.share$([char]0x2066)point.com/personal/a_contoso_com"; Template = 'STS#3' }
             @{ Name = 'a OneDrive host with user information and a bidirectional isolate in it'; Expected = 'SKIP-ONEDRIVE'; Action = 'Lock'; Url = "https://someone@contoso-my.share$([char]0x2066)point.com/personal/a_contoso_com"; Template = 'STS#3' }
             @{ Name = 'an address that cannot be read'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://someone@contoso-my.sharepoint.com../personal/a_contoso_com'; Template = 'STS#3' }
+            @{ Name = 'the root site with the dot of the DNS root'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com./'; Template = 'SITEPAGEPUBLISHING#0' }
+            @{ Name = 'the root site in http'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'http://contoso.sharepoint.com/'; Template = 'SITEPAGEPUBLISHING#0' }
+            @{ Name = 'the root site with a port that is not the default one'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com:8443/'; Template = 'SITEPAGEPUBLISHING#0' }
             @{ Name = 'a system site whose template has spaces around it'; Expected = 'SKIP-PROTECTED'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/appcatalog2'; Template = ' APPCATALOG#0 ' }
             @{ Name = 'a channel site whose template has spaces around it'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/a-channel2'; Template = '  TEAMCHANNEL#1 ' }
             @{ Name = 'a channel site'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/a-channel'; Template = 'TEAMCHANNEL#1' }
@@ -463,7 +466,11 @@ Describe 'Test-SPSLifecycleOneDrive' {
         @{ Name = 'a path, which is not an address'; Url = 'sites/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'a text that is not an address'; Url = 'not an address'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
         @{ Name = 'another scheme'; Url = 'ftp://contoso.sharepoint.com/sites/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
-        @{ Name = 'a plain address of a team site with user information, a port and the dot of the DNS root'; Url = 'https://someone@contoso.sharepoint.com.:8443/sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'a team site with the dot of the DNS root: a spelling that SharePoint does not give'; Url = 'https://contoso.sharepoint.com./sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a team site with a port that is not the default one'; Url = 'https://contoso.sharepoint.com:8443/sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a team site in http'; Url = 'http://contoso.sharepoint.com/sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'the root site with the dot of the DNS root'; Url = 'https://contoso.sharepoint.com./'; Template = 'SITEPAGEPUBLISHING#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a plain address of a team site with user information and the default port written out'; Url = 'https://someone@contoso.sharepoint.com:443/sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'a plain address of a team site in capitals, with a path that is not ASCII'; Url = "HTTPS://CONTOSO.sharepoint.com/Sites/$([char]0xC9)quipe"; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'an address of spaces'; Url = '   '; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
         @{ Name = 'full-width letters in the host'; Url = "https://$([char]0xFF43)$([char]0xFF4F)$([char]0xFF4E)tos$([char]0xFF4F)-my.sharepoint.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }

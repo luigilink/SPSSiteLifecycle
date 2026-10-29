@@ -615,6 +615,9 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             @{ Name = 'an address that does not parse'; Url = 'https://someone@contoso-my.sharepoint.com../personal/f_contoso_com' }
             @{ Name = 'a text that is not an address'; Url = 'not an address' }
             @{ Name = 'another scheme'; Url = 'ftp://contoso.sharepoint.com/sites/e' }
+            @{ Name = 'the root site with the dot of the DNS root'; Url = 'https://contoso.sharepoint.com./' }
+            @{ Name = 'the root site in http'; Url = 'http://contoso.sharepoint.com/' }
+            @{ Name = 'a team site with a port that is not the default one'; Url = 'https://contoso.sharepoint.com:8443/sites/e' }
         ) {
             $site = New-ScanSite -Url $Url -Template 'STS#3'
             $other = New-ScanSite -Name 'b' -SiteId $script:SiteB
@@ -628,7 +631,7 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
         }
 
         It 'still lists a site whose address is plain, however the address is spelled: <Name>' -ForEach @(
-            @{ Name = 'the dot of the DNS root and the default port'; Url = 'https://contoso.sharepoint.com.:443/sites/e' }
+            @{ Name = 'the default port written out'; Url = 'https://contoso.sharepoint.com:443/sites/e' }
             @{ Name = 'user information'; Url = 'https://someone@contoso.sharepoint.com/sites/e' }
             @{ Name = 'capitals and a path that is not ASCII'; Url = "HTTPS://CONTOSO.sharepoint.com/Sites/$([char]0xC9)quipe" }
         ) {

@@ -16,8 +16,8 @@
 
         For each record:
 
-        1. A OneDrive site, or a site whose address cannot be read as a plain web address (nothing can say what it is),
-           is left out and counted, never listed (D12), and so is a site whose lock state is not one
+        1. A OneDrive site, or a site whose address is not in the form that SharePoint gives (nothing can say what it
+           is), is left out and counted, never listed (D12), and so is a site whose lock state is not one
            that the Scan asks for (the Scan.LockStates setting): the listing may not have been filtered by the server.
         2. A record that cannot be used stops the Scan and names its number and its address: a record without an
            address or a usable site ID (a site that cannot be matched with the reports and the lock dates, and that the

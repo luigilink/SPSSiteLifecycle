@@ -60,7 +60,7 @@
     }
 
     $lines.Add('')
-    $lines.Add('OneDrive sites (`SPSPERS#*`, or the OneDrive host of the tenant) get `SKIP-ONEDRIVE`, and so does a site whose address cannot be read as a plain web address (an address that does not parse, another scheme than http and https, a host that DNS changes or refuses), because nothing can say what it is. Teams channel sites (`TEAMCHANNEL#*`) get `SKIP-CHANNEL-SITE`.')
+    $lines.Add('OneDrive sites (`SPSPERS#*`, or the OneDrive host of the tenant) get `SKIP-ONEDRIVE`, and so does a site whose address is not in the form that SharePoint gives (an address that does not parse, http or another scheme, a port other than the default one, the dot of the DNS root, a host that DNS changes or refuses), because nothing can say what it is. Teams channel sites (`TEAMCHANNEL#*`) get `SKIP-CHANNEL-SITE`.')
     $lines.Add('')
     $lines.Add('## Templates that Microsoft 365 Archive supports')
     $lines.Add('')

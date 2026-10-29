@@ -77,15 +77,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has no address, no usable site ID or a content change that is not a date stops the Scan and names the record. The
   exclusion lists are merged into one index like the lock dates. A record whose group ID is neither empty nor a GUID,
   whose hub flag or channel flag is not True or False, or that has no template, stops the Scan too, because a
-  safeguard would silently not apply. The OneDrive rule recognizes the host of OneDrive whatever its spelling (the
-  dot of the DNS root, a port, http, user information). A site whose address cannot be read as a plain web address is
-  left out with the OneDrive sites (`SKIP-ONEDRIVE`) because nothing can say what it is: an address that does not
-  parse, a scheme other than http and https, or a host that the IDNA mapping changes (a soft hyphen, a full-width letter)
-  or refuses (a bidirectional isolate, which first made the check fail with an error, and then hid the OneDrive host
-  behind user information). A site left out by mistake is safe, and no list of spellings is complete when they are
-  combined. The system, channel and OneDrive templates are recognized whatever their case and the culture of the
-  machine: under Turkish settings the `-like` operator did not read `FUNSITE#0` as `FunSite#*`, and a system site
-  would have lost its protection by template. The core takes about 70 s for 259,000 sites instead of 250 s: the
+  safeguard would silently not apply. The OneDrive rule recognizes the host of OneDrive whatever its case and the user
+  information in front of it. A site whose address is not in the form that SharePoint gives is left out with the
+  OneDrive sites (`SKIP-ONEDRIVE`) because nothing can say what it is: an address that does not parse, a scheme other
+  than https, a port other than the default one, the dot of the DNS root, or a host that the IDNA mapping changes (a
+  soft hyphen, a full-width letter) or refuses (a bidirectional isolate, which first made the check fail with an
+  error, and then hid the OneDrive host behind user information). A site left out by mistake is safe, and no list of
+  spellings is complete when they are combined: the root site, the home site and the excluded sites are compared by
+  their address as text, and an address with the dot of the DNS root or in http would not have matched. The system,
+  channel and OneDrive templates are recognized whatever their case and the culture of the machine: under Turkish
+  settings the `-like` operator did not read `FUNSITE#0` as `FunSite#*`, and a system site would have lost its
+  protection by template. The core takes about 70 s for 259,000 sites instead of 250 s: the
   constant tables of the verdict engine are built once, and the lock date entries are hashtables, because the
   garbage collector took four fifths of the time. The tests run 5,000 and 20,000 sites and compare the times, so that
   a time that grows with the square of the size fails on any system.

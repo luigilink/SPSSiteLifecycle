@@ -12,7 +12,7 @@
 
         - SitesRead: the site records that the listing gave.
         - SitesListed: the rows that were written, one per site.
-        - LeftOutOneDrive: the OneDrive sites, and the sites whose address cannot be read as a plain web address
+        - LeftOutOneDrive: the OneDrive sites, and the sites whose address is not in the form that SharePoint gives
           (see Test-SPSLifecycleOneDrive), which are never listed (D12).
         - LeftOutLockState: the sites whose lock state is not one that the Scan lists (the Scan.LockStates setting).
         - ByVerdict: the number of rows for each verdict.
