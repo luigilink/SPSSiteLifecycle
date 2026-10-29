@@ -42,9 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before its address: a renamed site keeps its date, a site that reuses an address does not inherit the
   date of the old one, and a site whose ID is unknown has no date. The journal is read strictly, unlike a
   list: a row without a date, with a bad site ID or with no site, and a quote that is never closed, stop
-  the tool, because an ignored row could leave an older date in force. A row is added to the journal
-  without damaging a file that Excel saved: its separator and columns are kept, a file that is not UTF-8
-  or that ends inside a quoted field is refused and left as it is, and the row is flushed to the disk (#4).
+  the tool, because an ignored row could leave an older date in force. The journal goes through a strict
+  CSV reader (RFC 4180 and nothing more): a stray quote, a quote that is never closed, a row too long
+  or cut short and a value under a column with no name stop the tool and name the line of the file,
+  where `ConvertFrom-Csv` would have lost the row. A row is added to the journal without damaging a
+  file that Excel saved: its separator and columns are kept, the whole file is checked first, a file
+  that is not UTF-8 or that does not follow the CSV rules is refused and left as it is, and the row is
+  flushed to the disk (#4).
 - Column names are compared one character at a time, whatever the culture: a header with a hidden
   character (a soft hyphen) is no longer the column that it looks like, and the message shows the
-  character.
+  character. A header that only looks like a column that the tool knows (`Site ID`, `Site_Id`, a hidden
+  character, `Is Deleted` with a soft hyphen) stops the tool, because the column would be read as absent
+  and its meaning lost without a message.
