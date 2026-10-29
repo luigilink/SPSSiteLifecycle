@@ -957,4 +957,86 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             $summary.SitesListed | Should -Be 5
         }
     }
+
+    Context 'Size' {
+        BeforeAll {
+            # A listing of made-up sites (fictitious addresses and GUIDs), with the reports and the lock dates that go with it.
+            # What happens to each site follows from its number, so that the counts are known without running the code:
+            # a lock date when the number is not a multiple of 7 (otherwise SKIP-NO-LOCK-DATE), a recent activity when it is a
+            # multiple of 4 (SharePoint) or, for a site that has a group, of 5 (Teams), a group unless it is a multiple of 3,
+            # and a large size when it is a multiple of 10.
+            function script:New-SyntheticListing {
+                param([int]$Count)
+
+                $recentSharePoint = Get-TestDate '2026-10-01'
+                $recentTeams = Get-TestDate '2026-09-01'
+                $sites = [System.Collections.Generic.List[System.Object]]::new($Count)
+                $sharePointById = @{}
+                $teamsById = @{}
+                $entries = [System.Collections.Generic.List[System.Object]]::new()
+                $expected = @{}
+                for ($i = 1; $i -le $Count; $i++) {
+                    $id = '{0:x8}-0000-4000-8000-{1:x12}' -f $i, $i
+                    $group = if ($i % 3 -eq 0) { '' } else { '{0:x8}-1111-4111-8111-{1:x12}' -f $i, $i }
+                    $url = "https://contoso.sharepoint.com/sites/site$i"
+                    $size = if ($i % 10 -eq 0) { 5000 } else { 100 }
+                    $sharePointById[$id] = if ($i % 4 -eq 0) { $recentSharePoint } else { $null }
+                    if ($group) {
+                        $teamsById[$group] = if ($i % 5 -eq 0) { $recentTeams } else { $null }
+                    }
+
+                    if ($i % 7 -ne 0) {
+                        $entries.Add([PSCustomObject]@{ Url = $url; UrlKey = $url; SiteId = $id; LockedOn = $script:Old; Source = 'lot1.csv' })
+                    }
+
+                    $verdict = if ($i % 7 -eq 0) { 'SKIP-NO-LOCK-DATE' }
+                    elseif ($i % 4 -eq 0 -or ($group -and $i % 5 -eq 0)) { 'SKIP-RECENT-ACTIVITY' }
+                    elseif ($i % 10 -eq 0) { 'ARCHIVE' }
+                    elseif ($group) { 'DELETE-VIA-GROUP' }
+                    else { 'DELETE-SITE' }
+                    $expected[$verdict] = 1 + [int]$expected[$verdict]
+
+                    $sites.Add((New-ScanSite -Name "site$i" -SiteId $id -GroupId $group -Size $size))
+                }
+
+                $import = [PSCustomObject]@{ Name = 'lot1.csv'; RowCount = $entries.Count; Entries = $entries.ToArray() }
+                [PSCustomObject]@{
+                    Sites     = $sites
+                    Reports   = @((New-TestReport -Kind SharePoint -ById $sharePointById), (New-TestReport -Kind Teams -ById $teamsById))
+                    LockIndex = & $script:Module { param($i) Merge-SPSLifecycleLockDate -Import @($i) } $import
+                    Expected  = $expected
+                }
+            }
+
+            function script:Measure-SyntheticScan {
+                param([int]$Count)
+
+                $listing = New-SyntheticListing -Count $Count
+                $summary = & $script:Module { Initialize-SPSLifecycleScanSummary }
+                $parameters = @{ Setting = (New-ScanSetting); ActivityReport = $listing.Reports; LockDateIndex = $listing.LockIndex; ExclusionIndex = (New-ExclusionIndex); Summary = $summary; Now = $script:Now }
+                $watch = [System.Diagnostics.Stopwatch]::StartNew()
+                & $script:Module { param($s, $p) $null = $s | ConvertTo-SPSLifecycleScanRow @p } $listing.Sites $parameters
+                [PSCustomObject]@{ Seconds = $watch.Elapsed.TotalSeconds; Summary = $summary; Expected = $listing.Expected }
+            }
+        }
+
+        # On Windows, PowerShell copies the string arguments of every .NET method call into a log message for AMSI (D9), so a
+        # function that gives a whole file, or a whole index, to a method for each site would be quadratic there: this test
+        # runs two sizes and compares the times, so that a time that grows with the square of the size is a failure after a
+        # minute, on any system, whatever the speed of the machine.
+        It 'gives each site of a large listing the verdict that the rules give, in a time that grows with the size of the listing' -Tag 'Slow' {
+            $small = Measure-SyntheticScan -Count 5000
+            $large = Measure-SyntheticScan -Count 20000
+
+            $large.Summary.SitesRead | Should -Be 20000
+            $large.Summary.SitesListed | Should -Be 20000
+            foreach ($verdict in $large.Expected.Keys) {
+                $large.Summary.ByVerdict[$verdict] | Should -Be $large.Expected[$verdict] -Because "the verdict $verdict"
+            }
+
+            $large.Summary.ByVerdict.Count | Should -Be $large.Expected.Count
+            $large.Seconds | Should -BeLessThan 120
+            ($large.Seconds / $small.Seconds) | Should -BeLessThan 10
+        }
+    }
 }

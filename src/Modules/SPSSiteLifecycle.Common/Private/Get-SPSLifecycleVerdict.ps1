@@ -203,7 +203,6 @@
 
     $tooLarge = $sizeKnown -and (($sizeMB / 1024) -gt $Setting.DeleteMaxSizeGB)
     $deleteVerdict = if ($groupId) { 'DELETE-VIA-GROUP' } else { 'DELETE-SITE' }
-    $archivable = Test-SPSLifecycleArchivableTemplate -Template $template
 
     switch ($Action) {
         'Lock' {
@@ -211,7 +210,7 @@
         }
 
         'Archive' {
-            if (-not $archivable) {
+            if (-not (Test-SPSLifecycleArchivableTemplate -Template $template)) {
                 return 'SKIP-NOT-ARCHIVABLE'
             }
 
@@ -235,7 +234,7 @@
                 return $deleteVerdict
             }
 
-            if (-not $archivable) {
+            if (-not (Test-SPSLifecycleArchivableTemplate -Template $template)) {
                 return 'SKIP-NOT-ARCHIVABLE'
             }
 
