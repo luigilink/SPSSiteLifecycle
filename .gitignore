@@ -1,0 +1,37 @@
+# Logs and runtime artifacts
+logs
+**/Logs/
+*.log
+
+# Customer and tenant data: site lists, usage reports, inventories and reports are
+# never committed. Only made-up fixtures under tests/ and *.example.csv files are tracked.
+*.csv
+*.xlsx
+!tests/**/*.csv
+!**/*.example.csv
+Reports/
+**/Reports/
+/private/
+
+# Local configuration (never commit tenant names, client IDs or other environment values):
+# only the example settings file is tracked
+*.local.psd1
+config/*.psd1
+src/config/*.psd1
+!config/*.example.psd1
+!src/config/*.example.psd1
+
+# OSX
+.DS_Store
+
+# Visual Studio Code
+.vscode/
+
+# JetBrains (Rider / PowerShell plugin)
+.idea/
+
+# Pester / PowerShell test artifacts
+*.coverage.xml
+*.testResults.xml
+testResults.xml
+test-results.xml

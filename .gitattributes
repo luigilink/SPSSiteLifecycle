@@ -1,0 +1,30 @@
+# SPSSiteLifecycle line-ending and encoding policy
+#
+# PowerShell files are stored with a UTF-8 BOM (the BOM is part of the committed content)
+# and checked out with CRLF, like the other SPS* repositories. The BOM keeps non-ASCII
+# characters readable by every host, and CRLF is native on the Windows machines the tool
+# runs on.
+#
+# YAML, Markdown and other text files must NOT carry a BOM (it breaks some YAML
+# parsers and is unwanted on GitHub-rendered files); they use LF.
+
+* text=auto eol=lf
+
+# PowerShell -- committed with a UTF-8 BOM, checked out with CRLF
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.psd1  text eol=crlf
+
+# Workflows / docs / config -- no BOM, LF
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+
+# CSV fixtures are stored byte for byte, so that a file saved by Excel (BOM, CRLF line
+# endings, semicolons) is tested exactly as written
+*.csv   -text
+
+# Binary-ish artifacts
+*.png binary
+*.zip binary
