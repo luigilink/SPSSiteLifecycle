@@ -1,9 +1,10 @@
 ﻿<#
     .SYNOPSIS
-    Regenerates the Configuration and Verdicts pages of the wiki.
+    Regenerates the Configuration, Verdicts and Report pages of the wiki.
 
     .DESCRIPTION
-    Both pages are built from data of the module: the settings schema and the verdict catalog.
+    The pages are built from data of the module: the settings schema, the verdict catalog and the table
+    of the report columns.
     A test fails when a committed page differs from what this script writes, so run it after any
     change to the schema or the catalog, and commit the result.
 
@@ -29,6 +30,7 @@ $module = Import-Module -Name $manifest -Force -PassThru
 $pages = [ordered]@{
     'Configuration.md' = & $module { Get-SPSLifecycleConfigurationPage }
     'Verdicts.md'      = & $module { Get-SPSLifecycleVerdictPage }
+    'Report.md'        = & $module { Get-SPSLifecycleReportPage }
 }
 
 $encoding = [System.Text.UTF8Encoding]::new($false)
