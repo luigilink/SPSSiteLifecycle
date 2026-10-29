@@ -20,10 +20,24 @@
         it is missing. An existing file is never overwritten: it is a reviewed document, and a run that
         starts in the same second as an earlier one stops instead of replacing it.
 
+        The records can come from the pipeline, and each line is written as soon as its record arrives, so
+        that a report of 260,000 sites needs no more memory than one of 100. PowerShell keeps several KB for
+        each record that it has read and that is still referenced: pass the records through the pipeline
+        instead of collecting them first.
+
+        The lines go to a partial file in the same folder. The partial file takes the name of the report only
+        when it is complete, by a move that refuses to replace a file. A run that stops half-way (a record
+        that cannot be written, a full disk, Ctrl+C) leaves no report that looks complete: a reader would take
+        the lines written so far for the whole report.
+
+        A character that UTF-8 cannot hold (half of a surrogate pair) is written as U+FFFD, because one odd
+        title must not stop a report of 260,000 sites.
+
         Returns the full path of the file.
 
         .PARAMETER Row
-        The site records. A property that a record does not have gives an empty cell.
+        The site records, as objects or as dictionaries (a hashtable), from the pipeline or as an array. A
+        property or a key that a record does not have gives an empty cell.
 
         .PARAMETER OutputFolder
         The folder to write in. A relative folder is relative to the location of the PowerShell session.
@@ -38,13 +52,13 @@
         The start of the file name. Default: sites.
 
         .EXAMPLE
-        Export-SPSLifecycleReport -Row $rows -OutputFolder .\Reports -Delimiter ';'
+        $verdicts | Export-SPSLifecycleReport -OutputFolder .\Reports -Delimiter ';'
     #>
     [CmdletBinding()]
     [OutputType([System.String])]
     param
     (
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
         [AllowEmptyCollection()]
         [System.Object[]]
         $Row,
@@ -68,42 +82,104 @@
         $Prefix = 'sites'
     )
 
-    $columns = @(Get-SPSLifecycleReportColumn)
-    $runCell = ConvertTo-SPSLifecycleReportCell -Kind Run -Value $GeneratedOn
+    begin {
+        $stream = $null
+        $writer = $null
+        $partial = ''
+        $published = $false
+        $number = 0
 
-    $folder = Resolve-SPSLifecycleFileSystemPath -Path $OutputFolder
-    $null = [System.IO.Directory]::CreateDirectory($folder)
-    $path = Join-Path -Path $folder -ChildPath "$Prefix-$runCell.csv"
-    if (Test-Path -LiteralPath $path) {
-        throw "The report '$path' already exists and is never overwritten. Wait a second and run again, or move the file."
-    }
+        $columns = @(Get-SPSLifecycleReportColumn)
+        $runCell = ConvertTo-SPSLifecycleReportCell -Kind Run -Value $GeneratedOn
 
-    $builder = [System.Text.StringBuilder]::new()
-    $null = $builder.Append((($columns | ForEach-Object { $_.Name }) -join $Delimiter)).Append("`r`n")
-
-    foreach ($record in $Row) {
-        $cells = foreach ($column in $columns) {
-            $property = $record.PSObject.Properties[$column.Name]
-            $value = if ($null -ne $property) { $property.Value } else { $null }
-            if ($column.Kind -eq 'Run') {
-                $value = $GeneratedOn
-            }
-
-            $cell = ConvertTo-SPSLifecycleReportCell -Kind $column.Kind -Value $value
-            ConvertTo-SPSLifecycleCsvField -Text $cell -Delimiter $Delimiter
+        $folder = Resolve-SPSLifecycleFileSystemPath -Path $OutputFolder
+        $null = [System.IO.Directory]::CreateDirectory($folder)
+        $path = Join-Path -Path $folder -ChildPath "$Prefix-$runCell.csv"
+        $existsMessage = "The report '$path' already exists and is never overwritten. Wait a second and run again, or move the file."
+        if (Test-Path -LiteralPath $path) {
+            throw $existsMessage
         }
 
-        $null = $builder.Append(($cells -join $Delimiter)).Append("`r`n")
+        $partial = '{0}.{1}.partial' -f $path, [System.Guid]::NewGuid().ToString('N').Substring(0, 8)
+        $stream = [System.IO.File]::Open($partial, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $writer = [System.IO.StreamWriter]::new($stream, [System.Text.UTF8Encoding]::new($true, $false), 65536)
+        $writer.Write((($columns | ForEach-Object { $_.Name }) -join $Delimiter) + "`r`n")
     }
 
-    $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-    try {
-        $bytes = [System.Text.UTF8Encoding]::new($true).GetPreamble() + [System.Text.UTF8Encoding]::new($false).GetBytes($builder.ToString())
-        $stream.Write($bytes, 0, $bytes.Length)
-    }
-    finally {
-        $stream.Dispose()
+    process {
+        foreach ($record in $Row) {
+            $number++
+            $current = ''
+            try {
+                if ($null -eq $record) {
+                    throw 'the record is empty.'
+                }
+
+                $isDictionary = $record -is [System.Collections.IDictionary]
+                $cells = foreach ($column in $columns) {
+                    $current = $column.Name
+                    $value = $null
+                    if ($isDictionary) {
+                        if ($record.Contains($column.Name)) {
+                            $value = $record[$column.Name]
+                        }
+                    }
+                    else {
+                        $property = $record.PSObject.Properties[$column.Name]
+                        if ($null -ne $property) {
+                            $value = $property.Value
+                        }
+                    }
+
+                    if ($column.Kind -eq 'Run') {
+                        $value = $GeneratedOn
+                    }
+
+                    $cell = ConvertTo-SPSLifecycleReportCell -Kind $column.Kind -Value $value
+                    ConvertTo-SPSLifecycleCsvField -Text $cell -Delimiter $Delimiter
+                }
+            }
+            catch {
+                $site = if ($isDictionary) { "$($record['Url'])" } elseif ($null -ne $record) { "$($record.Url)" } else { '' }
+                $where = if ($site) { " ($site)" } else { '' }
+                $what = if ($current) { ", column $current" } else { '' }
+                throw "Cannot write row $number$where$what`: $($_.Exception.Message)"
+            }
+
+            $writer.Write(($cells -join $Delimiter) + "`r`n")
+        }
     }
 
-    $path
+    end {
+        $writer.Flush()
+        $stream.Flush($true)
+        $writer.Dispose()
+
+        try {
+            [System.IO.File]::Move($partial, $path)
+        }
+        catch [System.IO.IOException] {
+            if (Test-Path -LiteralPath $path) {
+                throw $existsMessage
+            }
+
+            throw
+        }
+
+        $published = $true
+        $path
+    }
+
+    clean {
+        if ($null -ne $writer) {
+            $writer.Dispose()
+        }
+        elseif ($null -ne $stream) {
+            $stream.Dispose()
+        }
+
+        if ($partial -and -not $published) {
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+        }
+    }
 }

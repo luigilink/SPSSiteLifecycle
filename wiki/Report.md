@@ -14,6 +14,7 @@ The Scan phase writes one CSV file, `sites-<time of the run>.csv`, in `OutputFol
 - There is no column for the owners of a site, because they are personal data.
 - `Decision` is always written empty. The tool never decides in the place of a person.
 - An existing file is never overwritten. It is a reviewed document.
+- The report is written to a partial file (`.partial`) that takes the name of the report only when it is complete. A run that stops half-way (a record that cannot be written, a full disk, Ctrl+C) never leaves a report that looks complete.
 
 ## Columns
 

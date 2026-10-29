@@ -38,6 +38,11 @@
         & $script:Module { param($r, $f, $d, $g) Export-SPSLifecycleReport -Row $r -OutputFolder $f -Delimiter $d -GeneratedOn $g } $Row $Folder $Delimiter $GeneratedOn
     }
 
+    function script:Invoke-TestPipelineExport {
+        param($Row, [string]$Folder, [char]$Delimiter = ',', $GeneratedOn = $script:GeneratedOn)
+        & $script:Module { param($r, $f, $d, $g) $r | Export-SPSLifecycleReport -OutputFolder $f -Delimiter $d -GeneratedOn $g } $Row $Folder $Delimiter $GeneratedOn
+    }
+
     function script:Get-TestCell {
         param([string]$Kind, $Value)
         & $script:Module { param($k, $v) ConvertTo-SPSLifecycleReportCell -Kind $k -Value $v } $Kind $Value
@@ -322,6 +327,23 @@ Describe 'Export-SPSLifecycleReport' {
             $row.StorageUsedMB | Should -BeExactly ''
         }
 
+        It 'reads a record that is a hashtable or an ordered dictionary, and does not drop its fields' {
+            $hashtable = @{ Url = 'https://contoso.sharepoint.com/sites/a'; SiteId = 'A6E20079-2D1A-4E9D-BC9F-94E3F2EFEB64'; Title = 'Sales'; StorageUsedMB = 12.4; Owners = 'someone@contoso.com' }
+            $ordered = [ordered]@{ Url = 'https://contoso.sharepoint.com/sites/b'; Title = 'HR'; IsTeamsConnected = $true }
+            $path = Invoke-TestExport -Row @($hashtable, $ordered) -Folder (New-TestFolder)
+            $rows = @(Import-Csv -LiteralPath $path)
+
+            $rows | Should -HaveCount 2
+            $rows[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/a'
+            $rows[0].SiteId | Should -BeExactly 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'
+            $rows[0].Title | Should -BeExactly 'Sales'
+            $rows[0].StorageUsedMB | Should -BeExactly '12'
+            $rows[1].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/b'
+            $rows[1].Title | Should -BeExactly 'HR'
+            $rows[1].IsTeamsConnected | Should -BeExactly 'True'
+            (Get-Content -LiteralPath $path -Raw) | Should -Not -Match 'someone@contoso.com'
+        }
+
         It 'never writes a property that is not a column, the owners above all' {
             $record = New-TestRecord
             $record | Add-Member -NotePropertyName Owners -NotePropertyValue 'someone@contoso.com'
@@ -371,12 +393,78 @@ Describe 'Export-SPSLifecycleReport' {
             @(Get-ChildItem -LiteralPath $folder -Filter 'sites-*.csv') | Should -HaveCount 2
         }
 
+        It 'leaves only the report in the folder, with no partial file' {
+            $folder = New-TestFolder
+            $path = Invoke-TestExport -Row @((New-TestRecord), (New-TestRecord -Url 'https://contoso.sharepoint.com/sites/b')) -Folder $folder
+
+            @(Get-ChildItem -LiteralPath $folder -Force | ForEach-Object FullName) | Should -BeExactly @($path)
+        }
+
+        It 'names the row that it cannot write, and leaves nothing on disk' {
+            $folder = New-TestFolder
+            $bad = New-TestRecord -Url 'https://contoso.sharepoint.com/sites/bad'
+            $bad.LastActivity = 'not a date'
+            $rows = @((New-TestRecord), $bad, (New-TestRecord -Url 'https://contoso.sharepoint.com/sites/c'))
+
+            { Invoke-TestExport -Row $rows -Folder $folder } | Should -Throw -ExpectedMessage '*row 2*https://contoso.sharepoint.com/sites/bad*'
+
+            @(Get-ChildItem -LiteralPath $folder -Force) | Should -HaveCount 0 -Because 'a report that stops half-way must not look like a complete one'
+        }
+
+        It 'never replaces a report that appears while it writes, and leaves no partial file' {
+            $folder = New-TestFolder
+            $script:RacePath = Join-Path -Path $folder -ChildPath 'sites-20261028T163000Z.csv'
+            $record = New-TestRecord
+            $record | Add-Member -MemberType ScriptProperty -Name Title -Force -Value { [System.IO.File]::WriteAllText($script:RacePath, 'reviewed'); 'Sales' }
+
+            { Invoke-TestExport -Row @($record) -Folder $folder } | Should -Throw -ExpectedMessage '*already exists*'
+
+            [System.IO.File]::ReadAllText($script:RacePath) | Should -BeExactly 'reviewed'
+            @(Get-ChildItem -LiteralPath $folder -Force) | Should -HaveCount 1
+        }
+
+        It 'writes a character that UTF-8 cannot hold as U+FFFD, and keeps the rest of the report' {
+            $odd = New-TestRecord -Title ('x' + [char]0xD800 + 'y')
+            $path = Invoke-TestExport -Row @($odd, (New-TestRecord -Url 'https://contoso.sharepoint.com/sites/b' -Title 'HR')) -Folder (New-TestFolder)
+            $rows = @(Import-Csv -LiteralPath $path)
+
+            $rows | Should -HaveCount 2
+            $rows[0].Title | Should -BeExactly "x`u{FFFD}y"
+            $rows[1].Title | Should -BeExactly 'HR'
+        }
+
         It 'refuses a delimiter that is not a comma, a semicolon or a tab' {
             { Invoke-TestExport -Row @((New-TestRecord)) -Folder (New-TestFolder) -Delimiter '|' } | Should -Throw
         }
 
         It 'refuses a file name prefix that could leave the folder' {
             { & $script:Module { param($f, $g) Export-SPSLifecycleReport -Row @() -OutputFolder $f -GeneratedOn $g -Prefix '../evil' } (New-TestFolder) $script:GeneratedOn } | Should -Throw
+        }
+    }
+
+    Context 'Records from the pipeline' {
+        It 'writes the same file as the same records given as an array' {
+            $records = @((New-TestRecord), (New-TestRecord -Url 'https://contoso.sharepoint.com/sites/hr' -Title 'HR'))
+            $fromArray = Invoke-TestExport -Row $records -Folder (New-TestFolder)
+            $fromPipeline = Invoke-TestPipelineExport -Row $records -Folder (New-TestFolder)
+
+            [System.IO.File]::ReadAllBytes($fromPipeline) | Should -Be ([System.IO.File]::ReadAllBytes($fromArray))
+        }
+
+        It 'writes only the header for an empty pipeline' {
+            $path = Invoke-TestPipelineExport -Row @() -Folder (New-TestFolder)
+
+            @(Get-Content -LiteralPath $path) | Should -HaveCount 1
+        }
+
+        It 'stops at the record that cannot be written, and leaves nothing on disk' {
+            $folder = New-TestFolder
+            $bad = New-TestRecord -Url 'https://contoso.sharepoint.com/sites/bad'
+            $bad.LastActivity = 'not a date'
+
+            { Invoke-TestPipelineExport -Row @((New-TestRecord), $bad, (New-TestRecord)) -Folder $folder } | Should -Throw -ExpectedMessage '*row 2*'
+
+            @(Get-ChildItem -LiteralPath $folder -Force) | Should -HaveCount 0
         }
     }
 

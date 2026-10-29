@@ -42,6 +42,7 @@
     $lines.Add('- There is no column for the owners of a site, because they are personal data.')
     $lines.Add('- `Decision` is always written empty. The tool never decides in the place of a person.')
     $lines.Add('- An existing file is never overwritten. It is a reviewed document.')
+    $lines.Add('- The report is written to a partial file (`.partial`) that takes the name of the report only when it is complete. A run that stops half-way (a record that cannot be written, a full disk, Ctrl+C) never leaves a report that looks complete.')
     $lines.Add('')
     $lines.Add('## Columns')
     $lines.Add('')
