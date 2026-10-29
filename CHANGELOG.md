@@ -78,7 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exclusion lists are merged into one index like the lock dates. A record whose group ID is neither empty nor a GUID,
   whose hub flag or channel flag is not True or False, or that has no template, stops the Scan too, because a
   safeguard would silently not apply. The OneDrive rule recognizes the host of OneDrive whatever its spelling (the
-  dot of the DNS root, a port, http, user information). The core takes 75 s for 259,000 sites instead of 250 s: the
+  dot of the DNS root, a port, http, user information). The system, channel and OneDrive templates are recognized
+  whatever their case and the culture of the machine: under Turkish settings the `-like` operator did not read
+  `FUNSITE#0` as `FunSite#*`, and a system site would have lost its protection by template. The core takes 75 s for 259,000 sites instead of 250 s: the
   constant tables of the verdict engine are built once, and the lock date entries are hashtables, because the
   garbage collector took four fifths of the time. The tests run 5,000 and 20,000 sites and compare the times, so that
   a time that grows with the square of the size fails on any system.

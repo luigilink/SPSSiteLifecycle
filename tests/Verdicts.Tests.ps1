@@ -454,3 +454,69 @@ Describe 'Test-SPSLifecycleOneDrive' {
         (Test-TestOneDrive -Url $Url -Template $Template -Tenant $Tenant) | Should -Be $Expected
     }
 }
+
+Describe 'The template safeguards do not depend on the culture' {
+    BeforeAll {
+        function script:Use-TestCulture {
+            param([string]$Culture, [scriptblock]$Script)
+            $previous = [System.Globalization.CultureInfo]::CurrentCulture
+            try {
+                [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+                & $Script
+            }
+            finally {
+                [System.Globalization.CultureInfo]::CurrentCulture = $previous
+            }
+        }
+    }
+
+    It 'protects every system template, as written, in capitals and in lowercase, under <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }
+        @{ Culture = 'fr-FR' }
+        @{ Culture = 'de-DE' }
+        @{ Culture = 'tr-TR' }
+    ) {
+        $unprotected = Use-TestCulture -Culture $Culture -Script {
+            & $script:Module {
+                $unprotected = [System.Collections.Generic.List[System.String]]::new()
+                foreach ($row in Get-SPSLifecycleProtectedTemplate) {
+                    $template = $row.Pattern.Replace('*', '0')
+                    foreach ($variant in $template, $template.ToUpperInvariant(), $template.ToLowerInvariant()) {
+                        $site = [PSCustomObject]@{ Url = 'https://contoso.sharepoint.com/sites/system'; Template = $variant; IsHubSite = $false }
+                        if (-not (Test-SPSLifecycleProtectedSite -Site $site -TenantUrl 'https://contoso.sharepoint.com')) {
+                            $unprotected.Add($variant)
+                        }
+                    }
+                }
+
+                , $unprotected.ToArray()
+            }
+        }
+
+        @($unprotected) | Should -HaveCount 0 -Because "these templates were not protected under ${Culture}: $($unprotected -join ', ')"
+    }
+
+    It 'gives the verdict of a system, a channel and a OneDrive template whatever its case, under <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }
+        @{ Culture = 'tr-TR' }
+    ) {
+        $setting = [PSCustomObject]@{ TenantName = 'contoso'; TenantUrl = 'https://contoso.sharepoint.com'; AcceptedLockStates = @('Unlock'); MinLockedDays = 365; DeleteMaxSizeGB = 1.0; Scan = [PSCustomObject]@{ InactiveDays = 365 } }
+        $verdicts = Use-TestCulture -Culture $Culture -Script {
+            & $script:Module {
+                param($setting)
+                foreach ($template in 'FUNSITE#0', 'funsite#0', 'TESTSITE#0', 'redirectsite#0', 'EDISC#0', 'TEAMCHANNEL#1', 'teamchannel#1', 'SPSPERS#10', 'spspers#10') {
+                    $site = [PSCustomObject]@{
+                        Url = 'https://contoso.sharepoint.com/sites/x'; Template = $template; LockState = 'Unlock'; GroupId = ''
+                        IsHubSite = $false; IsTeamsChannelConnected = $false; ArchiveStatus = 'NotArchived'; StorageUsedMB = 100
+                    }
+                    '{0}={1}' -f $template, (Get-SPSLifecycleVerdict -Site $site -Setting $setting -Action Delete)
+                }
+            } $setting
+        }
+
+        @($verdicts) | Should -Be @(
+            'FUNSITE#0=SKIP-PROTECTED', 'funsite#0=SKIP-PROTECTED', 'TESTSITE#0=SKIP-PROTECTED', 'redirectsite#0=SKIP-PROTECTED', 'EDISC#0=SKIP-PROTECTED'
+            'TEAMCHANNEL#1=SKIP-CHANNEL-SITE', 'teamchannel#1=SKIP-CHANNEL-SITE', 'SPSPERS#10=SKIP-ONEDRIVE', 'spspers#10=SKIP-ONEDRIVE'
+        )
+    }
+}

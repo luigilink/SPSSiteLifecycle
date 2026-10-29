@@ -114,7 +114,7 @@
         return 'SKIP-ONEDRIVE'
     }
 
-    if ($template -like 'TEAMCHANNEL#*' -or $Site.IsTeamsChannelConnected -eq $true) {
+    if ($template.StartsWith('TEAMCHANNEL#', [System.StringComparison]::OrdinalIgnoreCase) -or $Site.IsTeamsChannelConnected -eq $true) {
         return 'SKIP-CHANNEL-SITE'
     }
 

@@ -6,7 +6,8 @@
         .DESCRIPTION
         A site is a OneDrive site when its template is a personal one (SPSPERS#*) or when it is at the OneDrive
         host of the tenant (contoso-my.sharepoint.com for the tenant contoso). The host that DNS sees is compared
-        whole, without regard to the case, to the dot of the DNS root that may end it, to the port, to the scheme and
+        whole, without regard to the case (and not to the culture: Turkish does not read an i like English does), to the
+        dot of the DNS root that may end it, to the port, to the scheme and
         to user information: contoso-my.sharepoint.com. and http://someone@contoso-my.sharepoint.com:8443 are the
         OneDrive host too. It is the host after the IDNA mapping (IdnHost), which drops the characters that DNS
         ignores (a soft hyphen, a zero-width space, a byte order mark) and turns full-width letters into plain ones:
@@ -42,7 +43,7 @@
         $TenantName
     )
 
-    if ("$($Site.Template)".Trim() -like 'SPSPERS#*') {
+    if ("$($Site.Template)".Trim().StartsWith('SPSPERS#', [System.StringComparison]::OrdinalIgnoreCase)) {
         return $true
     }
 

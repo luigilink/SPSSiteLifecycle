@@ -11,10 +11,11 @@
         well, because deleting them would break a service.
 
         OneDrive (SPSPERS) and Teams channel sites (TEAMCHANNEL) have their own verdicts.
-        The patterns are wildcards for the -like operator.
+        The patterns are wildcards, in the syntax of the -like operator. They are matched without regard to the case
+        and without regard to the culture of the machine (see Test-SPSLifecycleProtectedSite).
 
         .EXAMPLE
-        Get-SPSLifecycleProtectedTemplate | Where-Object { 'APPCATALOG#0' -like $_.Pattern }
+        Get-SPSLifecycleProtectedTemplate | Select-Object -Property Pattern, Reason
     #>
     [CmdletBinding()]
     [OutputType([System.Management.Automation.PSObject[]])]
