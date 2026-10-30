@@ -100,7 +100,7 @@
         return & $result $true $false "The checkpoint is damaged: $problem" $null $false 'damaged'
     }
 
-    if ($json.State -ceq 'Completed') {
+    if ([System.String]::Equals($json.State, 'Completed', [System.StringComparison]::Ordinal)) {
         return & $result $true $false 'The previous listing finished, and a finished listing is never reused to answer a new Scan: a new one starts.' $null $true 'finished'
     }
 
@@ -108,13 +108,13 @@
         return & $result $true $false "The checkpoint was made for the tenant '$(ConvertTo-SPSLifecycleVisibleText -Text $json.Tenant)', not for '$(ConvertTo-SPSLifecycleVisibleText -Text $Tenant)'." $null $false 'other-tenant'
     }
 
-    if ($json.Filter -cne $Filter) {
+    if (-not [System.String]::Equals($json.Filter, $Filter, [System.StringComparison]::Ordinal)) {
         $was = if ($json.Filter) { $json.Filter } else { '(none)' }
         $is = if ($Filter) { $Filter } else { '(none)' }
         return & $result $true $false "The filter changed (it was $was, it is $is)." $null $false 'other-filter'
     }
 
-    if ($json.Options -cne $Options) {
+    if (-not [System.String]::Equals($json.Options, $Options, [System.StringComparison]::Ordinal)) {
         return & $result $true $false "The way the sites are asked changed (it was $($json.Options), it is $Options)." $null $false 'other-options'
     }
 
@@ -139,7 +139,7 @@
             return & $result $true $false "The checkpoint is damaged: the page $($page.Number) is missing." $null $false 'damaged'
         }
 
-        if ((Get-FileHash -LiteralPath $pagePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $page.Sha256) {
+        if (-not [System.String]::Equals((Get-FileHash -LiteralPath $pagePath -Algorithm SHA256).Hash.ToLowerInvariant(), $page.Sha256, [System.StringComparison]::Ordinal)) {
             return & $result $true $false "The checkpoint is damaged: the page $($page.Number) was changed (its hash is not the one that was saved)." $null $false 'damaged'
         }
     }

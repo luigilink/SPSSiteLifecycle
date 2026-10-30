@@ -51,7 +51,7 @@
         }
     }
 
-    if ($Manifest.State -cne 'Running' -and $Manifest.State -cne 'Completed') {
+    if (-not [System.String]::Equals($Manifest.State, 'Running', [System.StringComparison]::Ordinal) -and -not [System.String]::Equals($Manifest.State, 'Completed', [System.StringComparison]::Ordinal)) {
         return "the state '$(ConvertTo-SPSLifecycleVisibleText -Text $Manifest.State)' is not one that the tool writes (Running or Completed)."
     }
 
@@ -105,7 +105,7 @@
             return "the pages are not numbered from 1 without a gap ($label is numbered $($page.Number))."
         }
 
-        if ($page.File -isnot [System.String] -or $page.File -cne ('page-{0}.csv' -f ($index + 1).ToString('D6', [System.Globalization.CultureInfo]::InvariantCulture))) {
+        if ($page.File -isnot [System.String] -or -not [System.String]::Equals($page.File, ('page-{0}.csv' -f ($index + 1).ToString('D6', [System.Globalization.CultureInfo]::InvariantCulture)), [System.StringComparison]::Ordinal)) {
             return "the file of $label is not the one that the tool names after its number."
         }
 
@@ -118,11 +118,11 @@
         }
 
         if ($index -eq 0) {
-            if ($page.Token -cne '') {
+            if ($page.Token.Length -ne 0) {
                 return "the first page was not asked with the first token (an empty one), but with '$(ConvertTo-SPSLifecycleVisibleText -Text $page.Token)'."
             }
         }
-        elseif ($page.Token -cne $pages[$index - 1].NextToken) {
+        elseif (-not [System.String]::Equals($page.Token, $pages[$index - 1].NextToken, [System.StringComparison]::Ordinal)) {
             return "the token of $label is not the one that page $index gave."
         }
 
@@ -139,23 +139,23 @@
         }
     }
 
-    if ($Manifest.ListingComplete -and $Manifest.NextToken -ne '') {
+    if ($Manifest.ListingComplete -and $Manifest.NextToken.Length -ne 0) {
         return 'the listing is complete and still has a token to go on with.'
     }
 
-    if ($Manifest.State -ceq 'Running' -and $Manifest.ListingComplete -and $pages.Count -eq 0) {
+    if ([System.String]::Equals($Manifest.State, 'Running', [System.StringComparison]::Ordinal) -and $Manifest.ListingComplete -and $pages.Count -eq 0) {
         return 'the listing is running, complete, and lists no page (a listing that is not finished always has read at least one, even for a tenant of no site).'
     }
 
-    if (-not $Manifest.ListingComplete -and $pages.Count -gt 0 -and $Manifest.NextToken -eq '') {
+    if (-not $Manifest.ListingComplete -and $pages.Count -gt 0 -and $Manifest.NextToken.Length -eq 0) {
         return 'the listing is not complete and has no token to go on with.'
     }
 
-    if ($Manifest.State -ceq 'Completed' -and -not $Manifest.ListingComplete) {
+    if ([System.String]::Equals($Manifest.State, 'Completed', [System.StringComparison]::Ordinal) -and -not $Manifest.ListingComplete) {
         return 'the listing is marked finished and is not complete.'
     }
 
-    if ($pages.Count -gt 0 -and $pages[$pages.Count - 1].NextToken -cne $Manifest.NextToken) {
+    if ($pages.Count -gt 0 -and -not [System.String]::Equals($pages[$pages.Count - 1].NextToken, $Manifest.NextToken, [System.StringComparison]::Ordinal)) {
         return 'the token to go on with is not the one that the last page gave.'
     }
 

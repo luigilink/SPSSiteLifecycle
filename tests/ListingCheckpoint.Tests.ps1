@@ -247,6 +247,15 @@ Describe 'Get-SPSLifecycleListingManifestProblem' {
         @{ Name = 'a listing that is complete and has a token'; Edit = { param($m) $m.ListingComplete = $true }; Reason = 'the listing is complete and still has a token to go on with.' }
         @{ Name = 'a listing that has pages, is not complete and has no token'; Edit = { param($m) $m.NextToken = '' }; Reason = 'the listing is not complete and has no token to go on with.' }
         @{ Name = 'a listing that is marked finished and is not complete'; Edit = { param($m) $m.State = 'Completed' }; Reason = 'the listing is marked finished and is not complete.' }
+        @{ Name = 'a token that differs from the one that the page before gave by a character that is not shown'; Edit = { param($m) $m.Pages[1].Token = "next-1$([char]0x00AD)" }; Reason = 'the token of page 2 is not the one that page 1 gave.' }
+        @{ Name = 'a token given by a page that differs by a character that is not shown from the one that the next page was asked with'; Edit = { param($m) $m.Pages[0].NextToken = "next-1$([char]0x00AD)" }; Reason = 'the token of page 2 is not the one that page 1 gave.' }
+        @{ Name = 'a token to go on with that differs from the one that the last page gave by a character that is not shown'; Edit = { param($m) $m.NextToken = "next-2$([char]0x00AD)" }; Reason = 'the token to go on with is not the one that the last page gave.' }
+        @{ Name = 'a first page that was asked with a token that is only a character that is not shown'; Edit = { param($m) $m.Pages[0].Token = [string][char]0x00AD }; Reason = 'the first page was not asked with the first token*' }
+        @{ Name = 'a complete listing whose token to go on with is only a character that is not shown'; Edit = { param($m) $m.ListingComplete = $true; $m.NextToken = [string][char]0x00AD }; Reason = 'the listing is complete and still has a token to go on with.' }
+        @{ Name = 'a listing that has pages whose token to go on with is only a character that is not shown'; Edit = { param($m) $m.NextToken = [string][char]0x00AD }; Reason = 'the token to go on with is not the one that the last page gave.' }
+        @{ Name = 'a state that differs by a character that is not shown'; Edit = { param($m) $m.State = "Running$([char]0x00AD)" }; Reason = "the state 'Running*' is not one that the tool writes*" }
+        @{ Name = 'a finished state that differs by a character that is not shown'; Edit = { param($m) $m.State = "Completed$([char]0x00AD)" }; Reason = "the state 'Completed*' is not one that the tool writes*" }
+        @{ Name = 'a file name that differs by a character that is not shown'; Edit = { param($m) $m.Pages[0].File = "page-000001.csv$([char]0x00AD)" }; Reason = 'the file of page 1 is not the one that the tool names after its number.' }
     ) {
         Get-TestProblem -Edit $Edit | Should -BeLike $Reason
     }
@@ -705,6 +714,8 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
             @{ Name = 'the filter changed'; Tenant = 'contoso'; Filter = "LockState -eq 'Unlock'"; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*filter*'; Code = 'other-filter' }
             @{ Name = 'the filter was removed'; Tenant = 'contoso'; Filter = ''; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*filter*'; Code = 'other-filter' }
             @{ Name = 'the way the sites are asked changed'; Tenant = 'contoso'; Filter = "LockState -eq 'ReadOnly'"; Options = 'Source=Cmdlet'; Expected = '*asked*'; Code = 'other-options' }
+            @{ Name = 'the filter differs only by a character that is not shown'; Tenant = 'contoso'; Filter = "LockState -eq 'ReadOnly'$([char]0x00AD)"; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*filter*'; Code = 'other-filter' }
+            @{ Name = 'the way the sites are asked differs only by a character that is not shown'; Tenant = 'contoso'; Filter = "LockState -eq 'ReadOnly'"; Options = "Source=Csom;PersonalSites=Excluded$([char]0x00AD)"; Expected = '*asked*'; Code = 'other-options' }
         ) {
             $folder = New-TestFolder
             $manifest = New-TestManifest
