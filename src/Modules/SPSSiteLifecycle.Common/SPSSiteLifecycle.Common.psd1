@@ -11,6 +11,9 @@
 
     FunctionsToExport = @(
         'Get-SPSLifecycleSetting'
+        'Invoke-SPSLifecycleAct'
+        'Invoke-SPSLifecycleScan'
+        'Register-SPSLifecycleApp'
     )
 
     CmdletsToExport   = @()

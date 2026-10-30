@@ -7,10 +7,33 @@
         $path = Join-Path -Path $TestDrive -ChildPath $Name
         switch ($Encoding) {
             'utf8bom' { [System.IO.File]::WriteAllText($path, $Text, [System.Text.UTF8Encoding]::new($true)) }
+            'utf8' { [System.IO.File]::WriteAllText($path, $Text, [System.Text.UTF8Encoding]::new($false)) }
             'cp1252' { [System.IO.File]::WriteAllBytes($path, [System.Text.Encoding]::GetEncoding(1252).GetBytes($Text)) }
+            'utf16' { [System.IO.File]::WriteAllText($path, $Text, [System.Text.UnicodeEncoding]::new($false, $true)) }
         }
 
         $path
+    }
+
+    # The two lists that a person gives: the lock dates and the exclusions. Both are read through the same strict reader.
+    function script:Import-TestList {
+        param([string]$Kind, [string]$Path)
+        if ($Kind -eq 'lock') {
+            return & $script:Module { param($p) Import-SPSLifecycleLockDateList -Path $p } $Path
+        }
+
+        & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $Path
+    }
+
+    # The text of a list of the given kind, with the header and the rows given as lines of values (a row is the values of a line).
+    function script:New-TestListText {
+        param([string]$Kind, [string]$Separator = ',', [string[]]$Row = @(), [string]$Header = '')
+        if (-not $Header) {
+            $Header = if ($Kind -eq 'lock') { "Url${Separator}LockedOn" } else { "Url${Separator}Note" }
+        }
+
+        $good = if ($Kind -eq 'lock') { "https://contoso.sharepoint.com/sites/a${Separator}2025-09-18" } else { "https://contoso.sharepoint.com/sites/a${Separator}x" }
+        ($Header, $good) + $Row -join "`r`n"
     }
 
     function script:Import-TestLockDate {
@@ -129,7 +152,6 @@ Describe 'Import-SPSLifecycleExclusionList' {
     }
 
     It 'stops on <Name>, which would leave sites unprotected' -ForEach @(
-        @{ Name = 'an unterminated quote that swallows the next rows'; Text = "Url`r`n`"https://contoso.sharepoint.com/sites/keep1`r`nhttps://contoso.sharepoint.com/sites/keep2`r`n" }
         @{ Name = 'an address with a space in it'; Text = "Url`r`nhttps://contoso.sharepoint.com/sites/my team`r`n" }
         @{ Name = 'a file address'; Text = "Url`r`nfile:///etc/passwd`r`n" }
         @{ Name = 'an ftp address'; Text = "Url`r`nftp://contoso.sharepoint.com/sites/a`r`n" }
@@ -150,11 +172,209 @@ Describe 'Import-SPSLifecycleExclusionList' {
         $list.Keys.ContainsKey('https://contoso.sharepoint.com/sites/c') | Should -BeTrue
     }
 
+    It 'ignores a blank Url cell in a row whose other cells are filled, because a blank cell protects nothing and says nothing' {
+        $path = Write-TestCsv -Name 'blankurl.csv' -Text "Url,Note`r`nhttps://contoso.sharepoint.com/sites/a,x`r`n,a note without an address`r`n   ,another one`r`nhttps://contoso.sharepoint.com/sites/b,y`r`n"
+        $list = & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path
+
+        $list.Keys.Count | Should -Be 2
+        $list.RowCount | Should -Be 4
+    }
+
+    It 'shows the first three values that are not addresses, with their lines, and counts all of them' {
+        $text = "Url`r`n" + ((1..5 | ForEach-Object { "value$_" }) -join "`r`n") + "`r`n"
+        $path = Write-TestCsv -Name 'many.csv' -Text $text
+
+        $thrown = $null
+        try {
+            $null = & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path
+        }
+        catch {
+            $thrown = $_.Exception.Message
+        }
+
+        $thrown | Should -BeLike "*many.csv*5 value(s)*'value1' (line 2), 'value2' (line 3), 'value3' (line 4). Each one*"
+        $thrown | Should -Not -BeLike '*value4*'
+    }
+
+    It 'shortens a value that is not an address when it is longer than 80 characters, and only then' {
+        $at80 = 'a' * 80
+        $at81 = 'b' * 81
+        $path80 = Write-TestCsv -Name 'long80.csv' -Text "Url`r`n$at80`r`n"
+        $path81 = Write-TestCsv -Name 'long81.csv' -Text "Url`r`n$at81`r`n"
+
+        { & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path80 } | Should -Throw -ExpectedMessage "*'$at80' (line 2)*"
+        { & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path81 } | Should -Throw -ExpectedMessage "*'$('b' * 80)...' (line 2)*"
+    }
+
     It 'accepts a list that has no row' {
         $path = Write-TestCsv -Name 'norows.csv' -Text "Url`r`n"
         $list = & $script:Module { param($p) Import-SPSLifecycleExclusionList -Path $p } $path
 
         $list.Keys.Count | Should -Be 0
+    }
+}
+
+Describe 'The lists that a person gives are read with a strict structure' {
+    BeforeAll {
+        $script:Kinds = @('lock', 'exclusion')
+    }
+
+    Context 'What stops the tool, and the line that it names' {
+        It 'stops on <Name> in a <Kind> list, and names the file and the line' -ForEach @(
+            foreach ($kind in 'lock', 'exclusion') {
+                @{ Kind = $kind; Name = 'a stray quote in an unquoted field'; Row = if ($kind -eq 'lock') { 'https://contoso.sharepoint.com/sites/b,2025"09-19' } else { 'https://contoso.sharepoint.com/sites/b,x"y' }; Message = '*list.csv*line 3*CSV rules*' }
+                @{ Kind = $kind; Name = 'a quote that is never closed at the end'; Row = if ($kind -eq 'lock') { 'https://contoso.sharepoint.com/sites/b,"2025-09-19' } else { 'https://contoso.sharepoint.com/sites/b,"x' }; Message = '*list.csv*line 3*' }
+                @{ Kind = $kind; Name = 'a quote that swallows the rows after it'; Row = if ($kind -eq 'lock') { "https://contoso.sharepoint.com/sites/b,`"open`r`nhttps://contoso.sharepoint.com/sites/c,2025-09-20" } else { "https://contoso.sharepoint.com/sites/b,`"open`r`nhttps://contoso.sharepoint.com/sites/c,x" }; Message = '*list.csv*line 3*' }
+                @{ Kind = $kind; Name = 'a value beyond the header'; Row = if ($kind -eq 'lock') { 'https://contoso.sharepoint.com/sites/b,2025-09-19,extra' } else { 'https://contoso.sharepoint.com/sites/b,x,extra' }; Message = '*list.csv*line 3*3 value(s)*2 column(s)*' }
+                @{ Kind = $kind; Name = 'a row cut short'; Row = 'https://contoso.sharepoint.com/sites/b'; Message = '*list.csv*line 3*1 value(s)*2 column(s)*' }
+            }
+        ) {
+            $path = Write-TestCsv -Name 'list.csv' -Text (New-TestListText -Kind $Kind -Row @($Row, '') )
+
+            { Import-TestList -Kind $Kind -Path $path } | Should -Throw -ExpectedMessage $Message
+        }
+
+        It 'stops on a value under a column that has no name, in a <Kind> list' -ForEach @(
+            @{ Kind = 'lock' }
+            @{ Kind = 'exclusion' }
+        ) {
+            $text = if ($Kind -eq 'lock') {
+                "Url,LockedOn,`r`nhttps://contoso.sharepoint.com/sites/a,2025-09-18,`r`nhttps://contoso.sharepoint.com/sites/b,2025-09-19,hidden`r`n"
+            }
+            else {
+                "Url,Note,`r`nhttps://contoso.sharepoint.com/sites/a,x,`r`nhttps://contoso.sharepoint.com/sites/b,x,hidden`r`n"
+            }
+
+            $path = Write-TestCsv -Name 'list.csv' -Text $text
+
+            { Import-TestList -Kind $Kind -Path $path } | Should -Throw -ExpectedMessage '*list.csv*line 3*column 3*no name*'
+        }
+
+        It 'does not use the rows before the problem, in a <Kind> list: the index builder stops too' -ForEach @(
+            @{ Kind = 'lock' }
+            @{ Kind = 'exclusion' }
+        ) {
+            $row = if ($Kind -eq 'lock') { 'https://contoso.sharepoint.com/sites/b,2025"09-19' } else { 'https://contoso.sharepoint.com/sites/b,x"y' }
+            $path = Write-TestCsv -Name 'list.csv' -Text (New-TestListText -Kind $Kind -Row @($row))
+
+            if ($Kind -eq 'lock') {
+                { & $script:Module { param($p) Get-SPSLifecycleLockDateIndex -LockDateFile $p } $path } | Should -Throw -ExpectedMessage '*list.csv*line 3*'
+            }
+            else {
+                { & $script:Module { param($p) Get-SPSLifecycleExclusionIndex -ExclusionFile $p } $path } | Should -Throw -ExpectedMessage '*list.csv*line 3*'
+            }
+        }
+
+        It 'stops on a damaged byte after a UTF-8 byte order mark, in a <Kind> list, and does not call the file not UTF-8' -ForEach @(
+            @{ Kind = 'lock' }
+            @{ Kind = 'exclusion' }
+        ) {
+            $text = New-TestListText -Kind $Kind -Row @('https://contoso.sharepoint.com/sites/b,2025-09-19')
+            $bytes = [System.Text.Encoding]::ASCII.GetBytes($text)
+            $at = $text.IndexOf('sites/b') + 7
+            $damaged = [byte[]]([byte[]]@(0xEF, 0xBB, 0xBF) + $bytes[0..($at - 1)] + [byte[]]@(0xFF) + $bytes[$at..($bytes.Length - 1)])
+            $path = Join-Path -Path $TestDrive -ChildPath 'list.csv'
+            [System.IO.File]::WriteAllBytes($path, $damaged)
+
+            { Import-TestList -Kind $Kind -Path $path } | Should -Throw -ExpectedMessage '*list.csv*byte order mark*damaged*'
+        }
+    }
+
+    Context 'What still reads, as the files of Excel are written' {
+        It 'reads a <Kind> list saved as <Name>' -ForEach @(
+            foreach ($kind in 'lock', 'exclusion') {
+                @{ Kind = $kind; Name = 'UTF-8 with a byte order mark and commas'; Encoding = 'utf8bom'; Separator = ','; Before = '' }
+                @{ Kind = $kind; Name = 'UTF-8 without a byte order mark and semicolons'; Encoding = 'utf8'; Separator = ';'; Before = '' }
+                @{ Kind = $kind; Name = 'Windows-1252 and semicolons (French Excel)'; Encoding = 'cp1252'; Separator = ';'; Before = '' }
+                @{ Kind = $kind; Name = 'UTF-16 and tabs (Unicode text)'; Encoding = 'utf16'; Separator = "`t"; Before = '' }
+                @{ Kind = $kind; Name = 'UTF-8 with a first line sep='; Encoding = 'utf8bom'; Separator = ';'; Before = "sep=;`r`n" }
+                @{ Kind = $kind; Name = 'UTF-8 with blank lines before the header'; Encoding = 'utf8bom'; Separator = ','; Before = "`r`n`r`n" }
+            }
+        ) {
+            if ($Kind -eq 'lock') {
+                $lines = "Url${Separator}LockedOn", "https://contoso.sharepoint.com/sites/ancien${Separator}2025-09-18", "https://contoso.sharepoint.com/sites/équipe${Separator}2025-09-19"
+            }
+            else {
+                $lines = 'Url', 'https://contoso.sharepoint.com/sites/ancien', 'https://contoso.sharepoint.com/sites/équipe'
+            }
+
+            $path = Write-TestCsv -Name 'list.csv' -Text ($Before + ($lines -join "`r`n") + "`r`n") -Encoding $Encoding
+
+            $list = Import-TestList -Kind $Kind -Path $path
+
+            $key = & $script:Module { ConvertTo-SPSLifecycleUrlKey -Url 'https://contoso.sharepoint.com/sites/équipe' }
+            if ($Kind -eq 'lock') {
+                @($list.Entries) | Should -HaveCount 2
+                @($list.Entries | Where-Object { $_.UrlKey -ceq $key }) | Should -HaveCount 1
+            }
+            else {
+                $list.Keys.Count | Should -Be 2
+                $list.Keys.ContainsKey($key) | Should -BeTrue
+            }
+        }
+
+        It 'ignores the empty rows that Excel adds at the end of a <Kind> list' -ForEach @(
+            @{ Kind = 'lock' }
+            @{ Kind = 'exclusion' }
+        ) {
+            $path = Write-TestCsv -Name 'list.csv' -Text ((New-TestListText -Kind $Kind -Row @(',', '  ,  ', ',', '')) + "`r`n")
+
+            $list = Import-TestList -Kind $Kind -Path $path
+
+            if ($Kind -eq 'lock') { @($list.Entries) | Should -HaveCount 1 } else { $list.Keys.Count | Should -Be 1 }
+        }
+
+        It 'leaves what a row says to the importer: a lock date row without a date is ignored, and the SiteId column is optional' {
+            $path = Write-TestCsv -Name 'list.csv' -Text "Url;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;`r`nhttps://contoso.sharepoint.com/sites/b;2025-09-19`r`n"
+
+            $list = Import-TestList -Kind 'lock' -Path $path
+
+            @($list.Entries) | Should -HaveCount 1
+            $list.Entries[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/b'
+        }
+
+        It 'names the line of a lock date that cannot be read, and the line of the first values of an exclusion list that are not addresses' {
+            $dates = Write-TestCsv -Name 'dates.csv' -Text "Url;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;2025-09-18`r`nhttps://contoso.sharepoint.com/sites/b;18/09/2025`r`n"
+            $urls = Write-TestCsv -Name 'urls.csv' -Text "Url`r`nhttps://contoso.sharepoint.com/sites/a`r`nSales`r`nHR`r`n"
+
+            { Import-TestList -Kind 'lock' -Path $dates } | Should -Throw -ExpectedMessage "*dates.csv*column 'LockedOn', line 3*'18/09/2025'*"
+            { Import-TestList -Kind 'exclusion' -Path $urls } | Should -Throw -ExpectedMessage "*urls.csv*2 value(s)*'Sales' (line 3)*'HR' (line 4)*"
+        }
+    }
+
+    Context 'How long it takes' {
+        BeforeAll {
+            function script:New-TestListRows {
+                param([string]$Kind, [int]$Count)
+                $builder = [System.Text.StringBuilder]::new()
+                $null = $builder.Append($(if ($Kind -eq 'lock') { "Url,LockedOn`r`n" } else { "Url`r`n" }))
+                for ($i = 1; $i -le $Count; $i++) {
+                    $null = $builder.Append("https://contoso.sharepoint.com/sites/site$i").Append($(if ($Kind -eq 'lock') { ",2025-09-18`r`n" } else { "`r`n" }))
+                }
+
+                $builder.ToString()
+            }
+        }
+
+        It 'reads a <Kind> list of 4,000 and of 16,000 rows in a time that does not grow with the square of the size' -Tag 'Slow' -ForEach @(
+            @{ Kind = 'lock' }
+            @{ Kind = 'exclusion' }
+        ) {
+            $small = Write-TestCsv -Name 'small.csv' -Text (New-TestListRows -Kind $Kind -Count 4000)
+            $large = Write-TestCsv -Name 'large.csv' -Text (New-TestListRows -Kind $Kind -Count 16000)
+            $null = Import-TestList -Kind $Kind -Path $small
+
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            $null = Import-TestList -Kind $Kind -Path $small
+            $smallSeconds = $watch.Elapsed.TotalSeconds
+            $watch.Restart()
+            $list = Import-TestList -Kind $Kind -Path $large
+            $largeSeconds = $watch.Elapsed.TotalSeconds
+
+            $(if ($Kind -eq 'lock') { @($list.Entries).Count } else { $list.Keys.Count }) | Should -Be 16000
+            $largeSeconds | Should -BeLessThan 20
+            $largeSeconds | Should -BeLessThan ([System.Math]::Max(0.5, $smallSeconds) * 10)
+        }
     }
 }
 

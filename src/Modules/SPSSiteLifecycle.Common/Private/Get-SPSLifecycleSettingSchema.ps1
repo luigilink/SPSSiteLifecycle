@@ -11,8 +11,11 @@
         Each row has: Section (Shared, Scan or Act; Shared keys are written at the top of the file,
         the others inside the Scan or Act section), Name, Type (String, Guid, Path, PathList,
         StringList, Choice, ChoiceList, Int, Double, Bool), Default, DefaultText (for the
-        documentation), RequiredIn and UsedIn (phases), Min and Max, Pattern and PatternHint, Values,
-        Kind (File or Folder, for the paths), MustExist, AllowEmpty (lists) and Description.
+        documentation), RequiredIn and UsedIn (phases), Min and Max, Pattern and PatternHint (for a
+        String, and for each entry of a StringList: a .NET regular expression that is matched as it is
+        written, one character at a time, with no case folding and no culture, so that the Kelvin sign
+        and a dotted capital I are not the letters k and i), Values, Kind (File or Folder, for the
+        paths), MustExist, AllowEmpty (lists) and Description.
 
         .EXAMPLE
         Get-SPSLifecycleSettingSchema | Where-Object { $_.Section -eq 'Act' }
@@ -26,13 +29,13 @@
     $definitions = @(
         @{
             Section = 'Shared'; Name = 'TenantName'; Type = 'String'; RequiredIn = $both; UsedIn = $both
-            Pattern = '^[a-z0-9][a-z0-9-]{0,62}$'
-            PatternHint = 'letters, digits and hyphens only: the first part of the SharePoint address (contoso for contoso.sharepoint.com), not a URL'
+            Pattern = '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\z'
+            PatternHint = 'letters, digits and hyphens only, starting with a letter or a digit, 63 characters at most: the first part of the SharePoint address (contoso for contoso.sharepoint.com), not a URL'
             Description = 'Name of the tenant: the first part of the SharePoint address (`contoso` for `contoso.sharepoint.com`).'
         }
         @{
             Section = 'Shared'; Name = 'ClientId'; Type = 'Guid'; RequiredIn = $both; UsedIn = $both
-            Description = 'Application (client) ID of the Microsoft Entra app registration that PnP.PowerShell uses for the interactive sign-in.'
+            Description = 'Application (client) ID of the Microsoft Entra app registration that PnP.PowerShell uses for the interactive sign-in. The setup script `src/Register-SPSSiteLifecycleApp.ps1` creates the app and shows it (see the [App registration](App-Registration) page).'
         }
         @{
             Section = 'Shared'; Name = 'OutputFolder'; Type = 'Path'; Kind = 'Folder'; UsedIn = $both
@@ -41,6 +44,8 @@
         }
         @{
             Section = 'Shared'; Name = 'RefusedTenants'; Type = 'StringList'; UsedIn = $both; AllowEmpty = $true
+            Pattern = '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\z'
+            PatternHint = 'letters, digits and hyphens only, starting with a letter or a digit, 63 characters at most: the first part of the SharePoint address (contoso for contoso.sharepoint.com), not a URL'
             Default = @(); DefaultText = '`@()`'
             Description = 'Tenant names that the tool refuses, in addition to the built-in list (`microsoft`, `microsoftonline`), which cannot be removed.'
         }
@@ -63,12 +68,12 @@
         @{
             Section = 'Shared'; Name = 'LockDateFiles'; Type = 'PathList'; Kind = 'File'; MustExist = $true; UsedIn = $both; AllowEmpty = $true
             Default = @(); DefaultText = '`@()`'
-            Description = 'CSV files that give the date each site was locked: a `Url` column, a `LockedOn` column and, optionally, a `SiteId` column. A row that has a site ID is matched to the site by that ID, whatever its address (a renamed site keeps its date, and a site that reuses an address does not inherit it); a row without one is matched by its URL. A header that only looks like `SiteId` (`Site ID`, a hidden character) stops the tool, because the site IDs would be lost without a message. A date before 2000-01-01 stops the tool, because a spreadsheet writes a blank date as `1900-01-01` or `1970-01-01`, and the site would look as if it had been locked for ever. When a site appears several times, in these files or in the lock journal, the latest date is kept.'
+            Description = 'CSV files that give the date each site was locked: a `Url` column, a `LockedOn` column and, optionally, a `SiteId` column. A row that has a site ID is matched to the site by that ID, whatever its address (a renamed site keeps its date, and a site that reuses an address does not inherit it); a row without one is matched by its URL. A header that only looks like `SiteId` (`Site ID`, a hidden character) stops the tool, because the site IDs would be lost without a message. A date before 2000-01-01 stops the tool, because a spreadsheet writes a blank date as `1900-01-01` or `1970-01-01`, and the site would look as if it had been locked for ever. When a site appears several times, in these files or in the lock journal, the latest date is kept. The structure of a file is read strictly: a quote that is never closed, a row that is cut short or has a value too many, and a value under a column that has no name stop the tool and name the line, because a row that is lost could leave an older date of the same site in force. The encoding is read as Excel writes it (UTF-8, UTF-16, Windows-1252).'
         }
         @{
             Section = 'Shared'; Name = 'ExclusionFiles'; Type = 'PathList'; Kind = 'File'; MustExist = $true; UsedIn = $both; AllowEmpty = $true
             Default = @(); DefaultText = '`@()`'
-            Description = 'CSV files with a `Url` column: the sites that must never be touched. Both phases read them, because a decision never lifts a safeguard. Every filled cell must be a full address on one line: a row that cannot be read would protect nothing, so the tool stops instead of skipping it.'
+            Description = 'CSV files with a `Url` column: the sites that must never be touched. Both phases read them, because a decision never lifts a safeguard. Every filled cell must be a full address on one line: a row that cannot be read would protect nothing, so the tool stops instead of skipping it. The structure of a file is read strictly for the same reason: a quote that is never closed would swallow the rows after it, and a row that is cut short or has a value too many would be dropped, so they stop the tool and name the line. The encoding is read as Excel writes it (UTF-8, UTF-16, Windows-1252).'
         }
         @{
             Section = 'Shared'; Name = 'LockJournal'; Type = 'Path'; Kind = 'File'; UsedIn = $both

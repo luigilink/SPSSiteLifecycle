@@ -12,9 +12,16 @@
         date can only delay a deletion. Two site IDs that used the same address stay two entries,
         because the second site is not the first.
 
-        A list is what a person provides, and it is read by Read-SPSLifecycleCsv: a row that has no date says
-        nothing about its site, so it is ignored, and the column SiteId is optional (a header that only looks like
-        it, Site ID or a hidden character, stops the tool, because the identity of every row would be lost).
+        A list is what a person provides, and it is read by Read-SPSLifecycleStrictCsv with TolerantEncoding: the
+        structure is read strictly, so that no row is lost without a message (a quote that is never closed would swallow
+        the rows after it, and a value beyond the header or a row cut short would be dropped, and a later date that is
+        lost, while another list holds an older date of the same site, leaves the older date in force), and the
+        encoding is read as Excel writes it (UTF-8, UTF-16, Windows-1252), a byte order mark being a declaration:
+        a byte that does not fit it is a damage and stops the tool. What stays tolerant is the meaning of a row,
+        not its structure: a row that has no date says nothing about its site, so it is ignored, an empty row that
+        Excel adds is ignored, and the column SiteId is optional (a header that only looks like it, Site ID or a
+        hidden character, stops the tool, because the identity of every row would be lost). The messages name the
+        file and the line.
 
         A date before 2000-01-01 stops the tool, in a list and in the journal: SharePoint Online did not exist, so no
         site was locked then. It is what a spreadsheet writes for a blank cell (1900-01-01, 1899-12-30,
@@ -74,8 +81,10 @@
         $hasSiteId = $true
     }
     else {
-        $rows = @(Read-SPSLifecycleCsv -Path $Path -RequiredColumn 'Url', 'LockedOn' -OptionalColumn 'SiteId')
-        $hasSiteId = $rows.Count -gt 0 -and (Test-SPSLifecycleColumnName -Name $rows[0].PSObject.Properties.Name -Column 'SiteId')
+        $table = Read-SPSLifecycleStrictCsv -Path $Path -RequiredColumn 'Url', 'LockedOn' -OptionalColumn 'SiteId' -TolerantEncoding
+        $rows = @($table.Rows)
+        $lines = @($table.Line)
+        $hasSiteId = Test-SPSLifecycleColumnName -Name $table.Header -Column 'SiteId'
         if ($rows.Count -gt 0) {
             Test-SPSLifecycleColumnPattern -Value $rows.Url -Pattern '^https?://' -What "'Url' in $name" -Hint 'The first column must hold the site URLs.'
         }
@@ -130,7 +139,7 @@
                 $dateCache[$text] = $parsed
             }
             catch {
-                throw "File '$name', column 'LockedOn'$(if ($Strict) { ", line $($lines[$rowNumber - 1])" }): $($_.Exception.Message)"
+                throw "File '$name', column 'LockedOn', line $($lines[$rowNumber - 1]): $($_.Exception.Message)"
             }
         }
 

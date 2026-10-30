@@ -1,10 +1,10 @@
 ﻿<#
     .SYNOPSIS
-    Regenerates the Configuration, Verdicts and Report pages of the wiki.
+    Regenerates the Configuration, Verdicts, Report and App-Registration pages of the wiki.
 
     .DESCRIPTION
-    The pages are built from data of the module: the settings schema, the verdict catalog and the table
-    of the report columns.
+    The pages are built from data of the module: the settings schema, the verdict catalog, the table
+    of the report columns and the table of the permissions of the Microsoft Entra app.
     A test fails when a committed page differs from what this script writes, so run it after any
     change to the schema or the catalog, and commit the result.
 
@@ -29,9 +29,10 @@ $manifest = Join-Path -Path $PSScriptRoot -ChildPath '../src/Modules/SPSSiteLife
 $module = Import-Module -Name $manifest -Force -PassThru
 
 $pages = [ordered]@{
-    'Configuration.md' = & $module { Get-SPSLifecycleConfigurationPage }
-    'Verdicts.md'      = & $module { Get-SPSLifecycleVerdictPage }
-    'Report.md'        = & $module { Get-SPSLifecycleReportPage }
+    'Configuration.md'    = & $module { Get-SPSLifecycleConfigurationPage }
+    'Verdicts.md'         = & $module { Get-SPSLifecycleVerdictPage }
+    'Report.md'           = & $module { Get-SPSLifecycleReportPage }
+    'App-Registration.md' = & $module { Get-SPSLifecycleAppRegistrationPage }
 }
 
 $encoding = [System.Text.UTF8Encoding]::new($false)

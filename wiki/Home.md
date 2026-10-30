@@ -18,6 +18,7 @@ SPSSiteLifecycle is a PowerShell tool (PnP.PowerShell) that finds inactive or re
 
 * [Getting Started](./Getting-Started)
 * [Configuration](./Configuration)
+* [App registration](./App-Registration)
 * [Verdicts](./Verdicts)
 * [Report](./Report)
 * [Design decisions](./Design-Decisions)

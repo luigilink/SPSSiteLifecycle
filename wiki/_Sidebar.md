@@ -3,6 +3,7 @@
 - [🏠 Home](Home)
 - [🚀 Getting Started](Getting-Started)
 - [⚙️ Configuration](Configuration)
+- [🔑 App registration](App-Registration)
 - [🚦 Verdicts](Verdicts)
 - [📄 Report](Report)
 - [🧭 Design decisions](Design-Decisions)
