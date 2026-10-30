@@ -108,6 +108,31 @@
     }
 }
 
+# The name of the partial file that a writer moves into place, which is what a cleanup knows it by: Move-Item is replaced, in the module,
+# by a function that keeps the name that it is given and fails.
+function script:Get-PartialFileName {
+    param([scriptblock]$Action)
+
+    & $script:Module {
+        $script:MovedFrom = $null
+        Invoke-Expression 'function script:Move-Item { param($LiteralPath, $Destination, [switch]$Force) $script:MovedFrom = $LiteralPath; throw ''The disk is full.'' }'
+    }
+
+    try {
+        try {
+            & $Action
+        }
+        catch {
+            $null = $_
+        }
+
+        & $script:Module { [System.IO.Path]::GetFileName($script:MovedFrom) }
+    }
+    finally {
+        & $script:Module { Remove-Item -Path 'Function:\Move-Item' -ErrorAction SilentlyContinue }
+    }
+}
+
 Describe 'Initialize-SPSLifecycleListingManifest' {
     It 'starts as a listing that has not begun: running, with no page, no token, and not complete' {
         $manifest = New-TestManifest
@@ -295,6 +320,15 @@ Describe 'Write-SPSLifecycleListingManifest' {
         $folder = Join-Path -Path $root -ChildPath 'checkpoint'
         @(Get-ChildItem -LiteralPath $folder -Name) | Should -Be @('manifest.json')
         (Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'manifest.json') -Raw | ConvertFrom-Json).Tenant | Should -BeExactly 'contoso'
+    }
+
+    It 'writes to a partial file whose name is the one that the cleanup knows: the name, a dot, 8 hexadecimal characters, and .partial' {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+
+        $name = Get-PartialFileName -Action { & $script:Module { param($f, $m) Write-SPSLifecycleListingManifest -Folder $f -Manifest $m } $folder $manifest }
+
+        $name | Should -MatchExactly '\Amanifest\.json\.[0-9a-f]{8}\.partial\z'
     }
 
     It 'leaves the manifest as it was, and no partial file, when the disk refuses the new one' {
@@ -610,6 +644,15 @@ Describe 'The pages of a checkpoint' {
         $manifest.StartedOn | Should -BeExactly '20261030T090000.0000000Z'
         $manifest.UpdatedOn | Should -BeExactly '20261030T090700.0000000Z'
         (Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'manifest.json') -Raw | ConvertFrom-Json).UpdatedOn | Should -BeExactly '20261030T090700.0000000Z'
+    }
+
+    It 'writes a page to a partial file whose name is the one that the cleanup knows' {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+
+        $name = Get-PartialFileName -Action { Save-TestPage -Folder $folder -Manifest $manifest }
+
+        $name | Should -MatchExactly '\Apage-000001\.csv\.[0-9a-f]{8}\.partial\z'
     }
 
     It 'lists no page, leaves no partial file and gives the error, when the disk refuses the page' {
