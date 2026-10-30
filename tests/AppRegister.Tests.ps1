@@ -81,8 +81,9 @@ $script:StubData.Windows
 '@
         } -Data $values
 
-        if ($values.Windows) {
-            # The real function makes an access control list, which only Windows has: where the tests say that the system is Windows, it is plain.
+        if ($values.Windows -or $IsWindows) {
+            # The real function makes the mode of Unix or an access control list of Windows, and each exists on its own system only: where the
+            # tests say that the system is Windows, or where it is, the folder is plain.
             Set-ModuleStub -Stub @{
                 'New-SPSLifecycleProtectedFolder' = @'
 param($Path)
@@ -207,7 +208,7 @@ Describe 'Register-SPSLifecycleApp: what is checked first, and the plan' {
 
         $tool = (Resolve-Path -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..')).ProviderPath
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (Join-Path -Path $tool -ChildPath 'keys') }
-        $run.Error | Should -BeLike '*inside a repository*'
+        $run.Error | Should -Match 'inside (a repository|the folder of the tool)'
         $run.Log | Should -HaveCount 0
     }
 
