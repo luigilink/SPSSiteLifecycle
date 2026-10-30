@@ -58,6 +58,7 @@
         $Kind,
 
         [Parameter()]
+        [ValidateRange(1, 30)]
         [System.Int32]
         $ValidYears = 2,
 

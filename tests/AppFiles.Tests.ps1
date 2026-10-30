@@ -41,14 +41,19 @@ Describe 'New-SPSLifecycleProtectedFolder' {
         [System.IO.File]::GetUnixFileMode($path) | Should -Be ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute)
     }
 
-    It 'leaves a folder that exists as it is: it is the choice of the user' -Skip:($IsWindows) {
-        $path = New-Folder -Name 'chosen'
-        [System.IO.File]::SetUnixFileMode($path, [System.IO.UnixFileMode]'UserRead, UserWrite, UserExecute, GroupRead, GroupExecute')
+    It 'refuses a folder that exists, whoever it belongs to, and does not change it: <Name>' -ForEach @(
+        @{ Name = 'a folder'; Make = 'folder' }
+        @{ Name = 'a file'; Make = 'file' }
+        @{ Name = 'a link'; Make = 'link' }
+    ) {
+        $path = Join-Path -Path $TestDrive -ChildPath "exists-$Make"
+        switch ($Make) {
+            'folder' { $null = New-Item -Path $path -ItemType Directory }
+            'file' { Set-Content -LiteralPath $path -Value 'x' }
+            'link' { $null = New-Item -Path $path -ItemType $(if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }) -Value (New-Folder -Name "target-$Make") }
+        }
 
-        $created = & $script:Module { param($p) New-SPSLifecycleProtectedFolder -Path $p } $path
-
-        $created | Should -BeFalse
-        [System.IO.File]::GetUnixFileMode($path) | Should -Be ([System.IO.UnixFileMode]'UserRead, UserWrite, UserExecute, GroupRead, GroupExecute')
+        { & $script:Module { param($p) New-SPSLifecycleProtectedFolder -Path $p } $path } | Should -Throw -ExpectedMessage '*already there*the tool creates*never in one that exists*'
     }
 
     It 'restricts a folder that it creates to the user on Windows, and what is created in it' -Skip:(-not $IsWindows) {
@@ -67,11 +72,7 @@ Describe 'New-SPSLifecycleProtectedFolder' {
         @((Get-Acl -LiteralPath $inner).Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } | Select-Object -Unique) | Should -Be @([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
     }
 
-    It 'refuses a file, and creates nothing with -WhatIf' {
-        $file = Join-Path -Path $TestDrive -ChildPath 'afile'
-        Set-Content -LiteralPath $file -Value 'x'
-        { & $script:Module { param($p) New-SPSLifecycleProtectedFolder -Path $p } $file } | Should -Throw -ExpectedMessage '*is a file*'
-
+    It 'creates nothing with -WhatIf' {
         $path = Join-Path -Path $TestDrive -ChildPath 'whatif'
         $created = & $script:Module { param($p) New-SPSLifecycleProtectedFolder -Path $p -WhatIf } $path
         $created | Should -BeFalse

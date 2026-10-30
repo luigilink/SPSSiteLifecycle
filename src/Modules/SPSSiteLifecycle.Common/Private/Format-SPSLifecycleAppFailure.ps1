@@ -5,8 +5,9 @@
 
         .DESCRIPTION
         The message that the setup script stops with. It says what became of the app (see Get-SPSLifecycleAppFailureKind), what became of
-        the certificate files (removed when no app was created, kept otherwise, because the key may be the one of an app that exists),
-        and the next step: another name, an administrator, the consent in the Microsoft Entra admin center, or a look at the list of apps.
+        the certificate files (removed only when the name was taken, which PnP.PowerShell says before it creates the app, and kept in every
+        other case, because the key may be the one of an app that exists), and the next step: another name, an administrator, the consent in
+        the Microsoft Entra admin center, or a look at the list of apps.
         The message of the error is told as it is, without its end.
 
         .PARAMETER Kind
@@ -88,7 +89,7 @@
         }
 
         'Forbidden' {
-            "Your account is not allowed to create an app registration in this tenant ($reason). Nothing was created.$suffix Ask an administrator who is allowed to (the tenant may allow every user to register applications, or the account needs a role such as Application Developer, Application Administrator, Cloud Application Administrator or Global Administrator), and run the script again."
+            "Microsoft Graph refused your account ($reason). It is most likely not allowed to create an app registration in this tenant, and the registration stopped before the app was created, but a refusal does not prove it: look for an app named '$name' in the Microsoft Entra admin center (App registrations).$suffix Ask an administrator who is allowed to create it (the tenant may allow every user to register applications, or the account needs a role such as Application Developer, Application Administrator, Cloud Application Administrator or Global Administrator), and run the script again."
         }
 
         'Consent' {

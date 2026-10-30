@@ -50,6 +50,7 @@
         $until = $Plan.Certificate.ExpiresOn.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
         $years = if ($Plan.Certificate.ValidYears -eq 1) { '1 year' } else { "$($Plan.Certificate.ValidYears) years" }
         $lines.Add("  Certificate:  self-signed, valid $years (until about $until), protected by a password that is asked next.")
+        $lines.Add("    Key folder:  $($Plan.Certificate.Folder) (new: made for this run, for your account alone, and outside any repository and the folder of the tool; a folder that is there is refused)")
         $lines.Add("    Private key: $($Plan.Certificate.PfxPath) (only you can read it: the folder and the file are restricted to your account)")
         $lines.Add("    Public key:  $($Plan.Certificate.CerPath)")
         if ($Plan.Certificate.Store -eq 'CurrentUser') {

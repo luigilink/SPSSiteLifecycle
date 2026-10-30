@@ -32,8 +32,10 @@
     for a run that nobody watches).
 
     .PARAMETER OutputFolder
-    Certificate only: where the private key (.pfx) and the certificate (.cer) go. It is created so that only you can read it. It must be
-    outside any repository and outside the folder of the tool. Default: .spssitelifecycle in your profile.
+    Certificate only: the folder in which the key folder is made. The private key (.pfx) and the certificate (.cer) go in
+    <OutputFolder>/<ApplicationName>, a new folder that the script creates so that only you can read it (a folder of that name that is there
+    already is refused, and so is a link). Neither folder may be inside a repository or the folder of the tool, by where it leads too.
+    Default: .spssitelifecycle in your profile.
 
     .PARAMETER ValidYears
     Certificate only: the number of years that the certificate is valid, 1 to 30. Default: 2.

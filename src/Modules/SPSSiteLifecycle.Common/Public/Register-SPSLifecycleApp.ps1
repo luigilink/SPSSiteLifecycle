@@ -8,23 +8,28 @@
         In this order, and the tenant is changed only at the end:
 
         1. The inputs are checked: the tenant (the name of a tenant, never the Microsoft corporate tenants), the name of the app, the kind
-           and the years of the certificate, and for the Certificate kind the folder of the files (outside any repository and the folder of
-           the tool, with no key or certificate of that name in it).
+           and the years of the certificate, and for the Certificate kind the folder that is given: the key folder, named after the app, is
+           made in it, so it must not be there already (a folder, a file or a link: nothing is ever written in a place that is taken), and
+           neither folder may be inside a repository or the folder of the tool, by what is written or by where it leads (a link is followed).
         2. The plan is shown as lines of information (see Format-SPSLifecycleAppPlan): the tenant, the app, the kind, the permissions with
            what the tool uses each for, the certificate, the roles that create the app and give the consent. -WhatIf stops here: nothing
            is asked and nothing is created.
         3. A person types the name of the tenant (see Confirm-SPSLifecycleAppRegistration), and, for the Certificate kind, the password of
            the private key, twice. An input that is redirected stops the function before it asks.
-        4. The folder of the files is created so that only the user can read it, and the app is registered by PnP.PowerShell (see
-           Register-SPSLifecycleEntraApp): it signs in (a browser window, or a device code), stops when an app of that name exists, creates
-           the app and runs the consent. The private key is restricted to the user in a finally, so that a run that is interrupted
-           leaves it protected too.
-        5. When no app was created (the name is taken, the account is not allowed) the files that the run wrote are removed, and in every
-           other failure they are kept, because the key may be the one of an app that exists; the message says what to do. When the app was
-           created, the files and the certificate are checked, the certificate may be added to the CurrentUser store (Windows), and the
-           lines to paste in the settings file are shown.
+        4. The key folder is created, new, so that only the user can read it, and checked (the mode 700, or an access list for the account
+           alone), and checked again where it really is: the tool does not go on when it is not as it must be. Then the app is registered
+           by PnP.PowerShell (see Register-SPSLifecycleEntraApp): it signs in (a browser window, or a device code), stops when an app of
+           that name exists, creates the app and runs the consent. The private key is restricted to the user in a finally, so that a run
+           that is interrupted leaves it protected too.
+        5. When the name is taken, which PnP.PowerShell says before it creates the app, the two files that it wrote (by their names) are
+           removed, and the folder when it is empty. In every other failure the files are kept, a refusal of Microsoft Graph included,
+           because only that message proves that no app was created, and the key may be the only copy of the one of an app that exists;
+           the message says what to do. When the app was created, the files are checked (the certificate can be read and is the one that the
+           app got, and the key file opens with the password, holds the private key and is the key of that certificate), the certificate
+           may be added to the CurrentUser store (Windows), and the lines to paste in the settings file are shown.
 
-        The password is never shown, logged or returned. It returns the result: TenantName, ApplicationName, Kind, ClientId, and for the
+        The password is never shown, logged or returned, and nothing that PnP.PowerShell writes on its streams or says in an error is passed
+        on without what may be a secret taken out of it. It returns the result: TenantName, ApplicationName, Kind, ClientId, and for the
         Certificate kind Thumbprint, ExpiresOn, PfxPath, CerPath, KeyProtected and StoredInCertificateStore.
 
         .PARAMETER TenantName
@@ -37,7 +42,8 @@
         Interactive (a person signs in, no certificate: the default) or Certificate (the app signs in alone).
 
         .PARAMETER OutputFolder
-        The folder of the certificate files (Certificate kind). Default: .spssitelifecycle in the profile of the user.
+        The folder in which the key folder is made (Certificate kind): the key goes in <OutputFolder>/<ApplicationName>, a new folder that only
+        you can read. Default: .spssitelifecycle in the profile of the user.
 
         .PARAMETER ValidYears
         The number of years that the certificate is valid, 1 to 30 (Certificate kind). Default: 2.
@@ -110,14 +116,14 @@
         throw '-UseCertificateStore is available on Windows only: macOS and Linux have no certificate store, and use the .pfx file.'
     }
 
-    $folder = ''
+    $keyFolder = ''
+    $toolRoot = Split-Path -Path (Split-Path -Path (Split-Path -Path $script:ModuleRoot -Parent) -Parent) -Parent
     if ($isCertificate) {
         $requested = if ($OutputFolder) { $OutputFolder } else { Join-Path -Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)) -ChildPath '.spssitelifecycle' }
-        $toolRoot = Split-Path -Path (Split-Path -Path (Split-Path -Path $script:ModuleRoot -Parent) -Parent) -Parent
-        $folder = Resolve-SPSLifecycleAppFolder -Folder $requested -ApplicationName $ApplicationName -ToolRoot $toolRoot
+        $keyFolder = Resolve-SPSLifecycleAppFolder -Folder $requested -ApplicationName $ApplicationName -ToolRoot $toolRoot
     }
 
-    $plan = Get-SPSLifecycleAppPlan -TenantName $TenantName -ApplicationName $ApplicationName -Kind $Kind -ValidYears $ValidYears -Folder $folder -UseCertificateStore:$UseCertificateStore -DeviceLogin:$DeviceLogin -Now $Now
+    $plan = Get-SPSLifecycleAppPlan -TenantName $TenantName -ApplicationName $ApplicationName -Kind $Kind -ValidYears $ValidYears -Folder $keyFolder -UseCertificateStore:$UseCertificateStore -DeviceLogin:$DeviceLogin -Now $Now
     foreach ($line in Format-SPSLifecycleAppPlan -Plan $plan) {
         Write-Information -MessageData $line
     }
@@ -136,7 +142,18 @@
         $pfx = $plan.Certificate.PfxPath
         $cer = $plan.Certificate.CerPath
         $password = Read-SPSLifecycleCertificatePassword
-        $null = New-SPSLifecycleProtectedFolder -Path $folder
+        $null = New-SPSLifecycleProtectedFolder -Path $keyFolder
+
+        # Checked again now that it exists, where it really is: a link that was put in the way after the first check is seen here, before
+        # anything is written in the folder.
+        try {
+            Assert-SPSLifecycleOutsideRepository -Path $keyFolder -ToolRoot $toolRoot
+        }
+        catch {
+            $reason = $_.Exception.Message
+            $null = Clear-SPSLifecycleKeyFolder -Folder $keyFolder -ApplicationName $ApplicationName -FolderOnly -Confirm:$false
+            throw $reason
+        }
     }
 
     $record = $null
@@ -159,36 +176,41 @@
         }
 
         if (-not $finished) {
-            Write-Warning -Message "The registration was interrupted. The app '$ApplicationName' may have been created in the tenant: look for it in the Microsoft Entra admin center (App registrations), and delete it before you run the script again if it is there. The certificate files, if there are any, are in '$folder', and were kept."
+            Write-Warning -Message "The registration was interrupted. The app '$ApplicationName' may have been created in the tenant: look for it in the Microsoft Entra admin center (App registrations), and delete it before you run the script again if it is there. The certificate files, if there are any, are in '$keyFolder', and were kept."
         }
     }
 
     $files = @(@($pfx, $cer) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
     if ($null -ne $failure) {
         $kindOfFailure = Get-SPSLifecycleAppFailureKind -Message $failure
-        $removed = [System.Collections.Generic.List[System.String]]::new()
-        $notRemoved = [System.Collections.Generic.List[System.String]]::new()
+        $removed = @()
+        $notRemoved = @()
         $kept = @()
-        if ($kindOfFailure -eq 'AppExists' -or $kindOfFailure -eq 'Forbidden') {
-            foreach ($file in $files) {
-                try {
-                    Remove-Item -LiteralPath $file -Force -ErrorAction Stop
-                    $removed.Add($file)
-                }
-                catch {
-                    $notRemoved.Add($file)
+        if ($isCertificate) {
+            if ($kindOfFailure -eq 'AppExists') {
+                # The only failure that proves that no app was created: PnP.PowerShell says that the name is taken before it creates the app. Any other
+                # message could come after the app was created, and the key that was written is then the only copy.
+                $cleared = Clear-SPSLifecycleKeyFolder -Folder $keyFolder -ApplicationName $ApplicationName -Confirm:$false
+                $removed = @($cleared.Removed)
+                $notRemoved = @($cleared.NotRemoved)
+            }
+            else {
+                $kept = $files
+                if ($files.Count -eq 0) {
+                    $null = Clear-SPSLifecycleKeyFolder -Folder $keyFolder -ApplicationName $ApplicationName -FolderOnly -Confirm:$false
                 }
             }
         }
-        else {
-            $kept = $files
-        }
 
-        throw (Format-SPSLifecycleAppFailure -Kind $kindOfFailure -Message $failure -Plan $plan -FilesRemoved $removed.ToArray() -FilesKept $kept -FilesNotRemoved $notRemoved.ToArray())
+        throw (Format-SPSLifecycleAppFailure -Kind $kindOfFailure -Message $failure -Plan $plan -FilesRemoved $removed -FilesKept $kept -FilesNotRemoved $notRemoved)
     }
 
     if ($null -eq $record) {
-        $leftover = if ($files.Count -gt 0) { " The certificate files in '$folder' were kept, because an app may exist that they belong to." } else { '' }
+        if ($isCertificate -and $files.Count -eq 0) {
+            $null = Clear-SPSLifecycleKeyFolder -Folder $keyFolder -ApplicationName $ApplicationName -FolderOnly -Confirm:$false
+        }
+
+        $leftover = if ($files.Count -gt 0) { " The certificate files in '$keyFolder' were kept, because an app may exist that they belong to." } else { '' }
         throw "The registration gave nothing back: the sign-in was cancelled or did not complete, so no app was created as far as is known.$leftover Look for an app named '$ApplicationName' in the Microsoft Entra admin center (App registrations) before you run the script again."
     }
 
@@ -196,23 +218,43 @@
     $keyProtected = $false
     $stored = $false
     if ($isCertificate) {
+        $created = "The app '$ApplicationName' was created (client ID $($record.ClientId)), but"
+        $again = 'Delete the app in the Microsoft Entra admin center (App registrations), and run the script again.'
         foreach ($file in $pfx, $cer) {
             if (-not (Test-Path -LiteralPath $file)) {
-                throw "The app '$ApplicationName' was created (client ID $($record.ClientId)), but PnP.PowerShell did not write '$file': the certificate that the app got has no file here, and there is no key to sign in with. Delete the app in the Microsoft Entra admin center (App registrations), and run the script again."
+                throw "$created PnP.PowerShell did not write '$file': the certificate that the app got has no file here, and there is no key to sign in with. $again"
             }
         }
 
         $info = Read-SPSLifecycleCertificateInfo -Path $cer
-        if ($null -ne $info -and -not [System.String]::Equals($info.Thumbprint, $record.Thumbprint, [System.StringComparison]::Ordinal)) {
-            throw "The app '$ApplicationName' was created (client ID $($record.ClientId)), but the certificate in '$cer' is not the one that the app got (thumbprint $($record.Thumbprint)): the key that was written is not the key of the app. Delete the app in the Microsoft Entra admin center (App registrations), and run the script again."
+        if ($null -eq $info) {
+            throw "$created the certificate file '$cer' cannot be read as a certificate, so it cannot be told whether it is the one that the app got. $again"
         }
 
-        $expires = if ($null -ne $info) { $info.NotAfter } else { $plan.Certificate.ExpiresOn }
+        if (-not [System.String]::Equals($info.Thumbprint, $record.Thumbprint, [System.StringComparison]::Ordinal)) {
+            throw "$created the certificate in '$cer' is not the one that the app got (thumbprint $($record.Thumbprint)): the key that was written is not the key of the app. $again"
+        }
+
+        $key = Read-SPSLifecycleKeyFile -Path $pfx -Password $password
+        if ($null -eq $key) {
+            throw "$created the key file '$pfx' cannot be opened with the password that was typed, or is not a .pfx file, so there is no key to sign in with. $again"
+        }
+
+        if (-not $key.HasPrivateKey -or -not [System.String]::Equals($key.Thumbprint, $record.Thumbprint, [System.StringComparison]::Ordinal)) {
+            throw "$created the key file '$pfx' does not hold the private key of the certificate that the app got (thumbprint $($record.Thumbprint)), so there is no key to sign in with. $again"
+        }
+
+        $expires = $info.NotAfter
         $keyProtected = Protect-SPSLifecyclePrivateKey -Path $pfx
         if ($plan.Certificate.Store -eq 'CurrentUser') {
             try {
-                $null = Add-SPSLifecycleCertificateToStore -Path $pfx -Password $password
-                $stored = $true
+                $storedThumbprint = Add-SPSLifecycleCertificateToStore -Path $pfx -Password $password
+                if ([System.String]::Equals("$storedThumbprint", $record.Thumbprint, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $stored = $true
+                }
+                else {
+                    Write-Warning -Message "The certificate that was added to the CurrentUser store is not the one that the app got. Use the .pfx file, and remove what was added from the store by hand."
+                }
             }
             catch {
                 Write-Warning -Message "The certificate could not be added to the CurrentUser store ($($_.Exception.Message.Trim().TrimEnd('.'))). Use the .pfx file, or import it by hand."
