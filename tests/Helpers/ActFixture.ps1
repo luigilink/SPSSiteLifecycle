@@ -42,7 +42,7 @@ function script:Set-ActStub {
     }
 
     $values = @{
-        World = $world; Fail = @{}; HomeSite = ''; ArchiveEnabled = $true; Account = 'admin@contoso.example'
+        World = $world; Fail = @{}; HomeSite = ''; HomeSiteQueue = $null; HomeSiteReads = 0; ArchiveEnabled = $true; Account = 'admin@contoso.example'
         Redirected = $false; Answers = @('contoso', 'APPLY 1'); AnswerIndex = 0; Reads = 0
     }
     foreach ($key in $Data.Keys) {
@@ -63,7 +63,11 @@ $script:StubLog.Add('close')
         'Get-SPSLifecycleHomeSiteUrl'      = @'
 param($Session)
 $script:StubLog.Add('home site')
-$script:StubData.HomeSite
+$script:StubData.HomeSiteReads++
+if ($script:StubData.Fail.ContainsKey('home site')) { throw $script:StubData.Fail['home site'] }
+if ($script:StubData.Fail.ContainsKey('home site from')) { if ($script:StubData.HomeSiteReads -ge $script:StubData.Fail['home site from']) { throw 'The home site of the tenant could not be read: Throttled.' } }
+$queue = $script:StubData.HomeSiteQueue
+if ($null -ne $queue) { $queue[[System.Math]::Min($script:StubData.HomeSiteReads - 1, $queue.Count - 1)] } else { $script:StubData.HomeSite }
 '@
         'Get-SPSLifecycleArchiveEnabled'   = @'
 param($Session)

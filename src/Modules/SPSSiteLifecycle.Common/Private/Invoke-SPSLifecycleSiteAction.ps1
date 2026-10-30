@@ -14,10 +14,12 @@
           error: the site is locked, and the message says that its date is not in the journal.
         - DELETE-SITE (a site without a group): a read-only site refuses a direct deletion, so it is unlocked first (and waited
           for), then read again, and deleted into the recycle bin only when nothing changed since the verdict (see
-          Get-SPSLifecycleSiteChange: people can write in the site while it is unlocked, and the address may have been reused).
-          When the deletion, the wait or that check fails, the site is locked again, and the tool says it is only when the site
-          reports ReadOnly (see Restore-SPSLifecycleSiteLock); an address that now belongs to another site is not locked.
-          An unlocked site is deleted directly. A run that is interrupted (Ctrl+C) puts the lock back as well.
+          Get-SPSLifecycleSiteChange: people can write in the site while it is unlocked, and the address may have been reused;
+          the group and the home site are read again too). When the unlock, the deletion, the wait or that check fails, the site is
+          locked again (a request to unlock that throws may have been applied all the same), and the tool says it is only when the
+          site reports ReadOnly (see Restore-SPSLifecycleSiteLock); an address that now belongs to another site is not locked. An
+          unlocked site is deleted directly. A run that is interrupted (Ctrl+C) puts the lock back as well, with the same care, and
+          retries it when the interruption came during the first attempt.
         - DELETE-VIA-GROUP: the group is deleted by its ID, which deletes the site some time later (from minutes to hours). The
           site is not unlocked.
         - ARCHIVE: the archive is requested (it takes place later). With UnlockBeforeArchive, a read-only site is unlocked first
@@ -136,7 +138,8 @@
     }
 
     # The site is read again once it is unlocked: for up to 2 minutes people can write in it, and the address may have been reused. Nothing
-    # that the verdict was given from may have changed, or nothing is done.
+    # that the verdict was given from may have changed, or nothing is done: not the site, not its group, and not the home site, which is read
+    # again because it is what the verdict was given from too.
     $waitForUnlock = {
         $after = Wait-SPSLifecycleLockState -Session $Session -Url $url -State Unlock -SiteId $siteId
         if ($null -eq $after) {
@@ -146,6 +149,30 @@
         $change = Get-SPSLifecycleSiteChange -Before $Site -After $after -CheckSize:($action -eq 'DELETE-SITE') -DeleteMaxSizeGB ([System.Double]$Setting.DeleteMaxSizeGB)
         if ($change) {
             throw "The site changed while it was unlocked ($change), so it was not touched."
+        }
+
+        if ($groupId) {
+            $groupState = Get-SPSLifecycleGroupState -Session $Session -GroupId $groupId
+            if (-not [System.String]::Equals("$groupState", 'Active', [System.StringComparison]::Ordinal)) {
+                throw "The group of the site is not active any more (its state is '$(ConvertTo-SPSLifecycleVisibleText -Text "$groupState")') while the site was unlocked, so it was not touched."
+            }
+        }
+
+        $homeSiteUrl = Get-SPSLifecycleHomeSiteUrl -Session $Session
+        if ($homeSiteUrl -and (ConvertTo-SPSLifecycleUrlKey -Url $homeSiteUrl) -eq (ConvertTo-SPSLifecycleUrlKey -Url $url)) {
+            throw 'The site is the home site of the tenant now, so it was not touched.'
+        }
+    }
+
+    # What is done to put the lock back when the run is interrupted (Ctrl+C is not caught by a catch, so a finally does it), with the same care as
+    # after a failure: the site is read, and a site that another site replaced is left alone.
+    $putBackAfterInterruption = {
+        $back = Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId
+        try {
+            Write-Warning -Message "The run was interrupted while the site '$url' was unlocked. $($back.Note)"
+        }
+        catch {
+            $null = $_
         }
     }
 
@@ -168,13 +195,14 @@
 
         'DELETE-SITE' {
             $unlocked = $false
-            $lockBackTried = $false
+            $restored = $false
             $deleted = $false
             try {
                 try {
                     if ($isReadOnly) {
-                        & $unlock
+                        # Set before the request: one that throws (a response that was lost, a throttled call) may have been applied all the same.
                         $unlocked = $true
+                        & $unlock
                         & $waitForUnlock
                     }
 
@@ -184,22 +212,17 @@
                 catch {
                     $message = $_.Exception.Message.Trim()
                     if ($unlocked) {
-                        $lockBackTried = $true
-                        throw "$message $((Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId).Note)"
+                        $back = Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId
+                        $restored = $true
+                        throw "$message $($back.Note)"
                     }
 
                     throw
                 }
             }
             finally {
-                # Ctrl+C is not caught by the catch above, and it would leave the site unlocked: the lock is put back as well as it can be.
-                if ($unlocked -and -not $lockBackTried -and -not $deleted) {
-                    try {
-                        Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State ReadOnly
-                    }
-                    catch {
-                        $null = $_
-                    }
+                if ($unlocked -and -not $restored -and -not $deleted) {
+                    & $putBackAfterInterruption
                 }
             }
 
@@ -213,12 +236,12 @@
 
         'ARCHIVE' {
             $unlocked = $false
-            $lockBackTried = $false
+            $restored = $false
             try {
                 try {
                     if ($unlockBeforeArchive -and $isReadOnly) {
-                        & $unlock
                         $unlocked = $true
+                        & $unlock
                         & $waitForUnlock
                     }
 
@@ -231,29 +254,25 @@
                 catch {
                     $message = $_.Exception.Message.Trim()
                     if ($unlocked) {
-                        $lockBackTried = $true
-                        throw "$message $((Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId).Note)"
+                        $back = Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId
+                        $restored = $true
+                        throw "$message $($back.Note)"
                     }
 
                     throw
                 }
 
                 if ($unlocked) {
-                    $lockBackTried = $true
                     $back = Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId
+                    $restored = $true
                     if (-not $back.Locked) {
                         throw "The archive was requested. $($back.Note)"
                     }
                 }
             }
             finally {
-                if ($unlocked -and -not $lockBackTried) {
-                    try {
-                        Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State ReadOnly
-                    }
-                    catch {
-                        $null = $_
-                    }
+                if ($unlocked -and -not $restored) {
+                    & $putBackAfterInterruption
                 }
             }
 

@@ -15,8 +15,9 @@
            rows past the cap are NotRun with their verdict: a real run would not do them.
         3. With Execute, the pause between two actions (DelaySeconds) comes before the next row is read, so that the read and the action
            of a row are not apart.
-        4. The row is read again from the tenant right before its action and given its verdict (Get-SPSLifecycleActVerdict). A read that
-           fails is ReadError. A SKIP- verdict is Skipped, a REVIEW- one is Review (with the meaning of the verdict as the detail). An
+        4. The row is read again from the tenant right before its action, with the home site (which is read for each row, since the
+           assignment can change during a run), and given its verdict (Get-SPSLifecycleActVerdict). A read that fails, the home
+           site's included, is ReadError. A SKIP- verdict is Skipped, a REVIEW- one is Review (with the meaning of the verdict as the detail). An
            action verdict is WouldDo in report-only mode, and with Execute the action is done (Invoke-SPSLifecycleSiteAction): Done,
            or Failed with the message.
         5. The row goes in the Act report at once, whatever its outcome (see Add-SPSLifecycleActReportRow). A run that stops half-way
@@ -42,9 +43,6 @@
 
         .PARAMETER ExclusionIndex
         The index of the exclusion lists (Get-SPSLifecycleExclusionIndex).
-
-        .PARAMETER HomeSiteUrl
-        The address of the home site, which is protected.
 
         .PARAMETER Account
         The account of the signed-in administrator, for GrantSiteAdmin.
@@ -86,11 +84,6 @@
         [Parameter(Mandatory = $true)]
         [System.Management.Automation.PSObject]
         $ExclusionIndex,
-
-        [Parameter()]
-        [AllowEmptyString()]
-        [System.String]
-        $HomeSiteUrl = '',
 
         [Parameter()]
         [AllowEmptyString()]
@@ -167,7 +160,20 @@
 
         $pause = $false
         $time = & $clock
-        $result = Get-SPSLifecycleActVerdict -Row $item -Session $Session -Setting $Setting -LockDateIndex $LockDateIndex -ExclusionIndex $ExclusionIndex -HomeSiteUrl $HomeSiteUrl -Now $time
+
+        # The home site is read for each row, with the site: the assignment can change during a run that lasts, and the safeguard is a live one.
+        $homeSiteUrl = ''
+        $result = $null
+        try {
+            $homeSiteUrl = Get-SPSLifecycleHomeSiteUrl -Session $Session
+        }
+        catch {
+            $result = [PSCustomObject]@{ Verdict = ''; ReadError = $_.Exception.Message }
+        }
+
+        if ($null -eq $result) {
+            $result = Get-SPSLifecycleActVerdict -Row $item -Session $Session -Setting $Setting -LockDateIndex $LockDateIndex -ExclusionIndex $ExclusionIndex -HomeSiteUrl $homeSiteUrl -Now $time
+        }
 
         if ($result.ReadError) {
             & $record $item '' 'ReadError' $result.ReadError $time

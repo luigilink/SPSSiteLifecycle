@@ -99,7 +99,8 @@
     $session = $null
     try {
         $session = Open-SPSLifecycleTenantSession -Setting $setting
-        $homeSiteUrl = Get-SPSLifecycleHomeSiteUrl -Session $session
+        # Read once here so that a tenant that cannot say stops the run before the loop; the loop reads it again for each row.
+        $null = Get-SPSLifecycleHomeSiteUrl -Session $session
 
         if ($plan.HasArchive) {
             $archiveEnabled = Get-SPSLifecycleArchiveEnabled -Session $session
@@ -135,7 +136,6 @@
             Row            = @($import.Rows)
             LockDateIndex  = $lockDateIndex
             ExclusionIndex = $exclusionIndex
-            HomeSiteUrl    = $homeSiteUrl
             Account        = $account
             ReportPath     = $summary.ReportPath
         }

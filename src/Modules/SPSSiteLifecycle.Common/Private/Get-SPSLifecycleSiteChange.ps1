@@ -9,8 +9,9 @@
         unlock, and nothing may have changed since the verdict. This function compares the two reads and gives the first difference in
         words, or an empty text when there is none:
 
-        - the site ID (the address may now belong to another site), the address, the template, the group, the hub flag and the channel
-          flag, and the archive status;
+        - the site ID (the address may now belong to another site), the address, the template, the group (a group ID that is empty or all
+          zeros is no group, and one that is neither that nor a GUID is an error, never "no group"), the hub flag and the channel flag, and
+          the archive status;
         - the hold: only a flag that says False lets the action go on, as for the verdict (an unread safeguard is not a green light);
         - the content: its date must not be later than before, and must be readable;
         - with CheckSize (a deletion), the size must be known and not above DeleteMaxSizeGB.
@@ -72,7 +73,28 @@
         return 'its template is not the same'
     }
 
-    if (-not (& $same (ConvertTo-SPSLifecycleId -Value $Before.GroupId) (ConvertTo-SPSLifecycleId -Value $After.GroupId))) {
+    # A group ID that is empty or all zeros is "no group", and any other text that is not a GUID is not: it is not read as "no group" either.
+    $groupKey = {
+        param($Value)
+        $text = "$Value".Trim()
+        if (-not $text) {
+            return ''
+        }
+
+        $guid = [System.Guid]::Empty
+        if (-not [System.Guid]::TryParse($text, [ref]$guid)) {
+            return $null
+        }
+
+        if ($guid -eq [System.Guid]::Empty) { '' } else { $guid.ToString() }
+    }
+    $beforeGroup = & $groupKey $Before.GroupId
+    $afterGroup = & $groupKey $After.GroupId
+    if ($null -eq $afterGroup -or $null -eq $beforeGroup) {
+        return 'its group ID is not a GUID'
+    }
+
+    if (-not (& $same $beforeGroup $afterGroup)) {
         return 'its group is not the same'
     }
 

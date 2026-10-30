@@ -306,14 +306,17 @@ Describe 'Invoke-SPSLifecycleAct, with Execute' {
             $result.Rows[0].Detail | Should -BeExactly 'The group was deleted: SharePoint deletes the site some time later (from minutes to hours).'
             $log = @(Get-StubLog)
             $log[5..($log.Count - 1)] | Should -Be @(
+                'home site'
                 'read https://contoso.sharepoint.com/sites/site1'
                 'group 00000001-1111-4111-8111-000000000001'
                 'delete group 00000001-1111-4111-8111-000000000001'
                 'sleep 2'
+                'home site'
                 'read https://contoso.sharepoint.com/sites/site2'
                 'group 00000002-1111-4111-8111-000000000002'
                 'delete group 00000002-1111-4111-8111-000000000002'
                 'sleep 2'
+                'home site'
                 'read https://contoso.sharepoint.com/sites/site3'
                 'group 00000003-1111-4111-8111-000000000003'
                 'delete group 00000003-1111-4111-8111-000000000003'
@@ -385,6 +388,52 @@ Describe 'Invoke-SPSLifecycleAct, with Execute' {
             $null = Invoke-TestAct -Run $run
 
             Get-Calls -Pattern 'account' | Should -HaveCount 0
+        }
+    }
+
+    Context 'The home site is read for each row' {
+        It 'reads it with each site, so that an assignment that changes during the run protects the new home site from then on' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{
+                Answers       = @('contoso', 'DELETE 3')
+                HomeSiteQueue = @('', '', '', 'https://contoso.sharepoint.com/sites/site3')
+            }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Done', 'Done', 'Skipped')
+            $result.Rows[2].Verdict | Should -BeExactly 'SKIP-PROTECTED'
+            Get-Calls -Pattern 'home site' | Should -HaveCount 4
+        }
+
+        It 'reads it once before the loop, so that a tenant that cannot say stops the run before the first action' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1'); Fail = @{ 'home site' = 'The home site of the tenant could not be read: Access denied.' } }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*home site*could not be read*'
+
+            Get-Calls -Pattern 'read *' | Should -HaveCount 0
+            @(Get-StubLog)[-1] | Should -BeExactly 'close'
+        }
+
+        It 'counts a home site that cannot be read as an error of the row, and does not act on the row' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 4'); Fail = @{ 'home site from' = 2 } }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('ReadError', 'ReadError', 'ReadError', 'NotRun')
+            $result.Rows[0].Verdict | Should -BeExactly ''
+            $result.Rows[0].Detail | Should -BeLike '*home site*could not be read*Throttled*'
+            $result.Summary.StoppedBecause | Should -BeExactly 'ConsecutiveErrors'
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+        }
+
+        It 'is read in report-only mode too' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -Data @{ HomeSiteQueue = @('', '', 'https://contoso.sharepoint.com/sites/site2') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('WouldDo', 'Skipped')
         }
     }
 

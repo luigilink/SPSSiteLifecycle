@@ -196,8 +196,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The actions follow the lab (27 and 28 October): a read-only site is unlocked, deleted into the recycle bin and locked again when
   that fails; a site with a group is deleted through its group; a lock writes its date in the lock journal; an archive can unlock
   the site first and lock it again afterwards, and add the administrator who signed in. A site that was unlocked is read again, and
-  nothing is done if it changed meanwhile (the site ID, a hold, the content, the size of a deletion); a lock is said to be put back only
-  when the site reports it, an address that another site took is left alone, and an interrupted run puts the lock back too. Execute
+  nothing is done if it changed meanwhile (the site ID, a hold, the content, the size of a deletion, its group and the home site,
+  read again); a lock is said to be put back only when the site reports it, an address that another site took is left alone, a request
+  to unlock that throws is treated as possibly applied, and an interrupted run puts the lock back too, with the same care. The home
+  site is read for each row. Execute
   needs Microsoft 365 Archive to be on for sure before an archive. Every adapter that changes the tenant checks its target again (the
   tenant of the session, the host of the address, no OneDrive, no root site, no encoded slash, a group by its ID), and a structure test
   checks that each one does. None of these calls has run against a tenant yet.
