@@ -700,11 +700,11 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
             $state.Reason | Should -BeExactly ''
         }
 
-        It 'is refused, with its reason, when <Name>' -ForEach @(
-            @{ Name = 'it is for another tenant'; Tenant = 'fabrikam'; Filter = "LockState -eq 'ReadOnly'"; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*tenant*' }
-            @{ Name = 'the filter changed'; Tenant = 'contoso'; Filter = "LockState -eq 'Unlock'"; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*filter*' }
-            @{ Name = 'the filter was removed'; Tenant = 'contoso'; Filter = ''; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*filter*' }
-            @{ Name = 'the way the sites are asked changed'; Tenant = 'contoso'; Filter = "LockState -eq 'ReadOnly'"; Options = 'Source=Cmdlet'; Expected = '*asked*' }
+        It 'is refused, with its reason and the code of its reason, when <Name>' -ForEach @(
+            @{ Name = 'it is for another tenant'; Tenant = 'fabrikam'; Filter = "LockState -eq 'ReadOnly'"; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*tenant*'; Code = 'other-tenant' }
+            @{ Name = 'the filter changed'; Tenant = 'contoso'; Filter = "LockState -eq 'Unlock'"; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*filter*'; Code = 'other-filter' }
+            @{ Name = 'the filter was removed'; Tenant = 'contoso'; Filter = ''; Options = 'Source=Csom;PersonalSites=Excluded'; Expected = '*filter*'; Code = 'other-filter' }
+            @{ Name = 'the way the sites are asked changed'; Tenant = 'contoso'; Filter = "LockState -eq 'ReadOnly'"; Options = 'Source=Cmdlet'; Expected = '*asked*'; Code = 'other-options' }
         ) {
             $folder = New-TestFolder
             $manifest = New-TestManifest
@@ -715,7 +715,38 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
             $state.Exists | Should -BeTrue
             $state.Usable | Should -BeFalse
             $state.Reason | Should -BeLike $Expected
+            $state.Code | Should -BeExactly $Code
             $null -eq $state.Manifest | Should -BeTrue
+        }
+
+        It 'gives a code for each way of not being taken up, that names nothing of the tenant: <Name>' -ForEach @(
+            @{ Name = 'a manifest that is not JSON'; Code = 'damaged'; Make = { param($f) Set-Content -LiteralPath (Join-Path $f 'manifest.json') -Value '{ no' -Encoding utf8NoBOM } }
+            @{ Name = 'a manifest of another version'; Code = 'other-version'; Make = { param($f) Edit-TestFile -Path (Join-Path $f 'manifest.json') -Pattern '"Version":\s*1' -Replacement '"Version": 2' } }
+            @{ Name = 'a page that is missing'; Code = 'damaged'; Make = { param($f) Remove-Item -LiteralPath (Join-Path $f 'page-000001.csv') } }
+            @{ Name = 'a listing that finished'; Code = 'finished'; Make = { param($f) Get-ChildItem -LiteralPath $f | Remove-Item -Force; $m = New-TestManifest; $null = Save-TestPage -Folder $f -Manifest $m -NextToken ''; & $script:Module { param($f2, $m2, $n) Complete-SPSLifecycleListingCheckpoint -Folder $f2 -Manifest $m2 -Now $n } $f $m $script:Now } }
+            @{ Name = 'a clock that was set back'; Code = 'clock'; Make = { param($f) Edit-TestFile -Path (Join-Path $f 'manifest.json') -Pattern '"UpdatedOn":\s*"[^"]*"' -Replacement '"UpdatedOn": "20261030T110000.0000000Z"' } }
+        ) {
+            $folder = New-TestFolder
+            $manifest = New-TestManifest
+            $null = Save-TestPage -Folder $folder -Manifest $manifest
+            & $Make $folder
+
+            $state = Read-TestCheckpoint -Folder $folder
+
+            $state.Usable | Should -BeFalse
+            $state.Code | Should -BeExactly $Code
+        }
+
+        It 'gives the code too-old for a checkpoint that is too old, and no code for one that can be taken up or that does not exist' {
+            $folder = New-TestFolder
+            $manifest = New-TestManifest
+            $null = Save-TestPage -Folder $folder -Manifest $manifest
+
+            (Read-TestCheckpoint -Folder $folder -Now $script:Now.AddHours(25)).Code | Should -BeExactly 'too-old'
+            $usable = Read-TestCheckpoint -Folder $folder
+            $usable.Usable | Should -BeTrue
+            $usable.Code | Should -BeExactly ''
+            (Read-TestCheckpoint -Folder (Join-Path -Path (New-TestFolder) -ChildPath 'missing')).Code | Should -BeExactly ''
         }
 
         It 'is not trusted when the dates are not in order, as the clock of the machine was set back while the listing ran: <Name>' -ForEach @(

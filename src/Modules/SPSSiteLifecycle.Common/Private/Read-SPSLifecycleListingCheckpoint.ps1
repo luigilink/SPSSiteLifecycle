@@ -73,8 +73,8 @@
     )
 
     $result = {
-        param($Exists, $Usable, $Reason, $Manifest, $Finished = $false)
-        [PSCustomObject][ordered]@{ Exists = $Exists; Usable = $Usable; Finished = $Finished; Reason = $Reason; Manifest = $Manifest }
+        param($Exists, $Usable, $Reason, $Manifest, $Finished = $false, $Code = '')
+        [PSCustomObject][ordered]@{ Exists = $Exists; Usable = $Usable; Finished = $Finished; Reason = $Reason; Code = $Code; Manifest = $Manifest }
     }
 
     $fullFolder = Resolve-SPSLifecycleFileSystemPath -Path $Folder
@@ -88,59 +88,59 @@
         $json = Get-Content -LiteralPath $path -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        return & $result $true $false "The checkpoint is damaged: the manifest cannot be read as JSON ($($_.Exception.Message))." $null
+        return & $result $true $false "The checkpoint is damaged: the manifest cannot be read as JSON ($($_.Exception.Message))." $null $false 'damaged'
     }
 
     if ($json -is [System.Management.Automation.PSCustomObject] -and $null -ne $json.PSObject.Properties['Version'] -and $json.Version -ne 1) {
-        return & $result $true $false "The checkpoint was written by another version of the tool (version $(ConvertTo-SPSLifecycleVisibleText -Text "$($json.Version)"), and this one reads version 1)." $null
+        return & $result $true $false "The checkpoint was written by another version of the tool (version $(ConvertTo-SPSLifecycleVisibleText -Text "$($json.Version)"), and this one reads version 1)." $null $false 'other-version'
     }
 
     $problem = Get-SPSLifecycleListingManifestProblem -Manifest $json
     if ($problem) {
-        return & $result $true $false "The checkpoint is damaged: $problem" $null
+        return & $result $true $false "The checkpoint is damaged: $problem" $null $false 'damaged'
     }
 
     if ($json.State -ceq 'Completed') {
-        return & $result $true $false 'The previous listing finished, and a finished listing is never reused to answer a new Scan: a new one starts.' $null $true
+        return & $result $true $false 'The previous listing finished, and a finished listing is never reused to answer a new Scan: a new one starts.' $null $true 'finished'
     }
 
     if (-not [System.String]::Equals($json.Tenant, $Tenant, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return & $result $true $false "The checkpoint was made for the tenant '$(ConvertTo-SPSLifecycleVisibleText -Text $json.Tenant)', not for '$(ConvertTo-SPSLifecycleVisibleText -Text $Tenant)'." $null
+        return & $result $true $false "The checkpoint was made for the tenant '$(ConvertTo-SPSLifecycleVisibleText -Text $json.Tenant)', not for '$(ConvertTo-SPSLifecycleVisibleText -Text $Tenant)'." $null $false 'other-tenant'
     }
 
     if ($json.Filter -cne $Filter) {
         $was = if ($json.Filter) { $json.Filter } else { '(none)' }
         $is = if ($Filter) { $Filter } else { '(none)' }
-        return & $result $true $false "The filter changed (it was $was, it is $is)." $null
+        return & $result $true $false "The filter changed (it was $was, it is $is)." $null $false 'other-filter'
     }
 
     if ($json.Options -cne $Options) {
-        return & $result $true $false "The way the sites are asked changed (it was $($json.Options), it is $Options)." $null
+        return & $result $true $false "The way the sites are asked changed (it was $($json.Options), it is $Options)." $null $false 'other-options'
     }
 
     $started = ConvertFrom-SPSLifecycleCheckpointDate -Text $json.StartedOn
     $updated = ConvertFrom-SPSLifecycleCheckpointDate -Text $json.UpdatedOn
     $age = $Now.ToUniversalTime() - $started
     if ($age.TotalMinutes -lt -5 -or ($updated - $Now.ToUniversalTime()).TotalMinutes -gt 5) {
-        return & $result $true $false 'The checkpoint is dated in the future (was the clock of this machine set back?), so it is not trusted.' $null
+        return & $result $true $false 'The checkpoint is dated in the future (was the clock of this machine set back?), so it is not trusted.' $null $false 'clock'
     }
 
     if ($updated -lt $started) {
-        return & $result $true $false 'The dates of the checkpoint are not in order (the last update is before the start: was the clock of this machine set back while the listing ran?), so it is not trusted.' $null
+        return & $result $true $false 'The dates of the checkpoint are not in order (the last update is before the start: was the clock of this machine set back while the listing ran?), so it is not trusted.' $null $false 'clock'
     }
 
     if ($age.TotalHours -gt $MaxAgeHours) {
-        return & $result $true $false ('The checkpoint is {0} hours old, more than the {1} hours that a listing stays true.' -f $age.TotalHours.ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture), $MaxAgeHours.ToString('0.##', [System.Globalization.CultureInfo]::InvariantCulture))
+        return & $result $true $false ('The checkpoint is {0} hours old, more than the {1} hours that a listing stays true.' -f $age.TotalHours.ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture), $MaxAgeHours.ToString('0.##', [System.Globalization.CultureInfo]::InvariantCulture)) $null $false 'too-old'
     }
 
     foreach ($page in @($json.Pages)) {
         $pagePath = Join-Path -Path $fullFolder -ChildPath $page.File
         if (-not (Test-Path -LiteralPath $pagePath -PathType Leaf)) {
-            return & $result $true $false "The checkpoint is damaged: the page $($page.Number) is missing." $null
+            return & $result $true $false "The checkpoint is damaged: the page $($page.Number) is missing." $null $false 'damaged'
         }
 
         if ((Get-FileHash -LiteralPath $pagePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $page.Sha256) {
-            return & $result $true $false "The checkpoint is damaged: the page $($page.Number) was changed (its hash is not the one that was saved)." $null
+            return & $result $true $false "The checkpoint is damaged: the page $($page.Number) was changed (its hash is not the one that was saved)." $null $false 'damaged'
         }
     }
 

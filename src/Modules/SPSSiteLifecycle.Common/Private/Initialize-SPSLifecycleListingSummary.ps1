@@ -17,7 +17,9 @@
         - PersonalSites: what the call was asked about the OneDrive sites (D12), Excluded when the server was asked to
           leave them out.
         - StartedOn, FinishedOn (UTC) and ElapsedSeconds.
-        - Resumed: whether the run took up a checkpoint, and StartReason, why it did not when one was there.
+        - Resumed: whether the run took up a checkpoint, and StartReason, why it did not when one was there, in words, and
+          StartCode, why, as one of a few fixed words that name nothing (damaged, other-version, finished, other-tenant, other-filter,
+          other-options, clock, too-old, restart), for a report that must not say which tenant or filter a checkpoint was made for.
         - PagesFromCheckpoint and SitesFromCheckpoint: what was taken from the checkpoint.
         - PagesRead and SitesRead: what the tenant gave in this run, SitesRead before the sites that are dropped.
         - OneDriveDropped: the OneDrive sites that the call returned although it was asked not to (D12), counted and
@@ -43,6 +45,7 @@
         ElapsedSeconds      = 0.0
         Resumed             = $false
         StartReason         = ''
+        StartCode           = ''
         PagesFromCheckpoint = 0
         SitesFromCheckpoint = 0
         PagesRead           = 0

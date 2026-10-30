@@ -655,11 +655,11 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
         }
 
         It 'starts again, and says why, when <Name>' -ForEach @(
-            @{ Name = 'the filter changed'; Run = @{ Filter = "LockState -eq 'Unlock'" }; Expected = '*filter*'; Warn = $true }
-            @{ Name = 'the filter was dropped'; Run = @{ Filter = '' }; Expected = '*filter*'; Warn = $true }
-            @{ Name = 'the tenant is another'; Run = @{ Tenant = 'fabrikam' }; Expected = '*tenant*'; Warn = $true }
-            @{ Name = 'the way the sites are asked changed'; Run = @{ Options = 'Source=Cmdlet' }; Expected = '*asked*'; Warn = $true }
-            @{ Name = 'the checkpoint is older than 24 hours'; Run = @{ Hours = 25 }; Expected = '*24 hours*'; Warn = $true }
+            @{ Name = 'the filter changed'; Run = @{ Filter = "LockState -eq 'Unlock'" }; Expected = '*filter*'; Code = 'other-filter'; Warn = $true }
+            @{ Name = 'the filter was dropped'; Run = @{ Filter = '' }; Expected = '*filter*'; Code = 'other-filter'; Warn = $true }
+            @{ Name = 'the tenant is another'; Run = @{ Tenant = 'fabrikam' }; Expected = '*tenant*'; Code = 'other-tenant'; Warn = $true }
+            @{ Name = 'the way the sites are asked changed'; Run = @{ Options = 'Source=Cmdlet' }; Expected = '*asked*'; Code = 'other-options'; Warn = $true }
+            @{ Name = 'the checkpoint is older than 24 hours'; Run = @{ Hours = 25 }; Expected = '*24 hours*'; Code = 'too-old'; Warn = $true }
         ) {
             $folder = New-TestFolder
             $pages = New-TestPages -Sizes 3, 2, 4
@@ -679,6 +679,7 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             $result.Summary.Resumed | Should -BeFalse
             $result.Summary.PagesFromCheckpoint | Should -Be 0
             $result.Summary.StartReason | Should -BeLike $Expected
+            $result.Summary.StartCode | Should -BeExactly $Code
             $result.Warnings | Should -HaveCount 1
             $result.Warnings[0] | Should -BeLike $Expected
         }
@@ -736,6 +737,7 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             $calls | Should -Be @('', 't1', 't2')
             $result.Summary.Resumed | Should -BeFalse
             $result.Summary.StartReason | Should -BeLike '*Restart*'
+            $result.Summary.StartCode | Should -BeExactly 'restart'
             Get-TestFiles -Folder $folder | Should -Be @('listing.lock', 'manifest.json')
         }
 

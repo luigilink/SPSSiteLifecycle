@@ -9,7 +9,7 @@ Describe 'Initialize-SPSLifecycleListingSummary' {
 
         $summary.PSObject.Properties.Name | Should -Be @(
             'Source', 'FallbackReason', 'Filter', 'PersonalSites', 'StartedOn', 'FinishedOn', 'ElapsedSeconds',
-            'Resumed', 'StartReason', 'PagesFromCheckpoint', 'SitesFromCheckpoint', 'PagesRead', 'SitesRead',
+            'Resumed', 'StartReason', 'StartCode', 'PagesFromCheckpoint', 'SitesFromCheckpoint', 'PagesRead', 'SitesRead',
             'OneDriveDropped', 'DuplicatesDropped', 'SitesReturned', 'Retries', 'PageSecondsTotal', 'PageSecondsMax'
         )
         $summary.Source | Should -BeExactly ''
@@ -21,6 +21,7 @@ Describe 'Initialize-SPSLifecycleListingSummary' {
         $summary.ElapsedSeconds | Should -Be 0
         $summary.Resumed | Should -BeFalse
         $summary.StartReason | Should -BeExactly ''
+        $summary.StartCode | Should -BeExactly ''
         foreach ($name in 'PagesFromCheckpoint', 'SitesFromCheckpoint', 'PagesRead', 'SitesRead', 'OneDriveDropped', 'DuplicatesDropped', 'SitesReturned', 'Retries') {
             $summary.$name | Should -Be 0 -Because $name
             $summary.$name | Should -BeOfType [int]

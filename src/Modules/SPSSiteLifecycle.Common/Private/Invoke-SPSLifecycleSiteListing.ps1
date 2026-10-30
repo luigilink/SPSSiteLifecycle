@@ -164,6 +164,7 @@
             $manifest = $null
             if ($Restart) {
                 $Summary.StartReason = 'A new listing was asked for (Restart).'
+                $Summary.StartCode = 'restart'
             }
             else {
                 $state = Read-SPSLifecycleListingCheckpoint -Folder $folder -Tenant $Tenant -Filter $Filter -Options $Options -Now $runStart -MaxAgeHours $MaxCheckpointAgeHours
@@ -172,6 +173,7 @@
                 }
                 elseif ($state.Exists) {
                     $Summary.StartReason = $state.Reason
+                    $Summary.StartCode = $state.Code
                     if ($state.Finished) {
                         Write-Verbose -Message $state.Reason
                     }
