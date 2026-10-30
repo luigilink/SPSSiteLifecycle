@@ -15,7 +15,8 @@
         - DELETE-SITE (a site without a group): a read-only site refuses a direct deletion, so it is unlocked first (and waited
           for), then read again, and deleted into the recycle bin only when nothing changed since the verdict (see
           Get-SPSLifecycleSiteChange: people can write in the site while it is unlocked, and the address may have been reused;
-          the group and the home site are read again too). When the unlock, the deletion, the wait or that check fails, the site is
+          the group and the home site are read again too, and then the site once more, right before the deletion, because those
+          reads take time). When the unlock, the deletion, the wait or that check fails, the site is
           locked again (a request to unlock that throws may have been applied all the same), and the tool says it is only when the
           site reports ReadOnly (see Restore-SPSLifecycleSiteLock); an address that now belongs to another site is not locked. An
           unlocked site is deleted directly. A run that is interrupted (Ctrl+C) puts the lock back as well, with the same care, and
@@ -162,11 +163,32 @@
         if ($homeSiteUrl -and (ConvertTo-SPSLifecycleUrlKey -Url $homeSiteUrl) -eq (ConvertTo-SPSLifecycleUrlKey -Url $url)) {
             throw 'The site is the home site of the tenant now, so it was not touched.'
         }
+
+        # The site is read one last time, after the reads above: they take seconds, the site is unlocked meanwhile, and what the write is about to
+        # act on is what was read last. A change after this read cannot be ruled out: nothing in the tenant makes a write depend on the state that
+        # was read.
+        $last = Get-SPSLifecycleLiveSite -Session $Session -Url $url
+        if ($null -eq $last) {
+            throw 'The site is not there any more, so it was not touched.'
+        }
+
+        $change = Get-SPSLifecycleSiteChange -Before $Site -After $last -CheckSize:($action -eq 'DELETE-SITE') -DeleteMaxSizeGB ([System.Double]$Setting.DeleteMaxSizeGB)
+        if ($change) {
+            throw "The site changed while it was unlocked ($change), so it was not touched."
+        }
     }
 
     # What is done to put the lock back when the run is interrupted (Ctrl+C is not caught by a catch, so a finally does it), with the same care as
     # after a failure: the site is read, and a site that another site replaced is left alone.
     $putBackAfterInterruption = {
+        # Said first: putting the lock back can take 2 minutes, and a person who closes the window in the meantime leaves the site unlocked.
+        try {
+            Write-Warning -Message "The run was interrupted while the site '$url' was unlocked: the tool is locking it again, which can take up to 2 minutes. Do not close this window."
+        }
+        catch {
+            $null = $_
+        }
+
         $back = Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId
         try {
             Write-Warning -Message "The run was interrupted while the site '$url' was unlocked. $($back.Note)"

@@ -166,13 +166,15 @@ Describe 'Add-SPSLifecycleActReportRow' {
         @{ Outcome = 'Review' }
         @{ Outcome = 'ReadError' }
         @{ Outcome = 'NotRun' }
+        @{ Outcome = 'InProgress' }
+        @{ Outcome = 'Interrupted' }
     ) {
         $report = New-TestActReport
 
         { Add-TestActRow -Report $report -Row (New-ActReportRow -Override @{ Outcome = $Outcome }) } | Should -Not -Throw
     }
 
-    It 'refuses an outcome that is not one of the seven, and writes nothing: <Outcome>' -ForEach @(
+    It 'refuses an outcome that is not one of the nine, and writes nothing: <Outcome>' -ForEach @(
         @{ Outcome = 'done' }
         @{ Outcome = 'Deleted' }
         @{ Outcome = '' }
@@ -180,7 +182,7 @@ Describe 'Add-SPSLifecycleActReportRow' {
     ) {
         $report = New-TestActReport
 
-        { Add-TestActRow -Report $report -Row (New-ActReportRow -Override @{ Outcome = $Outcome }) } | Should -Throw -ExpectedMessage '*Outcome*Done, Failed, WouldDo, Skipped, Review, ReadError or NotRun*'
+        { Add-TestActRow -Report $report -Row (New-ActReportRow -Override @{ Outcome = $Outcome }) } | Should -Throw -ExpectedMessage '*Outcome*Done, Failed, WouldDo, Skipped, Review, ReadError, NotRun, InProgress or Interrupted*'
 
         @(Get-Content -LiteralPath $report.Path) | Should -HaveCount 1
     }

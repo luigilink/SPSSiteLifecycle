@@ -225,10 +225,11 @@ function script:Invoke-TestAct {
     param($Run, [datetime]$Now = [System.DateTime]::new(2026, 10, 30, 9, 0, 0, [System.DateTimeKind]::Utc))
 
     $summary = Invoke-SPSLifecycleAct -ConfigFile $Run.Config -Now $Now -InformationAction SilentlyContinue -InformationVariable info
-    $rows = @()
+    $all = @()
     if ($null -ne $summary -and $summary.ReportPath -and (Test-Path -LiteralPath $summary.ReportPath)) {
-        $rows = @(Import-Csv -LiteralPath $summary.ReportPath)
+        $all = @(Import-Csv -LiteralPath $summary.ReportPath)
     }
 
-    [PSCustomObject]@{ Summary = $summary; Text = @($info | ForEach-Object { "$($_.MessageData)" }); Rows = $rows }
+    # Rows are the rows of the outcomes (one for each row of the reviewed report); AllRows has the rows that say that an action was started too.
+    [PSCustomObject]@{ Summary = $summary; Text = @($info | ForEach-Object { "$($_.MessageData)" }); Rows = @($all | Where-Object { $_.Outcome -ne 'InProgress' }); AllRows = $all }
 }

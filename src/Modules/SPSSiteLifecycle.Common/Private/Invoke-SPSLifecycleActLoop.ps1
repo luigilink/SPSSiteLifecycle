@@ -22,6 +22,11 @@
            or Failed with the message.
         5. The row goes in the Act report at once, whatever its outcome (see Add-SPSLifecycleActReportRow). A run that stops half-way
            (an error that nobody expected goes up) leaves the record of what was done.
+        6. With Execute, a row InProgress is written to the report, and so to the disk, right before the tenant is touched for a row,
+           and the tool does not act when it cannot be written. The row of the outcome follows it. When the run is killed, or the
+           machine goes down, during the action, nothing else can be written, and the row InProgress with no outcome after it is the
+           trace: a person looks at the site. When the run is interrupted (Ctrl+C), a row Interrupted is written after it. Neither
+           is an outcome: they are not counted.
 
         Report only never calls an adapter that changes the tenant. The function returns the counts of the outcomes, the number of
         actions that were tried, and why the run stopped, if it did (ConsecutiveErrors).
@@ -124,10 +129,9 @@
     $reportFile = $ReportPath
     $fixedTime = $Now
 
-    $record = {
+    $write = {
         param($Item, [System.String]$Verdict, [System.String]$Outcome, [System.String]$Detail, [System.DateTime]$Time)
 
-        $counts[$Outcome]++
         Add-SPSLifecycleActReportRow -Path $reportFile -Delimiter $Setting.CsvDelimiterChar -Row ([PSCustomObject][ordered]@{
                 Line        = $Item.Line
                 Url         = $Item.Url
@@ -138,6 +142,12 @@
                 Detail      = $Detail
                 ProcessedOn = $Time
             })
+    }
+    $record = {
+        param($Item, [System.String]$Verdict, [System.String]$Outcome, [System.String]$Detail, [System.DateTime]$Time)
+
+        $counts[$Outcome]++
+        & $write $Item $Verdict $Outcome $Detail $Time
     }
     $clock = {
         if ($null -ne $fixedTime) { $fixedTime } else { [System.DateTime]::UtcNow }
@@ -202,16 +212,35 @@
 
             $attempted++
             $pause = $true
+
+            # On the disk before the tenant is touched, and outside the try: when it cannot be written, nothing is done that is not on record.
+            & $write $item $verdict 'InProgress' 'Started. If no later row of this site says how it ended, the run stopped during the action (it was killed, or the machine went down): the tenant may have been changed, and the site may still be unlocked. Check the site.' (& $clock)
+
+            $recorded = $false
             try {
                 $detail = Invoke-SPSLifecycleSiteAction -Session $Session -Setting $Setting -Verdict $verdict -Site $result.Site -Account $Account -Now (& $clock)
                 & $record $item $verdict 'Done' $detail (& $clock)
+                $recorded = $true
                 $consecutive = 0
             }
             catch {
                 & $record $item $verdict 'Failed' $_.Exception.Message (& $clock)
+                $recorded = $true
                 $consecutive++
                 if ($consecutive -ge $maxErrors) {
                     $stopped = 'ConsecutiveErrors'
+                }
+            }
+            finally {
+                # Ctrl+C is not caught by a catch, so only a finally leaves the trace of an interrupted action. It is tried only, since the report may be
+                # what failed, and what it says is what can be said of both cases.
+                if (-not $recorded) {
+                    try {
+                        & $write $item $verdict 'Interrupted' 'The run ended during the action, before its outcome was recorded (it was interrupted, or the report could not be written): the tenant may have been changed. Check the site, and whether it is still unlocked.' (& $clock)
+                    }
+                    catch {
+                        $null = $_
+                    }
                 }
             }
 
