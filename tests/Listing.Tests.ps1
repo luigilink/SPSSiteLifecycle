@@ -87,7 +87,8 @@
             [switch]$Restart,
             [scriptblock]$OnProgress = $null,
             [int]$PageAttempts = 3,
-            [int]$MaxPages = 100000
+            [int]$MaxPages = 100000,
+            $PageSourceArgument = $null
         )
 
         if ($null -eq $Summary) {
@@ -104,6 +105,10 @@
 
         if ($null -ne $OnProgress) {
             $parameters.OnProgress = $OnProgress
+        }
+
+        if ($null -ne $PageSourceArgument) {
+            $parameters.PageSourceArgument = $PageSourceArgument
         }
 
         $result = & $script:Module {
@@ -217,6 +222,20 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
                 'Site 5|calls=3|files=page-000001.csv,page-000002.csv,page-000003.csv'
                 'Site 6|calls=3|files=page-000001.csv,page-000002.csv,page-000003.csv'
             )
+        }
+
+        It 'gives the source, as its second argument, what it was given for it: a source that belongs to the module has no closure to carry it' {
+            $folder = New-TestFolder
+            $seen = [System.Collections.Generic.List[string]]::new()
+            $source = {
+                param([string]$StartIndex, $Context)
+                $seen.Add("$StartIndex|$($Context.Name)")
+                [PSCustomObject]@{ Items = @(); NextStartIndex = $(if ($StartIndex -eq '') { 't1' } else { '' }) }
+            }.GetNewClosure()
+
+            $null = Invoke-TestListing -Source $source -Folder $folder -PageSourceArgument ([PSCustomObject]@{ Name = 'context' })
+
+            $seen | Should -Be @('|context', 't1|context')
         }
 
         It 'lists a tenant of no site: one empty page' {

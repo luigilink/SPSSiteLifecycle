@@ -8,7 +8,9 @@
         The pages come from a source that the caller gives (the adapter of the SharePoint admin API, or a test double),
         so that all the logic of the listing is tested without a tenant. The source is a script block that is given the
         token of the page to read (empty for the first) and gives an object with Items (the site records, see
-        ConvertTo-SPSLifecycleSiteRecord) and NextStartIndex (the token of the next page, empty after the last).
+        ConvertTo-SPSLifecycleSiteRecord) and NextStartIndex (the token of the next page, empty after the last). It is
+        also given PageSourceArgument as its second argument: a script block that is made with GetNewClosure() is cut off
+        from the module and no longer sees its private functions, so what the source needs is given, not captured.
 
         Each page is saved in the checkpoint (see Read-SPSLifecycleListingCheckpoint) before its sites are given to the
         pipeline, and the next page is not asked for before they were taken, so that a report of 260,000 sites needs no
@@ -31,6 +33,9 @@
 
         .PARAMETER PageSource
         The script block that gives a page for a token.
+
+        .PARAMETER PageSourceArgument
+        What the page source is given as its second argument. Default: nothing.
 
         .PARAMETER CheckpointFolder
         The folder of the checkpoint, which is created. A relative path is relative to the location of the PowerShell
@@ -80,6 +85,11 @@
         [Parameter(Mandatory = $true)]
         [System.Management.Automation.ScriptBlock]
         $PageSource,
+
+        [Parameter()]
+        [AllowNull()]
+        [System.Object]
+        $PageSourceArgument = $null,
 
         [Parameter(Mandatory = $true)]
         [System.String]
@@ -234,7 +244,7 @@
                 while ($true) {
                     $attempt++
                     try {
-                        $page = & $PageSource $token
+                        $page = & $PageSource $token $PageSourceArgument
                         break
                     }
                     catch {
