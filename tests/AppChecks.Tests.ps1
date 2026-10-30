@@ -193,6 +193,19 @@ Describe 'Resolve-SPSLifecycleAppFolder' {
         { Invoke-AppFolder -Folder (Join-Path -Path $neighbour -ChildPath 'keys') -ToolRoot $tool } | Should -Not -Throw
     }
 
+    It 'refuses the root of a drive, and does not read it as the current folder of a drive' {
+        $root = [System.IO.Path]::GetPathRoot($TestDrive)
+
+        { Invoke-AppFolder -Folder $root } | Should -Throw -ExpectedMessage '*root of a drive*'
+    }
+
+    It 'compares the folder of the tool without regard to the case, because a file system may not: the folder itself, and what is below it' {
+        $tool = New-Folder -Name 'ToolCase'
+
+        { Invoke-AppFolder -Folder $tool.ToUpperInvariant() -ToolRoot $tool } | Should -Throw -ExpectedMessage '*folder of the tool*'
+        { Invoke-AppFolder -Folder (Join-Path -Path $tool.ToUpperInvariant() -ChildPath 'keys') -ToolRoot $tool } | Should -Throw -ExpectedMessage '*folder of the tool*'
+    }
+
     It 'refuses a folder that is a file' {
         $file = Join-Path -Path $TestDrive -ChildPath 'afile'
         Set-Content -LiteralPath $file -Value 'x'

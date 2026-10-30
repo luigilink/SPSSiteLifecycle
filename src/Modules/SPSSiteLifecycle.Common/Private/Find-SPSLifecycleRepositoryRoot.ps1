@@ -29,11 +29,7 @@
             return $directory
         }
 
-        $parent = [System.IO.Path]::GetDirectoryName($directory)
-        if ([System.String]::IsNullOrEmpty($parent) -or [System.String]::Equals($parent, $directory, [System.StringComparison]::Ordinal)) {
-            break
-        }
-
-        $directory = $parent
+        # Nothing at the root of a drive: the loop ends.
+        $directory = [System.IO.Path]::GetDirectoryName($directory)
     }
 }

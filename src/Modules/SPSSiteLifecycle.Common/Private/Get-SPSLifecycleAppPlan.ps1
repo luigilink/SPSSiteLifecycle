@@ -82,13 +82,12 @@
     $tenant = $TenantName.Trim().ToLowerInvariant()
     $permissions = @(Get-SPSLifecycleAppPermission | Where-Object { [System.String]::Equals($_.Kind, $Kind, [System.StringComparison]::Ordinal) })
 
-    $certificate = $null
-    if ($Kind -eq 'Certificate') {
-        if (-not $Folder) {
-            throw 'The folder of the certificate files is not given, so the plan cannot say where the private key goes.'
-        }
+    if ($Kind -eq 'Certificate' -and -not $Folder) {
+        throw 'The folder of the certificate files is not given, so the plan cannot say where the private key goes.'
+    }
 
-        $certificate = [PSCustomObject][ordered]@{
+    $certificate = if ($Kind -eq 'Certificate') {
+        [PSCustomObject][ordered]@{
             ValidYears = $ValidYears
             ExpiresOn  = (ConvertTo-SPSLifecycleUtcDateTime -Value $Now).Date.AddYears($ValidYears)
             Folder     = $Folder
@@ -96,6 +95,9 @@
             CerPath    = Join-Path -Path $Folder -ChildPath "$ApplicationName.cer"
             Store      = if ($UseCertificateStore) { 'CurrentUser' } else { 'None' }
         }
+    }
+    else {
+        $null
     }
 
     $consentRoles = if ($Kind -eq 'Certificate') {

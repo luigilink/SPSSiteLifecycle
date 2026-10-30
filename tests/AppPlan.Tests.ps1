@@ -67,6 +67,18 @@ Describe 'Get-SPSLifecycleAppPermission' {
         @($script:Permissions | Where-Object { $_.Name -like 'Reports.*' }) | Should -HaveCount 0
     }
 
+    It 'says what the tool does with the SharePoint admin API and with the group, in each kind' {
+        foreach ($row in @($script:Permissions | Where-Object { $_.Resource -eq 'SharePoint' })) {
+            $row.Reason | Should -Match 'lists every site collection with its lock state, template and size \(Scan\)'
+            $row.Reason | Should -Match 'locks or unlocks it, deletes it and requests its archive \(Act\)'
+        }
+
+        foreach ($row in @($script:Permissions | Where-Object { $_.Resource -eq 'Graph' })) {
+            $row.Reason | Should -Match 'Reads the Microsoft 365 group of a site before an action, and deletes it'
+            $row.UsedBy | Should -BeExactly 'Act'
+        }
+    }
+
     It 'never asks for a permission that reads or writes the mail, the files or the users of the tenant' {
         foreach ($row in $script:Permissions) {
             $row.Name | Should -Not -Match '^(Mail|Files|User|Directory|Application|RoleManagement|Sites\.ReadWrite)'
@@ -164,6 +176,30 @@ Describe 'Format-SPSLifecycleAppPlan' {
                 $text | Should -Match ([System.Text.RegularExpressions.Regex]::Escape($row.Reason))
             }
         }
+    }
+
+    It 'says which type of permission is requested: delegated for a person, application for the app' {
+        ((Get-PlanLine -Plan (New-AppPlan)) -join "`n") | Should -Match 'Delegated permissions requested'
+        ((Get-PlanLine -Plan (New-AppPlan -Parameter @{ Kind = 'Certificate'; Folder = '/keys' })) -join "`n") | Should -Match 'Application permissions requested'
+    }
+
+    It 'writes the date that the certificate ends the same way whatever the culture of the machine, a calendar that is not Gregorian included' {
+        $thai = [System.Globalization.CultureInfo]::new('th-TH')
+        if ($thai.DateTimeFormat.Calendar -isnot [System.Globalization.ThaiBuddhistCalendar]) {
+            Set-ItResult -Skipped -Because 'this machine has no culture data for the Buddhist calendar'
+            return
+        }
+
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = $thai
+            $text = (Get-PlanLine -Plan (New-AppPlan -Parameter @{ Kind = 'Certificate'; Folder = '/keys' })) -join "`n"
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+
+        $text | Should -Match '2028-10-30'
     }
 
     It 'says what each kind of app is, and that a person signs in or that the app does' {

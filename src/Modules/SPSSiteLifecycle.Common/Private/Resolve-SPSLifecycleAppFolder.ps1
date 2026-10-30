@@ -41,9 +41,10 @@
         $ToolRoot = ''
     )
 
-    $full = (Resolve-SPSLifecycleFileSystemPath -Path $Folder).TrimEnd([System.Char]'/', [System.Char]'\')
-    if (-not $full) {
-        throw "The folder '$Folder' is the root of a drive: choose a folder of its own."
+    # A root keeps its separator (C:\ is a drive, and C: is the current folder of that drive).
+    $full = [System.IO.Path]::TrimEndingDirectorySeparator((Resolve-SPSLifecycleFileSystemPath -Path $Folder))
+    if ([System.String]::Equals([System.IO.Path]::GetPathRoot($full), $full, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The folder '$full' is the root of a drive or of a share: choose a folder of its own."
     }
 
     $repository = Find-SPSLifecycleRepositoryRoot -Path $full
@@ -52,7 +53,7 @@
     }
 
     if ($ToolRoot) {
-        $root = (Resolve-SPSLifecycleFileSystemPath -Path $ToolRoot).TrimEnd([System.Char]'/', [System.Char]'\')
+        $root = [System.IO.Path]::TrimEndingDirectorySeparator((Resolve-SPSLifecycleFileSystemPath -Path $ToolRoot))
         $separators = @([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
         $inside = [System.String]::Equals($full, $root, [System.StringComparison]::OrdinalIgnoreCase)
         foreach ($separator in $separators) {
