@@ -5,6 +5,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The lock date lists and the exclusion lists are read with a strict structure (#22), as the lock journal is: a quote
+  that is never closed (it swallows the rows after it), a stray quote, a row that is cut short or has a value too many
+  (they were dropped without a message) and a value under a column that has no name stop the tool and name the
+  file and the line, because a row that is lost protects no site (exclusions) or leaves an older lock date in force (lock
+  dates). The encoding stays the one that Excel writes (UTF-8, UTF-16, Windows-1252), except that a byte order mark is a
+  declaration: an invalid byte after a UTF-8 mark, or a lone surrogate after a UTF-16 mark, stops the tool instead of
+  becoming U+FFFD in a web address. What stays tolerant is the meaning of a row (a lock date row without a date is
+  ignored, `SiteId` is optional, the empty rows that Excel adds are ignored), and the activity reports are read as before.
+  A list whose rows were shorter than its header, which was read, now stops the tool. The messages of a lock date that
+  cannot be read name the line, and so do the first values of an exclusion list that are not addresses.
+
+### Fixed
+
+- The tenant name and the names of the settings are read one character at a time (#24). `TenantName` accepted
+  the Kelvin sign (U+212A) and a capital I with a dot above (U+0130), which a regular expression that ignores the case
+  reads as a `k` and an `i`; the rule is now ASCII letters, digits and hyphens, matched as it is written, and a message
+  that shows a name writes the characters that are not printable ASCII as `\uXXXX`. The entries of `RefusedTenants` follow the
+  same rule, because an entry that can never be the name of a tenant refuses nothing. A setting whose name held a
+  zero-width space or a soft hyphen (`Refused<zero-width space>Tenants`) was read as the setting that it looked like, then
+  never found, so the list of refused tenants, or any other setting, was dropped without a message: the names are now
+  compared with `OrdinalIgnoreCase`, and a name that is not known stops the tool and shows the hidden character. The check
+  right before the sign-in repeats the rule on the tenant name, and wants an ASCII admin address.
+
 ### Added
 
 - Project skeleton: CI workflows (Pester on Windows and Linux, PSScriptAnalyzer, release,
@@ -91,3 +116,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant tables of the verdict engine are built once, and the lock date entries are hashtables, because the
   garbage collector took four fifths of the time. The tests run 5,000 and 20,000 sites and compare the times, so that
   a time that grows with the square of the size fails on any system.
+- The listing of the tenant (`Get-SPSLifecycleTenantSite`), which the Scan reads the sites with (#6). It lists
+  the sites page by page (about 1,500 a page) with the paged call of the SharePoint admin API, filtered on the
+  server by the lock state when a single one is asked, and falls back on `Get-PnPTenantSite`, saying why, when
+  the installed PnP.PowerShell does not have the types and members that the paged call needs. After each page
+  it saves a checkpoint (a manifest, one file per page with its SHA-256, and a lock file), and an interrupted
+  run takes it up where it stopped when it is for the same tenant, filter and way of asking, is less than 24
+  hours old, has dates that can be true (a clock that was set back is seen), holds every page intact and has
+  pages that form a chain of tokens (a page removed from the middle of the manifest is seen); otherwise it says
+  why, in words and with a code that names nothing (`StartCode`), and starts again, and a listing that finished
+  is never reused. The pages go down the pipeline one at a time. A page that fails is asked again, and a token
+  that was already asked, a page with no token and a token that is not a text stop the listing. The OneDrive
+  sites that came anyway and the addresses that SharePoint does not give are left out and counted. A site that
+  comes twice is kept once when the two readings agree on the fields that a safeguard or a verdict reads, the size
+  and the date of the last change included (compared by a 64-bit digest: 61 MB for 260,000 sites), and stops
+  the listing when they do not. A property that the call did not
+  load reads as `$null` in PowerShell and would have hidden a safeguard for every site, so every site is
+  checked for it, not the first of each page, and a page with a property that is not loaded stops the listing.
+  A size is a whole number of megabytes: a blank one is not known (the Scan gives it a review verdict), and a
+  boolean, a fraction, a text or a value out of range stops the listing instead of reading as 0, 1 or 2.
+  Everything that touches the tenant is in `Private/Adapters` (the check of PnP.PowerShell 3.0 or later, the
+  sign-in, which checks the refused tenants and the address of the admin site again right before it, the
+  sign-out and the read of a page), every call stops on an error (a cmdlet that gives some sites and then
+  writes an error is not taken for a last page, and a sign-in that gives no connection stops the tool), and a
+  test fails when a command that signs in, or a type of the admin API, is written anywhere else, or when a
+  command is built at run time outside the adapters. The refused tenants are one rule that the settings and the
+  sign-in share. The tests never reach a tenant: the commands of PnP.PowerShell are replaced by stubs that are
+  checked before each test, throwing tripwires stand on the sign-in, and the tests that look at the real types
+  load the libraries of types only, in a process of their own (and run only where PnP.PowerShell is
+  installed). Without a tenant, the checkpoint takes 22 microseconds to write and 32 to read a record, a
+  record is converted in 30, and 259,500 sites in 173 pages are listed in 12 s (11 s when the run resumes at the half). A lab script,
+  `tools/lab/Test-TenantListing.ps1`, runs the listing against a tenant and only reads: it reports the pages,
+  the times, counts and checks (a resume after a stop gives the same sites as a run that starts again, and the
+  sites can be compared field by field with `Get-PnPTenantSite`), with no tenant name, address, account or title
+  in what it prints and writes (what it shows comes from lists in the script: no text that the module or a library
+  writes is passed on, by whatever stream it comes, and the text of an error is never shown: it goes to a file of
+  the output folder; the versions are numbers, and a value that is typed wrong is named by its parameter and never
+  given back), and its logic is tested offline. The call has not run against a tenant yet: the first run is the lab.
+- Act: the reviewed Scan report is read and checked as a whole before any action (#10), by
+  `Import-SPSLifecycleReviewedReport`. It reads `Url`, `SiteId`, `GeneratedOn` and `Decision`, with the strict structure and the
+  tolerant encoding of the lists (Excel's semicolons, UTF-16 and Windows-1252 are read, a quote that is never closed or a row
+  that is cut short stops the tool), and stops on the first problem in the order of the file, naming the line and the value:
+  a missing column, an address that is not one of the tenant (another tenant, the admin site, a OneDrive address, http, a
+  port, a host that DNS does not read as it is written) or that is one of a refused tenant, a site ID that is not a GUID (the
+  zeros of a concealed report included), a site that appears twice by its canonical address or by its site ID (a row without a
+  decision counts), a decision that is not `Delete`, `Archive` or `Lock` (a hidden character or a lookalike letter is not accepted;
+  the case and the spaces are), and a `GeneratedOn` that cannot be read (the message names `CsvDateFormats`, for a date that Excel
+  rewrote), that is in the future (5 minutes of margin for two clocks) or older than `MaxCsvAgeDays`. An empty list of decisions
+  is not an error: it says that there is nothing to do. It gives the rows that have a decision with their line, the count of each
+  action, and the date and the age of the file (the oldest of its rows), for the banner. It reads the file and nothing else.
+- Scan: the home site of the tenant is read (`Get-PnPHomeSite`, one read after the sign-in) and protected. The verdict engine already
+  protected the home site, but nothing gave it its address, so the Scan would have suggested it. A failure to read it, or an answer that is
+  not the https address of a site, stops the listing before any page. The lab script reports whether the tenant has one.
+- Scan: the entry script `src/SPSSiteLifecycle.ps1` runs the Scan phase (#7), with `-ConfigFile` and `-Phase` and no other parameter,
+  through the new public function `Invoke-SPSLifecycleScan`. The settings, the activity reports, the lock date lists and the exclusion
+  lists are read and checked before the sign-in window opens; the report is started before the sign-in too, so that a report that exists
+  already stops the run. The Scan lists the sites, gives each its verdict, writes `sites-<time>.csv` in the output folder (a run that
+  stops half-way leaves no report that looks complete, an interrupted listing is taken up the next time), and writes a summary as
+  lines of information: the time, how the sites were listed, the sites in the report and the sites left out, the suggested actions,
+  the verdicts by count, and the path of the report. The script exits with 0, or with 1 after a message that says what stopped it and
+  that nothing was changed in the tenant. `-Phase Act` says that the phase is not available in this version, and exits with 1.
+- Act: each row is read again from the tenant right before its action, and gets its verdict from the live state (#11), by
+  `Get-SPSLifecycleActVerdict` (it reads and changes nothing). The new adapters only read: `Get-SPSLifecycleLiveSite` (the site by its
+  address, with whether it has a hold) and `Get-SPSLifecycleGroupState` (`None`, `Active`, `SoftDeleted` or `NotFound`, by the ID as a
+  GUID). A site that is gone is `SKIP-NOT-FOUND`, an address that now belongs to another site is `SKIP-SITEID-MISMATCH`, and a site
+  that the engine would let through is kept back as `REVIEW-CONTENT-MODIFIED` (changed after the report, or no date) or
+  `REVIEW-RETENTION` (a hold). The decision of the person is the action of the engine and never lifts a gate. The group is read only
+  when the site has one and every gate before it has been passed. A read that fails is an error, never a verdict, so that it can never
+  lead to an action, and only the messages that the tenant gives for a thing that does not exist are read as "not there". The lab
+  has not checked these messages, nor `HasHolds`, nor the effect of a lock on the content date (#15).
