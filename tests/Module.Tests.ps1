@@ -86,6 +86,51 @@ Describe 'The SPSSiteLifecycle.Common module' {
         }
     }
 
+    Context 'The types of the tenant' {
+        BeforeAll {
+            # The commands are checked by name (see above). The types of the SharePoint admin API and of PnP.PowerShell are
+            # checked here, in type expressions and in the names that a string holds, because a type can be used without a command.
+            function script:Find-TenantTypeUse {
+                param([string]$Text)
+                $pattern = '^(Microsoft\.Online\.SharePoint|Microsoft\.SharePoint\.Client|PnP\.PowerShell|PnP\.Framework)(\.|$)'
+                $errors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$errors)
+                $uses = $ast.FindAll({
+                        param($node)
+                        ($node -is [System.Management.Automation.Language.TypeExpressionAst] -and $node.TypeName.FullName -match $pattern) -or
+                        ($node -is [System.Management.Automation.Language.TypeConstraintAst] -and $node.TypeName.FullName -match $pattern) -or
+                        ($node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $node.Value -match $pattern)
+                    }, $true)
+                @($uses | ForEach-Object { $_.Extent.Text })
+            }
+        }
+
+        It 'keeps the types of the SharePoint admin API and of PnP.PowerShell in the adapters' {
+            $offenders = foreach ($file in $script:Files) {
+                if ($file.FullName -match '[\\/]Private[\\/]Adapters[\\/]') {
+                    continue
+                }
+
+                foreach ($use in Find-TenantTypeUse -Text ([System.IO.File]::ReadAllText($file.FullName))) {
+                    "$($file.Name): $use"
+                }
+            }
+
+            @($offenders) | Should -HaveCount 0
+        }
+
+        It 'sees a type of the tenant wherever it is written: <Name>' -ForEach @(
+            @{ Name = 'a static call'; Text = '[Microsoft.Online.SharePoint.TenantAdministration.Tenant]::new($context)'; Expected = 1 }
+            @{ Name = 'a cast'; Text = '[Microsoft.SharePoint.Client.ClientContext]$context'; Expected = 1 }
+            @{ Name = 'a parameter type'; Text = 'param([PnP.Framework.Entities.SiteEntity]$Site)'; Expected = 1 }
+            @{ Name = 'a type name in a string'; Text = "'Microsoft.Online.SharePoint.TenantAdministration.Tenant' -as [type]"; Expected = 1 }
+            @{ Name = 'a type of .NET'; Text = '[System.Guid]::Empty'; Expected = 0 }
+            @{ Name = 'a message that names the module'; Text = "throw 'The types are not in this PnP.PowerShell.'"; Expected = 0 }
+        ) {
+            @(Find-TenantTypeUse -Text $Text) | Should -HaveCount $Expected
+        }
+    }
+
     Context 'Paths' {
         It 'resolves a path in PowerShell before a .NET file method uses it, because those methods ignore Set-Location' {
             $files = @($script:Files) + @(Get-ChildItem -Path (Join-Path -Path $PSScriptRoot -ChildPath '../tools') -Filter '*.ps1')
