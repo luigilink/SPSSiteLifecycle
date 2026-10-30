@@ -123,6 +123,18 @@ Describe 'Format-SPSLifecycleAppFailure' {
             (Format-Failure -Kind $kind -PlanKind Interactive) | Should -Not -BeLike '*certificate files*'
         }
     }
+
+    It 'is written with one space between its sentences, and none at its ends, with files and without: <Kind>' -ForEach @(
+        @{ Kind = 'AppExists' }
+        @{ Kind = 'Forbidden' }
+        @{ Kind = 'Consent' }
+        @{ Kind = 'Unknown' }
+    ) {
+        foreach ($text in (Format-Failure -Kind $Kind -PlanKind Interactive), (Format-Failure -Kind $Kind -Removed @('/keys/a.pfx')), (Format-Failure -Kind $Kind -Kept @('/keys/a.pfx'), '/keys/a.cer')) {
+            $text | Should -Not -Match '  '
+            $text | Should -Not -Match '\A\s|\s\z'
+        }
+    }
 }
 
 Describe 'Format-SPSLifecycleAppResult' {
@@ -182,6 +194,25 @@ Describe 'Format-SPSLifecycleAppResult' {
         foreach ($kind in 'Interactive', 'Certificate') {
             (Format-Result -Kind $kind)[-1] | Should -BeLike 'Nothing secret was written*'
         }
+    }
+
+    It 'writes the date that the certificate ends the same way whatever the culture of the machine, a calendar that is not Gregorian included' {
+        $thai = [System.Globalization.CultureInfo]::new('th-TH')
+        if ($thai.DateTimeFormat.Calendar -isnot [System.Globalization.ThaiBuddhistCalendar]) {
+            Set-ItResult -Skipped -Because 'this machine has no culture data for the Buddhist calendar'
+            return
+        }
+
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = $thai
+            $text = (Format-Result -Kind Certificate) -join "`n"
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+
+        $text | Should -BeLike '*it ends on 2028-10-30*'
     }
 }
 
