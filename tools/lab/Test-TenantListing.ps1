@@ -25,11 +25,16 @@
 
     What the script prints and writes names nothing of the tenant: not its name, an address, an account or a title. The text
     that the module gives is not passed on as it is. The reason why a checkpoint was not taken up is told in one of a few
-    fixed sentences (its code is StartCode in the report), the warnings of the listing are counted and not shown, its
-    verbose lines are not shown, and the message of an error, or the reason why the paged call cannot be used, is cleaned of
-    addresses, accounts, the name of the tenant and the application ID. The values of a site are shown only in a shape that
-    cannot hold a name. The checkpoint in OutputFolder, however, holds the addresses and the titles of the sites: share the
-    report, not that folder.
+    fixed sentences (its code is StartCode in the report), the warnings of the listing are counted and not shown, and its
+    verbose lines are not shown. The values of a site are shown only in a shape that cannot hold a name: the known words for
+    a lock state and an archive status, a template in its form, an ID only when it is one. The reason why the paged call
+    cannot be used, a text of fixed words, is cleaned of addresses, accounts, the name of the tenant and the application
+    ID. The text of an error is never shown, because it can name the tenant, a site, an account or another tenant, and no
+    cleaning finds what it does not know: the lab says the sentence of this repository that the error is, if it is one of a
+    few, the type of its exceptions, the codes that its text holds (an HTTP status, an AADSTS code) and the properties of a
+    site that it names, and keeps the text in listing-lab-error.txt in OutputFolder. The checkpoint and that file, however,
+    name the tenant and the sites: share the report, not that folder. PowerShell also keeps the original errors in $Error:
+    do not paste them either.
 
     .PARAMETER TenantName
     The name of the tenant, in lowercase, as in <name>.onmicrosoft.com. The Microsoft corporate tenants are refused.
@@ -46,8 +51,8 @@
 
     .PARAMETER OutputFolder
     Where the checkpoint and the report go. A relative path is relative to the location of the PowerShell session. Default: a
-    folder in the temporary folder. The checkpoint holds the addresses and the titles of the sites: share the report, never
-    this folder.
+    folder in the temporary folder. The checkpoint holds the addresses and the titles of the sites, and the file of an error
+    holds its text: share the report, never this folder.
 
     .PARAMETER StopAfterPages
     Stops after that many pages read from the tenant in this run, and leaves the checkpoint. 0 (the default) does not stop.
@@ -130,10 +135,19 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $script:Checks = [System.Collections.Generic.List[System.Object]]::new()
 
-# What stops the lab says its message cleaned, and holds no inner exception that would say it as it was.
+# The output folder, once it is known: the text of an error is kept there.
+$folder = $null
+
+# What stops the lab is told by what cannot name anything (see ConvertTo-LabErrorSummary), and the exception that is thrown holds
+# no inner exception that would say the rest.
 trap {
-    $stopped = ConvertTo-LabSafeText -Text $_.Exception.Message -MaxLength 600
-    throw [System.InvalidOperationException]::new("The lab stopped ($($_.Exception.GetType().Name)): $stopped")
+    $summary = ConvertTo-LabErrorSummary -ErrorRecord $_
+    $message = "The lab stopped: $($summary.Text)"
+    if ($summary.Detail -and (Save-LabErrorDetail -ErrorRecord $_)) {
+        $message += ' The text of the error, which can name the tenant, a site or an account, is saved in listing-lab-error.txt in the output folder: do not share that folder.'
+    }
+
+    throw [System.InvalidOperationException]::new($message)
 }
 
 function Write-LabLine {
@@ -216,13 +230,15 @@ function Get-LabStartSentence {
 function ConvertTo-LabSafeText {
     param($Text, [System.Int32]$MaxLength = 300)
 
+    # The case is ignored with the rules of no culture: in Turkish, an I in capitals is not the capital of an i.
+    $options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
     $safe = "$Text"
-    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '(?i)[^\s@''"<>()]+@[^\s@''"<>()]+\.[a-z]{2,}', '(account)')
-    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '(?i)\b[a-z][a-z0-9+.-]*://[^\s''"<>]+', '(address)')
-    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '(?i)\b(?:[a-z0-9-]+\.)+(?:sharepoint|onmicrosoft|microsoftonline)\.[a-z]{2,}\b', '(address)')
-    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, "(?i)(?<![a-z0-9])$([System.Text.RegularExpressions.Regex]::Escape($TenantName))(?![a-z0-9])", '(tenant)')
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '[^\s@''"<>()]+@[^\s@''"<>()]+\.[a-z]{2,}', '(account)', $options)
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '\b[a-z][a-z0-9+.-]*://[^\s''"<>]+', '(address)', $options)
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '\b(?:[a-z0-9-]+\.)+(?:sharepoint|onmicrosoft|microsoftonline)\.[a-z]{2,}\b', '(address)', $options)
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, "(?<![a-z0-9])$([System.Text.RegularExpressions.Regex]::Escape($TenantName))(?![a-z0-9])", '(tenant)', $options)
     foreach ($form in 'D', 'N') {
-        $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, [System.Text.RegularExpressions.Regex]::Escape($ClientId.ToString($form)), '(client)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, [System.Text.RegularExpressions.Regex]::Escape($ClientId.ToString($form)), '(client)', $options)
     }
 
     $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '[\p{Cc}\s]+', ' ').Trim()
@@ -238,20 +254,43 @@ function ConvertTo-LabSafeText {
     $safe
 }
 
-# A value that SharePoint names, such as a template or a lock state: it is shown only when it looks like such a name.
+# A lock state and an archive status are words that SharePoint writes, and a template is a name, a number sign and a number. They are
+# shown as they are when they are that, and never rewritten, so that a tenant that is named like one of them does not change them.
+# Nothing else is shown: a text that is not one of them can be anything, a tenant name included. The words are written here, and a
+# word that is not in the list (a lock state that is new) is shown as not being a name: the checkpoint holds what it was.
+$script:KnownLockStates = @('Unlock', 'NoAdditions', 'ReadOnly', 'NoAccess')
+$script:KnownArchiveStatuses = @('NotArchived', 'RecentlyArchived', 'FullyArchived')
+
 function ConvertTo-LabIdentifier {
-    param($Text)
+    param
+    (
+        $Text,
+
+        [ValidateSet('LockState', 'ArchiveStatus', 'Template')]
+        [System.String]$Kind
+    )
 
     $value = "$Text"
     if ($value -eq '') {
         return '(none)'
     }
 
-    if ($value -cnotmatch '^[A-Za-z][A-Za-z0-9_.-]{0,59}(#-?[0-9]{1,4})?$') {
+    if ($Kind -ne 'Template') {
+        $known = if ($Kind -eq 'LockState') { $script:KnownLockStates } else { $script:KnownArchiveStatuses }
+        foreach ($word in $known) {
+            if ([System.String]::Equals($value, $word, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $word
+            }
+        }
+
         return '(not a name)'
     }
 
-    ConvertTo-LabSafeText -Text $value
+    if ([System.Text.RegularExpressions.Regex]::IsMatch($value, '\A[A-Za-z][A-Za-z0-9_.-]{0,59}#-?[0-9]{1,4}\z')) {
+        return $value
+    }
+
+    '(not a name)'
 }
 
 # The ID of a site is shown only when it is an ID: any other text can be anything.
@@ -294,7 +333,7 @@ function Format-LabValue {
 
     switch ($Name) {
         { $_ -in 'Template', 'LockState', 'ArchiveStatus' } {
-            return ConvertTo-LabIdentifier -Text $Value
+            return ConvertTo-LabIdentifier -Text $Value -Kind $Name
         }
 
         'GroupId' {
@@ -337,6 +376,101 @@ function Format-LabValue {
         default {
             return '(not shown)'
         }
+    }
+}
+
+# What can be said of an error without its text. The text of an error, whoever wrote it, can name the tenant, a site, an account or
+# another tenant (the message of a sign-in carries the one of the library), and no cleaning can find what it does not know. So the
+# lab says only: the sentences of this repository that are made of fixed words and numbers (the table below, each by the form
+# that it has from its first letter), the type of each exception, the codes that the text holds (an HTTP status, an AADSTS code: digits
+# and letters of a code, never a name), and the names of the properties of a site that it is about. The text itself is kept in a file
+# of the output folder, which holds the checkpoint and is not to be shared either.
+$script:KnownErrors = @(
+    @{ Pattern = "\ATenantName: the tenant '[^']*' is refused\."; Detail = $false; Say = { 'The tenant is refused: the tool never runs on the Microsoft corporate tenants or on a tenant that RefusedTenants lists' } }
+    @{ Pattern = '\APnP\.PowerShell is not installed\.'; Detail = $false; Say = { 'PnP.PowerShell is not installed (version 3 or later is needed)' } }
+    @{ Pattern = '\APnP\.PowerShell (?<version>[0-9][0-9.]*) is too old'; Detail = $false; Say = { param($match) "PnP.PowerShell $($match.Groups['version'].Value) is too old (version 3 or later is needed)" } }
+    @{ Pattern = '\APnP\.PowerShell (?<version>[0-9][0-9.]*) is loaded'; Detail = $false; Say = { param($match) "PnP.PowerShell $($match.Groups['version'].Value) is loaded and is too old: start a new session after updating it" } }
+    @{ Pattern = '\AThe sign-in to the admin site of the tenant failed'; Detail = $true; Say = { 'The sign-in to the admin site of the tenant failed' } }
+    @{ Pattern = '\AThe sign-in to the admin site of the tenant gave no connection'; Detail = $false; Say = { 'The sign-in to the admin site of the tenant gave no connection' } }
+    @{ Pattern = '\APage (?<page>[0-9]+) of the listing could not be read after (?<times>[0-9]+) attempts'; Detail = $true; Say = { param($match) "Page $($match.Groups['page'].Value) of the listing could not be read after $($match.Groups['times'].Value) attempts" } }
+    @{ Pattern = '\AThe paged listing was asked for and cannot be used: (?<reason>.+)\z'; Detail = $false; Say = { param($match) "The paged call was asked for and cannot be used: $(ConvertTo-LabSafeText -Text $match.Groups['reason'].Value)" } }
+    @{ Pattern = "\AThe site '(?<id>[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})' came twice in the listing with another value for a field that guards it"; Detail = $false; Say = { param($match) "The site '$($match.Groups['id'].Value)' came twice in the listing with another value for a field that guards it, so the tenant changed while it was read: start the listing again from the first page (Restart)" } }
+    @{ Pattern = '\AThe listing did not end after (?<pages>[0-9]+) pages'; Detail = $false; Say = { param($match) "The listing did not end after $($match.Groups['pages'].Value) pages" } }
+)
+
+function ConvertTo-LabErrorSummary {
+    param($ErrorRecord)
+
+    $types = [System.Collections.Generic.List[System.String]]::new()
+    $texts = [System.Collections.Generic.List[System.String]]::new()
+    for ($exception = $ErrorRecord.Exception; $null -ne $exception; $exception = $exception.InnerException) {
+        $types.Add($exception.GetType().Name)
+        $texts.Add("$($exception.Message)")
+    }
+
+    $sentence = 'an error whose text is not shown'
+    $detail = $true
+    foreach ($known in $script:KnownErrors) {
+        $match = [System.Text.RegularExpressions.Regex]::Match($texts[0], $known.Pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+        if ($match.Success) {
+            $sentence = & $known.Say $match
+            $detail = $known.Detail
+            break
+        }
+    }
+
+    $all = $texts -join "`n"
+    $codes = [System.Collections.Generic.List[System.String]]::new()
+    foreach ($found in [System.Text.RegularExpressions.Regex]::Matches($all, '\(([1-5][0-9]{2})\)')) {
+        $code = "HTTP $($found.Groups[1].Value)"
+        if (-not $codes.Contains($code)) { $codes.Add($code) }
+    }
+
+    foreach ($found in [System.Text.RegularExpressions.Regex]::Matches($all, 'AADSTS[0-9]{4,7}')) {
+        if (-not $codes.Contains($found.Value)) { $codes.Add($found.Value) }
+    }
+
+    $properties = [System.Collections.Generic.List[System.String]]::new()
+    foreach ($found in [System.Text.RegularExpressions.Regex]::Matches($all, "[Pp]roperty '([A-Za-z][A-Za-z0-9]{0,39})'")) {
+        if (-not $properties.Contains($found.Groups[1].Value)) { $properties.Add($found.Groups[1].Value) }
+    }
+
+    $line = "$sentence. Error types: $($types -join ', caused by ')."
+    if ($codes.Count -gt 0) { $line += " Codes in its text: $($codes -join ', ')." }
+    if ($properties.Count -gt 0) { $line += " Properties named: $($properties -join ', ')." }
+    [PSCustomObject]@{ Text = $line; Detail = $detail }
+}
+
+# The error as it was written, in the output folder: for the person who runs the lab, and for no one else. Nothing stops for a file that
+# cannot be written.
+function Save-LabErrorDetail {
+    param($ErrorRecord)
+
+    if ($null -eq $folder) {
+        return $false
+    }
+
+    try {
+        $lines = [System.Collections.Generic.List[System.String]]::new()
+        $lines.Add('SPSSiteLifecycle listing lab: the error that stopped it, as it was written.')
+        $lines.Add('It can name the tenant, a site, an account or another tenant. Do not share this file, or the folder that holds it.')
+        $lines.Add('')
+        $lines.Add((Format-LabDate -Value ([System.DateTime]::UtcNow)))
+        $level = 0
+        for ($exception = $ErrorRecord.Exception; $null -ne $exception; $exception = $exception.InnerException) {
+            $level++
+            $lines.Add(('{0}[{1}] {2}: {3}' -f $(if ($level -gt 1) { 'caused by ' } else { '' }), $level, $exception.GetType().FullName, $exception.Message))
+        }
+
+        $lines.Add('')
+        $lines.Add('Script stack trace:')
+        $lines.Add("$($ErrorRecord.ScriptStackTrace)")
+        $null = New-Item -ItemType Directory -Path $folder -Force
+        [System.IO.File]::WriteAllText((Join-Path -Path $folder -ChildPath 'listing-lab-error.txt'), ($lines -join [System.Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+        return $true
+    }
+    catch {
+        return $false
     }
 }
 
@@ -399,11 +533,11 @@ function Add-LabRecord {
 
     $Statistic.Sites++
     $Statistic.SiteIds.Add("$($Record.SiteId)")
-    $lockState = ConvertTo-LabIdentifier -Text $Record.LockState
+    $lockState = ConvertTo-LabIdentifier -Text $Record.LockState -Kind LockState
     $Statistic.LockStates[$lockState] = 1 + [System.Int32]$Statistic.LockStates[$lockState]
-    $template = ConvertTo-LabIdentifier -Text $Record.Template
+    $template = ConvertTo-LabIdentifier -Text $Record.Template -Kind Template
     $Statistic.Templates[$template] = 1 + [System.Int32]$Statistic.Templates[$template]
-    $archive = ConvertTo-LabIdentifier -Text $Record.ArchiveStatus
+    $archive = ConvertTo-LabIdentifier -Text $Record.ArchiveStatus -Kind ArchiveStatus
     $Statistic.Archive[$archive] = 1 + [System.Int32]$Statistic.Archive[$archive]
     if ($Record.IsTeamsConnected) { $Statistic.TeamsConnected++ }
     if ($Record.IsTeamsChannelConnected) { $Statistic.TeamsChannelConnected++ }
@@ -911,7 +1045,7 @@ $report = [PSCustomObject][ordered]@{
 $null = New-Item -ItemType Directory -Path $folder -Force
 $reportPath = Join-Path -Path $folder -ChildPath 'listing-lab-report.json'
 [System.IO.File]::WriteAllText($reportPath, ($report | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
-Write-LabLine "  Report saved: $reportPath"
+Write-LabLine '  Report saved: listing-lab-report.json, in the output folder.'
 
 if ($failed -gt 0) {
     Write-Warning -Message "$failed check(s) failed: read the lines marked FAIL."

@@ -106,6 +106,7 @@ Describe 'The lab script that lists a tenant' {
             'Open-SPSLifecycleTenantSession'  = @'
 param($Setting)
 $script:StubLog.Add('open')
+if ($script:StubData.OpenError) { throw $script:StubData.OpenError }
 [PSCustomObject]@{ Connection = 'a connection'; TenantName = 'contoso' }
 '@
             'Close-SPSLifecycleTenantSession' = @'
@@ -133,7 +134,7 @@ $index = if ($StartIndex -eq '') { 0 } else { [int]$StartIndex.Substring(1) }
 $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
 [PSCustomObject]@{ Items = @($pages[$index]); NextStartIndex = $next }
 '@
-        } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1 }
+        } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = '' }
     }
 
     AfterEach {
@@ -420,7 +421,7 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
                 'Read-SPSLifecycleListingCheckpoint' = @'
 [PSCustomObject]@{ Exists = $true; Usable = $false; Finished = $false; Reason = "The checkpoint was made for fabrikam ($($script:StubData.ReaderCode))."; Code = $script:StubData.ReaderCode; Manifest = $null }
 '@
-            } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; ReaderCode = $Code }
+            } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; ReaderCode = $Code }
             $null = Set-LabPages
 
             $run = Invoke-Lab
@@ -451,9 +452,10 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             ($again.Text -join "`n") | Should -BeLike '*Checkpoint: not taken up: a new listing was asked for*'
         }
 
-        It 'cleans an error of the tenant of its address, its account and its name, and keeps the rest of the message' {
+        It 'says the type of an error of the tenant, the codes that it holds and where it stopped, and never its text, which can name anything' {
             $null = Set-LabPages
-            & $script:Module { $script:StubData.PageError = 'Synthetic failure at https://contoso-admin.sharepoint.com/sites/private-title for jc@contoso.com (tenant contoso, client 11111111-2222-3333-4444-555555555555): 403' }
+            $raw = 'Synthetic failure for site SyntheticPrivateBoard, owned by syntheticowner (jc@fabrikam.com); tenant fabrikam at https://fabrikam.sharepoint.com/sites/x. (403) Forbidden. AADSTS65001: consent was not given.'
+            & $script:Module { param($t) $script:StubData.PageError = $t } $raw
 
             $thrown = $null
             try {
@@ -463,14 +465,132 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
                 $thrown = $_
             }
 
-            $thrown | Should -Not -BeNullOrEmpty
             $message = $thrown.Exception.Message
-            $message | Should -BeLike '*Page 1 of the listing could not be read*'
-            $message | Should -BeLike '*Synthetic failure at (address) for (account) (tenant (tenant), client (client)): 403*'
-            $message | Should -Not -BeLike '*contoso*'
-            $message | Should -Not -BeLike '*private-title*'
-            $message | Should -Not -BeLike '*11111111*'
+            $message | Should -BeLike 'The lab stopped: Page 1 of the listing could not be read after 3 attempts.*'
+            $message | Should -BeLike '*InvalidOperationException*caused by RuntimeException*'
+            $message | Should -BeLike '*HTTP 403*'
+            $message | Should -BeLike '*AADSTS65001*'
+            foreach ($name in 'Synthetic', 'syntheticowner', 'fabrikam', 'contoso', 'sharepoint', 'Forbidden', 'consent') {
+                $message | Should -Not -BeLike "*$name*" -Because $name
+            }
+
             $thrown.Exception.InnerException | Should -BeNullOrEmpty
+        }
+
+        It 'keeps the text of an error in a file of the output folder, with the checkpoint, and says so' {
+            $null = Set-LabPages
+            $folder = Join-Path -Path $TestDrive -ChildPath 'error-file'
+            $raw = 'Synthetic failure for site SyntheticPrivateBoard (403) Forbidden.'
+            & $script:Module { param($t) $script:StubData.PageError = $t } $raw
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab -Parameter @{ OutputFolder = $folder }
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $file = Join-Path -Path $folder -ChildPath 'listing-lab-error.txt'
+            Test-Path -LiteralPath $file | Should -BeTrue
+            $saved = Get-Content -LiteralPath $file -Raw
+            $saved | Should -BeLike '*SyntheticPrivateBoard*'
+            $saved | Should -BeLike '*InvalidOperationException*'
+            $saved | Should -BeLike '*RuntimeException*'
+            $thrown.Exception.Message | Should -BeLike '*listing-lab-error.txt in the output folder*'
+            $thrown.Exception.Message | Should -BeLike '*not share*'
+            $thrown.Exception.Message | Should -Not -BeLike '*error-file*'
+        }
+
+        It 'says that the sign-in failed, with its code, and not why in words, which can name the account' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.OpenError = 'The sign-in to the admin site of the tenant failed: AADSTS50126 Error validating credentials for jc@contoso.com in the tenant contoso.' }
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike 'The lab stopped: The sign-in to the admin site of the tenant failed.*AADSTS50126*'
+            $thrown.Exception.Message | Should -Not -BeLike '*jc@*'
+            $thrown.Exception.Message | Should -Not -BeLike '*contoso*'
+            $thrown.Exception.Message | Should -Not -BeLike '*credentials*'
+        }
+
+        It 'says in its own words that the tenant is refused, and that nothing was written' {
+            $null = Set-LabPages
+            $folder = Join-Path -Path $TestDrive -ChildPath 'refused'
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab -Parameter @{ TenantName = 'microsoft'; OutputFolder = $folder }
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike 'The lab stopped: The tenant is refused*'
+            $thrown.Exception.Message | Should -Not -BeLike "*'microsoft'*"
+            $thrown.Exception.Message | Should -Not -BeLike '*listing-lab-error.txt*'
+            Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'listing-lab-error.txt') | Should -BeFalse
+        }
+
+        It 'says which site came twice with another value, by its ID only' {
+            $null = Set-LabPages
+            $first = New-LabRecord -Index 1
+            $again = New-LabRecord -Index 1 -Override @{ IsHubSite = $true; Title = 'Secret title of the second reading' }
+            & $script:Module { param($a, $b) $script:StubData.Pages = @(, @($a, $b)) } $first $again
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike "*The site '$($first.SiteId)' came twice in the listing with another value for a field that guards it*"
+            $thrown.Exception.Message | Should -Not -BeLike '*Secret title*'
+            $thrown.Exception.Message | Should -Not -BeLike '*contoso*'
+        }
+
+        It 'names the property of a site that an error is about, and not what it holds, in the error of a page that cannot be read' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.PageError = "Site 'https://contoso.sharepoint.com/sites/private-title': the property 'StorageUsage' is not a number of megabytes ('a text that names SyntheticPrivateBoard')." }
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike '*Page 1 of the listing could not be read after 3 attempts*'
+            $thrown.Exception.Message | Should -BeLike '*Properties named: StorageUsage.*'
+            $thrown.Exception.Message | Should -Not -BeLike '*megabytes*'
+            $thrown.Exception.Message | Should -Not -BeLike '*private-title*'
+            $thrown.Exception.Message | Should -Not -BeLike '*SyntheticPrivateBoard*'
+            $thrown.Exception.Message | Should -Not -BeLike '*contoso*'
+        }
+
+        It 'says that the text of an error is not shown when nothing in it is known' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.OpenError = 'Something that names SyntheticPrivateBoard went wrong.' }
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike 'The lab stopped: an error whose text is not shown*RuntimeException*'
+            $thrown.Exception.Message | Should -Not -BeLike '*SyntheticPrivateBoard*'
         }
 
         It 'shows no verbose line of the listing, which says why a page was read again and can name the tenant' {
@@ -490,28 +610,96 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             Get-LabEverything -Run $run | Should -Not -BeLike '*contoso*'
         }
 
-        It 'makes an error one line of a length that a report can hold, and finds the name in capitals and the ID without hyphens' {
+        It 'makes the reason why the cmdlet was used one line of a length that a report can hold, and finds the name in capitals, in Turkish too, and the ID without hyphens' -ForEach @('en-US', 'tr-TR') {
             $null = Set-LabPages
             $emoji = [System.Char]::ConvertFromUtf32(0x1F600)
-            $before = 'Page 1 of the listing could not be read after 3 attempts: first line second line (tenant) (client) '
-            $text = "first line`nsecond`tline CONTOSO 11111111222233334444555555555555 " + ('x' * (599 - $before.Length)) + $emoji + ('y' * 200)
-            & $script:Module { param($t) $script:StubData.PageError = $t } $text
-
-            $thrown = $null
+            $before = 'first line second line (tenant) (client) '
+            $text = "first line`nsecond`tline FABRIKAM 11111111222233334444555555555555 " + ('x' * (299 - $before.Length)) + $emoji + ('y' * 200)
+            & $script:Module { param($t) $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = $t } $text
+            $before = [System.Threading.Thread]::CurrentThread.CurrentCulture
             try {
-                $null = Invoke-Lab
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($_)
+                $run = Invoke-Lab -Parameter @{ TenantName = 'fabrikam' }
             }
-            catch {
-                $thrown = $_
+            finally {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = $before
             }
 
-            $message = $thrown.Exception.Message
-            $message | Should -BeLike 'The lab stopped (InvalidOperationException): Page 1 of the listing could not be read after 3 attempts: first line second line (tenant) (client) xxx*'
-            $message | Should -Not -Match '[\r\n\t]'
-            $message | Should -BeLike '*x...'
-            $message | Should -Not -BeLike "*$emoji*"
-            $message | Should -Not -Match '[\uD800-\uDBFF](?![\uDC00-\uDFFF])'
-            $message.Length | Should -Be ('The lab stopped (InvalidOperationException): '.Length + 599 + 3)
+            $reason = $run.Report.Summary.FallbackReason
+            $reason | Should -BeLike 'first line second line (tenant) (client) xxx*'
+            $reason | Should -Not -Match '[\r\n\t]'
+            $reason | Should -BeLike '*x...'
+            $reason | Should -Not -BeLike "*$emoji*"
+            $reason | Should -Not -Match '[\uD800-\uDBFF](?![\uDC00-\uDFFF])'
+            $reason.Length | Should -Be (299 + 3)
+            Get-LabEverything -Run $run | Should -Not -BeLike '*fabrikam*'
+        }
+
+        It 'does not print where the report is, because the folder can be named after the tenant, a site or a person' {
+            $null = Set-LabPages
+            $folder = Join-Path -Path $TestDrive -ChildPath 'contoso-SyntheticPrivateBoard'
+
+            $run = Invoke-Lab -Parameter @{ OutputFolder = $folder }
+
+            $text = $run.Text -join "`n"
+            $text | Should -BeLike '*Report saved: listing-lab-report.json, in the output folder*'
+            $text | Should -Not -BeLike '*SyntheticPrivateBoard*'
+            $text | Should -Not -BeLike '*contoso*'
+            Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'listing-lab-report.json') | Should -BeTrue
+        }
+
+        It 'shows a lock state, a template and an archive status as SharePoint writes them, whatever the name of the tenant: <Tenant>' -ForEach @(
+            @{ Tenant = 'group' }
+            @{ Tenant = 'readonly' }
+            @{ Tenant = 'notarchived' }
+            @{ Tenant = 'unlock' }
+            @{ Tenant = 'sts' }
+        ) {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab -Parameter @{ TenantName = $Tenant }
+
+            $run.Report.Statistics.LockStates.ReadOnly | Should -Be 4
+            $run.Report.Statistics.LockStates.Unlock | Should -Be 1
+            $run.Report.Statistics.Templates.'GROUP#0' | Should -Be 3
+            $run.Report.Statistics.Templates.'STS#3' | Should -Be 1
+            $run.Report.Statistics.ArchiveStatus.NotArchived | Should -Be 5
+            ($run.Text -join "`n") | Should -BeLike '*Lock states: ReadOnly 4, Unlock 1*'
+            ($run.Text -join "`n") | Should -BeLike '*Templates (top 10): GROUP#0 3, SITEPAGEPUBLISHING#0 1, STS#3 1*'
+        }
+
+        It 'shows only the words that SharePoint writes for a lock state and an archive status, and a template only in its form' {
+            $null = Set-LabPages
+            & $script:Module {
+                $script:StubData.Pages[0][0].LockState = 'readonly'
+                $script:StubData.Pages[0][1].LockState = 'contoso'
+                $script:StubData.Pages[0][2].LockState = 'NoAdditions'
+                $script:StubData.Pages[1][0].LockState = 'NoAccess'
+                $script:StubData.Pages[0][0].ArchiveStatus = 'FullyArchived'
+                $script:StubData.Pages[0][1].ArchiveStatus = 'contoso'
+                $script:StubData.Pages[0][2].ArchiveStatus = 'RecentlyArchived'
+                $script:StubData.Pages[0][0].Template = 'contoso'
+                $script:StubData.Pages[0][1].Template = 'RedirectSite#0'
+                $script:StubData.Pages[0][2].Template = 'EHS#-1'
+            }
+
+            $run = Invoke-Lab
+
+            $states = $run.Report.Statistics.LockStates
+            $states.ReadOnly | Should -Be 2
+            $states.'(not a name)' | Should -Be 1
+            $states.NoAdditions | Should -Be 1
+            $states.NoAccess | Should -Be 1
+            $archive = $run.Report.Statistics.ArchiveStatus
+            $archive.FullyArchived | Should -Be 1
+            $archive.RecentlyArchived | Should -Be 1
+            $archive.'(not a name)' | Should -Be 1
+            $archive.NotArchived | Should -Be 2
+            $templates = $run.Report.Statistics.Templates
+            $templates.'(not a name)' | Should -Be 1
+            $templates.'RedirectSite#0' | Should -Be 1
+            $templates.'EHS#-1' | Should -Be 1
+            Get-LabEverything -Run $run | Should -Not -BeLike '*contoso*'
         }
 
         It 'counts a value that is not a name apart from a value that is missing, for the template, the lock state and the archive status' {
