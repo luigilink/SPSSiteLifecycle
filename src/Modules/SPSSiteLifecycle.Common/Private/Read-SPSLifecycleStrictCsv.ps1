@@ -20,7 +20,12 @@
         save it, is UTF-8 too), which is what Add-SPSLifecycleLockJournalEntry requires to add to it: a byte that is
         not valid UTF-8 is never replaced or guessed, because a character that is read wrong changes a web address,
         and the row would no longer match its site. A file in UTF-16 or in Windows-1252 with an accented letter, and
-        a UTF-8 file that is damaged, are refused with a message that says to save it as CSV UTF-8. The separator (a
+        a UTF-8 file that is damaged, are refused with a message that says to save it as CSV UTF-8.
+
+        With TolerantEncoding, for the lists that a person gives (the lock dates and the exclusions), the structure is
+        as strict and the encoding is read as Excel writes it: UTF-8, UTF-16, and Windows-1252 for a file that has no
+        byte order mark and is not UTF-8 (see ConvertFrom-SPSLifecycleCsvByte, StrictAfterMark). A byte order mark
+        is a declaration, so a byte that does not fit it is a damage and stops the tool, whatever the encoding. The separator (a
         comma, a semicolon or a tab, and a first line sep=) and the blank lines before the header are read as
         Read-SPSLifecycleCsv reads them, because Excel changes them when it saves a file. The messages name the line of
         the file, which a person can find in Excel (the header is line 1 unless lines come before it).
@@ -37,8 +42,15 @@
         .PARAMETER OptionalColumn
         Names of the columns that the file may have and that the tool reads if it does.
 
+        .PARAMETER TolerantEncoding
+        Reads the encoding as Excel writes it (UTF-8, UTF-16, Windows-1252), as a list that a person gives, instead of UTF-8
+        only. The structure stays strict, and a byte that does not fit the byte order mark stops the tool.
+
         .EXAMPLE
         Read-SPSLifecycleStrictCsv -Path .\lock-journal.csv -RequiredColumn 'Url', 'SiteId', 'LockedOn'
+
+        .EXAMPLE
+        Read-SPSLifecycleStrictCsv -Path .\exclusions.csv -RequiredColumn 'Url' -TolerantEncoding
     #>
     [CmdletBinding()]
     [OutputType([System.Management.Automation.PSObject])]
@@ -54,7 +66,11 @@
 
         [Parameter()]
         [System.String[]]
-        $OptionalColumn = @()
+        $OptionalColumn = @(),
+
+        [Parameter()]
+        [System.Management.Automation.SwitchParameter]
+        $TolerantEncoding
     )
 
     $fullPath = Resolve-SPSLifecycleFileSystemPath -Path $Path
@@ -62,9 +78,13 @@
     $bytes = Read-SPSLifecycleFileByte -Path $fullPath
 
     try {
-        $text = ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes -Strict
+        $text = if ($TolerantEncoding) { ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes -StrictAfterMark } else { ConvertFrom-SPSLifecycleCsvByte -Bytes $bytes -Strict }
     }
     catch [System.Text.DecoderFallbackException] {
+        if ($TolerantEncoding) {
+            throw "File '$name' has a byte that does not fit the encoding that its byte order mark declares (UTF-8 or UTF-16), so the file is damaged and what it says cannot be trusted: a character that is read wrong changes a web address, and the row would no longer match its site (an exclusion would protect nothing, and an older lock date could stay in force). It is not read. Save it again as 'CSV UTF-8', or restore it from a copy."
+        }
+
         throw "File '$name' is not UTF-8 (Excel may have saved it in another encoding, or the file is damaged), so what it says cannot be trusted: a character that is read wrong changes a web address, and an older lock date would stay in force. It is not read. Save it as 'CSV UTF-8', or restore it from a copy."
     }
 
