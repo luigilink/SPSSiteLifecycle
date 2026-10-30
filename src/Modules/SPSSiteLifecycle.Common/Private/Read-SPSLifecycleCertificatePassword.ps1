@@ -5,8 +5,9 @@
 
         .DESCRIPTION
         The password is typed, never shown, never given on a command line, and never written anywhere: it goes to PnP.PowerShell as a
-        SecureString. It must be typed the same twice, and have at least 12 characters (the file protects a key that can act on every
-        site of the tenant). Nothing is asked more than once: a mistake stops the script, before anything was done in the tenant.
+        SecureString, and the two are compared without making a plain string of either (see Test-SPSLifecycleSecureStringEqual). It must be
+        typed the same twice, and have at least 12 characters (the file protects a key that can act on every site of the tenant). Nothing is
+        asked more than once: a mistake stops the script, before anything was done in the tenant.
 
         .EXAMPLE
         $password = Read-SPSLifecycleCertificatePassword
@@ -21,10 +22,10 @@
     }
 
     $second = Read-Host -Prompt 'Type the password again' -AsSecureString
-    $same = [System.String]::Equals([System.Net.NetworkCredential]::new('', $first).Password, [System.Net.NetworkCredential]::new('', $second).Password, [System.StringComparison]::Ordinal)
-    if (-not $same) {
+    if (-not (Test-SPSLifecycleSecureStringEqual -First $first -Second $second)) {
         throw 'The two passwords are not the same. Nothing was changed.'
     }
 
+    $second.Dispose()
     $first
 }

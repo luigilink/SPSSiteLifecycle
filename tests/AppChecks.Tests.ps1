@@ -21,6 +21,14 @@
         $null = New-Item -Path $path -ItemType Directory -Force
         $path
     }
+
+    # A link to a folder: a symbolic link, or a junction on Windows, which needs no right.
+    function script:New-FolderLink {
+        param([string]$Path, [string]$Target)
+
+        $type = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $null = New-Item -Path $Path -ItemType $type -Value $Target
+    }
 }
 
 Describe 'Test-SPSLifecycleAppName' {
@@ -141,26 +149,50 @@ Describe 'Assert-SPSLifecycleAppTarget' {
 }
 
 Describe 'Resolve-SPSLifecycleAppFolder' {
-    It 'gives the full path of a folder that does not exist yet, outside any repository' {
+    It 'gives the key folder, named after the app, in the folder that was given, and creates nothing' {
         $folder = Join-Path -Path $TestDrive -ChildPath 'keys/spslc'
 
-        Invoke-AppFolder -Folder $folder | Should -BeExactly $folder
+        Invoke-AppFolder -Folder $folder | Should -BeExactly (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle')
         Test-Path -LiteralPath $folder | Should -BeFalse -Because 'resolving a folder creates nothing'
     }
 
-    It 'accepts a folder that exists and is empty, and one that has other files' {
+    It 'accepts a folder that exists and is empty, and one that has other files, even keys of other names' {
         $folder = New-Folder -Name 'existing'
-        Invoke-AppFolder -Folder $folder | Should -BeExactly $folder
+        Invoke-AppFolder -Folder $folder | Should -BeExactly (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle')
 
         $null = New-Item -Path (Join-Path -Path $folder -ChildPath 'other.txt') -ItemType File
-        Invoke-AppFolder -Folder $folder | Should -BeExactly $folder
+        Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx') -Value 'x'
+        Invoke-AppFolder -Folder $folder | Should -BeExactly (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle')
+    }
+
+    It 'refuses a key folder that is already there, whatever is there: <Name>' -ForEach @(
+        @{ Name = 'a folder'; Make = 'folder' }
+        @{ Name = 'a file'; Make = 'file' }
+        @{ Name = 'a link'; Make = 'link' }
+        @{ Name = 'a link that leads nowhere'; Make = 'broken' }
+    ) {
+        if ($Make -eq 'broken' -and $IsWindows) {
+            Set-ItResult -Skipped -Because 'a junction cannot lead nowhere'
+            return
+        }
+
+        $parent = New-Folder -Name "taken-$Make"
+        $place = Join-Path -Path $parent -ChildPath 'SPSSiteLifecycle'
+        switch ($Make) {
+            'folder' { $null = New-Item -Path $place -ItemType Directory }
+            'file' { Set-Content -LiteralPath $place -Value 'x' }
+            'link' { New-FolderLink -Path $place -Target (New-Folder -Name "elsewhere-$Make") }
+            'broken' { $null = New-Item -Path $place -ItemType SymbolicLink -Value (Join-Path -Path $TestDrive -ChildPath 'nowhere-at-all') }
+        }
+
+        { Invoke-AppFolder -Folder $parent } | Should -Throw -ExpectedMessage '*SPSSiteLifecycle*already there*nothing in it is replaced*' -Because 'nothing is written in a place that is taken'
     }
 
     It 'resolves a relative folder against the location of the session, as a cmdlet does' {
         $base = New-Folder -Name 'here'
         Push-Location -LiteralPath $base
         try {
-            Invoke-AppFolder -Folder './keys' | Should -BeExactly (Join-Path -Path $base -ChildPath 'keys')
+            Invoke-AppFolder -Folder './keys' | Should -BeExactly (Join-Path -Path (Join-Path -Path $base -ChildPath 'keys') -ChildPath 'SPSSiteLifecycle')
         }
         finally {
             Pop-Location
@@ -211,23 +243,6 @@ Describe 'Resolve-SPSLifecycleAppFolder' {
         Set-Content -LiteralPath $file -Value 'x'
 
         { Invoke-AppFolder -Folder $file } | Should -Throw -ExpectedMessage '*is a file*'
-    }
-
-    It 'refuses to go on when a key or a certificate of that name is already there: <File>' -ForEach @(
-        @{ File = 'SPSSiteLifecycle.pfx' }
-        @{ File = 'SPSSiteLifecycle.cer' }
-    ) {
-        $folder = New-Folder -Name "taken-$($File.Substring($File.Length - 3))"
-        Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath $File) -Value 'x'
-
-        { Invoke-AppFolder -Folder $folder } | Should -Throw -ExpectedMessage "*$File*already*"
-    }
-
-    It 'does not mind a file of another name' {
-        $folder = New-Folder -Name 'other-name'
-        Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'Other.pfx') -Value 'x'
-
-        { Invoke-AppFolder -Folder $folder } | Should -Not -Throw
     }
 
     It 'refuses a folder that is not given' {

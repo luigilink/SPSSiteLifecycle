@@ -1,20 +1,27 @@
 ﻿function Resolve-SPSLifecycleAppFolder {
     <#
         .SYNOPSIS
-        Gives the full path of the folder for the certificate files, and stops when the files would not be safe or would replace others.
+        Gives the full path of the folder that the key of the app goes in, and stops when that is not safe.
 
         .DESCRIPTION
-        The folder is where the private key (.pfx) and the certificate (.cer) go. It must be outside any repository (a folder that holds a
-        .git entry, at any level above it) and outside the folder of the tool, because a key next to the code can be committed by mistake. It
-        may exist or not (resolving it creates nothing), it must not be a file, and no <name>.pfx or <name>.cer may be in it: a key that
-        is there may be the one of an earlier app, and it is never replaced. A relative path is resolved against the location of the
-        PowerShell session, as a cmdlet does (see Resolve-SPSLifecycleFileSystemPath).
+        The folder that a person gives is the one that the key folder goes in: the key of an app goes in a folder named after the app, which
+        the tool creates (see New-SPSLifecycleProtectedFolder) so that it is new, and so that only its owner can read it whatever the folder
+        around it is. This function checks, before anything is created, that:
+
+        - the folder is not the root of a drive and not a file;
+        - neither it nor the key folder is inside a repository or inside the folder of the tool, by what is written and by where it
+          leads (a link to a folder of a repository is refused, see Assert-SPSLifecycleOutsideRepository);
+        - nothing is at the place of the key folder, a file, a folder or a link, even one that leads nowhere: a key that is there may be
+          the one of an earlier app, and nothing is ever replaced.
+
+        It creates nothing. A relative path is resolved against the location of the PowerShell session, as a cmdlet does (see
+        Resolve-SPSLifecycleFileSystemPath).
 
         .PARAMETER Folder
         The folder, as the user typed it.
 
         .PARAMETER ApplicationName
-        The name of the app: the name of the files.
+        The name of the app: the name of the key folder and of the files.
 
         .PARAMETER ToolRoot
         The folder of the tool: nothing may be written inside it. Empty: not checked.
@@ -42,41 +49,22 @@
     )
 
     # A root keeps its separator (C:\ is a drive, and C: is the current folder of that drive).
-    $full = [System.IO.Path]::TrimEndingDirectorySeparator((Resolve-SPSLifecycleFileSystemPath -Path $Folder))
-    if ([System.String]::Equals([System.IO.Path]::GetPathRoot($full), $full, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "The folder '$full' is the root of a drive or of a share: choose a folder of its own."
+    $parent = [System.IO.Path]::TrimEndingDirectorySeparator((Resolve-SPSLifecycleFileSystemPath -Path $Folder))
+    if ([System.String]::Equals([System.IO.Path]::GetPathRoot($parent), $parent, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The folder '$parent' is the root of a drive or of a share: choose a folder of its own."
     }
 
-    $repository = Find-SPSLifecycleRepositoryRoot -Path $full
-    if ($repository) {
-        throw "The folder '$full' is inside a repository ('$repository' holds a .git entry): a private key must never be next to the code, where a commit could take it. Choose a folder outside it."
+    if (Test-Path -LiteralPath $parent -PathType Leaf) {
+        throw "'$parent' is a file, and the key of the app needs a folder."
     }
 
-    if ($ToolRoot) {
-        $root = [System.IO.Path]::TrimEndingDirectorySeparator((Resolve-SPSLifecycleFileSystemPath -Path $ToolRoot))
-        $separators = @([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-        $inside = [System.String]::Equals($full, $root, [System.StringComparison]::OrdinalIgnoreCase)
-        foreach ($separator in $separators) {
-            if ($full.StartsWith("$root$separator", [System.StringComparison]::OrdinalIgnoreCase)) {
-                $inside = $true
-            }
-        }
+    Assert-SPSLifecycleOutsideRepository -Path $parent -ToolRoot $ToolRoot
 
-        if ($inside) {
-            throw "The folder '$full' is inside the folder of the tool ('$root'): a private key must never be next to the code. Choose a folder outside it."
-        }
+    $keyFolder = Join-Path -Path $parent -ChildPath $ApplicationName
+    Assert-SPSLifecycleOutsideRepository -Path $keyFolder -ToolRoot $ToolRoot
+    if ((Test-Path -LiteralPath $keyFolder) -or $null -ne [System.IO.DirectoryInfo]::new($keyFolder).LinkTarget) {
+        throw "'$keyFolder' is already there, and it may hold the key of an earlier app, so nothing is written in it and nothing in it is replaced. Move it away, or choose another folder or another application name."
     }
 
-    if (Test-Path -LiteralPath $full -PathType Leaf) {
-        throw "'$full' is a file, and the certificate files need a folder."
-    }
-
-    foreach ($extension in 'pfx', 'cer') {
-        $file = Join-Path -Path $full -ChildPath "$ApplicationName.$extension"
-        if (Test-Path -LiteralPath $file) {
-            throw "The file '$file' is already there, and it may hold the key of an earlier app, so it is never replaced. Move it away, or choose another folder or another application name."
-        }
-    }
-
-    $full
+    $keyFolder
 }

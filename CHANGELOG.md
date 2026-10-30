@@ -217,9 +217,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for, the certificate, the roles that create the app and give the consent; `-WhatIf` stops there), refuses the Microsoft tenants, asks
   for the name of the tenant to be typed, then registers an app that a person signs in with (the default: delegated permissions, no
   certificate) or an app that signs in alone (`-Kind Certificate`: application permissions and a self-signed certificate of 2 years by
-  default, whose password is typed twice and never shown, and whose files go to a folder outside the repository that only the user can
-  read, restricted again when the run is interrupted). It stops when an app of that name exists and says what became of the files, and
-  shows the lines for the settings file. The permissions are a table of data with a reason for each, and the generated App-Registration
+  default, whose password is typed twice and never shown, and whose files go to a new folder, named after the app, that the script
+  makes for the user alone, checked, outside any repository and the folder of the tool by where it leads too, and restricted again when
+  the run is interrupted). It stops when an app of that name exists, and removes the files that the cmdlet wrote only then (the name
+  being taken is the one failure that proves that no app was created: every other failure keeps them), checks the key and the
+  certificate after the registration, and shows the lines for the settings file. The adapter rebuilds the plan, so that a plan that
+  names another domain is refused, and nothing that PnP.PowerShell writes on its streams or says in an error is passed on with a key or
+  the password in it. The permissions are a table of data with a reason for each, and the generated App-Registration
   page of the wiki says what the script does and how to do the same by hand. `.gitignore` keeps `*.pfx`, `*.cer`, `*.pem`, `*.key` and
   `*.p12` out of a commit. Nothing of it has run against a tenant yet.
 - Sign-in: the tool can sign in with a certificate, for a run that nobody watches (#9). `Authentication` (`Interactive`, the default, or

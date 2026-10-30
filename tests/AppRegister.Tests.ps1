@@ -19,8 +19,9 @@
         $values = @{
             Redirected = $false; Answers = @('contoso'); AnswerIndex = 0; PnPMissing = $false; PasswordFails = ''; Windows = $false
             Record = [PSCustomObject]@{ ClientId = $script:ClientId; Thumbprint = $script:Thumbprint }
-            Fail = ''; WriteFiles = $true; Protect = $true; StoreFails = ''; TenantId = $script:TenantId; TenantIdFails = ''
+            Fail = ''; WriteFiles = $true; Protect = $true; StoreFails = ''; StoreThumbprint = $script:Thumbprint; TenantId = $script:TenantId; TenantIdFails = ''
             Info = [PSCustomObject]@{ Thumbprint = $script:Thumbprint; NotAfter = [System.DateTime]::new(2028, 10, 29, 22, 0, 0, [System.DateTimeKind]::Utc) }
+            Key = [PSCustomObject]@{ Thumbprint = $script:Thumbprint; HasPrivateKey = $true }
             Password = $script:Password
         }
         foreach ($key in $Data.Keys) { $values[$key] = $Data[$key] }
@@ -71,11 +72,16 @@ param($Path)
 $script:StubLog.Add("read $(Split-Path -Path $Path -Leaf)")
 $script:StubData.Info
 '@
+            'Read-SPSLifecycleKeyFile'             = @'
+param($Path, $Password)
+$script:StubLog.Add("key $(Split-Path -Path $Path -Leaf) password=$($null -ne $Password)")
+$script:StubData.Key
+'@
             'Add-SPSLifecycleCertificateToStore'   = @'
 param($Path, $Password)
 $script:StubLog.Add("store $(Split-Path -Path $Path -Leaf) password=$($null -ne $Password)")
 if ($script:StubData.StoreFails) { throw $script:StubData.StoreFails }
-'ignored'
+$script:StubData.StoreThumbprint
 '@
             'Test-SPSLifecycleWindowsPlatform'     = @'
 $script:StubData.Windows
@@ -88,8 +94,9 @@ $script:StubData.TenantId
 '@
         } -Data $values
 
-        if ($values.Windows) {
-            # The real function makes an access control list, which only Windows has: where the tests say that the system is Windows, it is plain.
+        if ($values.Windows -or $IsWindows) {
+            # The real function makes the mode of Unix or an access control list of Windows, and each exists on its own system only: where the
+            # tests say that the system is Windows, or where it is, the folder is plain.
             Set-ModuleStub -Stub @{
                 'New-SPSLifecycleProtectedFolder' = @'
 param($Path)
@@ -135,9 +142,19 @@ $true
         }
     }
 
+    # The folder that a person gives: the key folder is made in it, named after the app.
     function script:New-KeyFolder {
         Join-Path -Path $TestDrive -ChildPath "keys-$([System.Guid]::NewGuid().ToString('N'))"
     }
+
+    function script:Get-KeyPath {
+        param([string]$Parent, [string]$Leaf = 'SPSSiteLifecycle.pfx')
+
+        Join-Path -Path (Join-Path -Path $Parent -ChildPath 'SPSSiteLifecycle') -ChildPath $Leaf
+    }
+
+    $script:PromptInteractive = "ask: Register the app 'SPSSiteLifecycle' (Interactive) in the tenant contoso, with the permissions SharePoint AllSites.FullControl, Graph Group.ReadWrite.All. Type the name of the tenant to go on"
+    $script:PromptCertificate = "ask: Register the app 'SPSSiteLifecycle' (Certificate) in the tenant contoso, with the permissions SharePoint Sites.FullControl.All, Graph Group.ReadWrite.All. Type the name of the tenant to go on"
 
     Install-Tripwire
 }
@@ -214,19 +231,20 @@ Describe 'Register-SPSLifecycleApp: what is checked first, and the plan' {
 
         $tool = (Resolve-Path -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..')).ProviderPath
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (Join-Path -Path $tool -ChildPath 'keys') }
-        $run.Error | Should -BeLike '*inside a repository*'
+        $run.Error | Should -Match 'inside (a repository|the folder of the tool)'
         $run.Log | Should -HaveCount 0
     }
 
-    It 'refuses a folder where a key or a certificate of that name is, and does nothing' {
+    It 'refuses a key folder that is already there, with a key in it or not, and does nothing' {
         $folder = New-KeyFolder
-        $null = New-Item -Path $folder -ItemType Directory
-        Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx') -Value 'x'
+        $null = New-Item -Path (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle') -ItemType Directory -Force
+        Set-Content -LiteralPath (Get-KeyPath -Parent $folder) -Value 'x'
 
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
-        $run.Error | Should -BeLike '*SPSSiteLifecycle.pfx*already there*'
+        $run.Error | Should -BeLike '*SPSSiteLifecycle*already there*nothing in it is replaced*'
         $run.Log | Should -HaveCount 0
+        Get-Content -LiteralPath (Get-KeyPath -Parent $folder) | Should -BeExactly 'x'
     }
 
     It 'shows the plan and stops with -WhatIf: nothing is asked, nothing is created' {
@@ -281,7 +299,7 @@ Describe 'Register-SPSLifecycleApp: the confirmation' {
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
 
         $run.Error | Should -BeLike '*does not match the tenant (contoso). Nothing was changed.'
-        $run.Log | Should -Be @('pnp check', 'redirected?', 'ask: Type the name of the tenant to register the app in it')
+        $run.Log | Should -Be @('pnp check', 'redirected?', $script:PromptCertificate)
     }
 
     It 'stops before it asks when the input is redirected' {
@@ -314,7 +332,7 @@ Describe 'Register-SPSLifecycleApp: an app that a person signs in with' {
         $run = Invoke-TestRegister -Parameter @{}
 
         $run.Error | Should -BeNullOrEmpty
-        $run.Log | Should -Be @('pnp check', 'redirected?', 'ask: Type the name of the tenant to register the app in it', 'register Interactive contoso.onmicrosoft.com SPSSiteLifecycle password=False folder=False')
+        $run.Log | Should -Be @('pnp check', 'redirected?', $script:PromptInteractive, 'register Interactive contoso.onmicrosoft.com SPSSiteLifecycle password=False folder=False')
         @($run.Result.PSObject.Properties.Name) | Should -Be @('TenantName', 'ApplicationName', 'Kind', 'ClientId', 'TenantId', 'Thumbprint', 'ExpiresOn', 'PfxPath', 'CerPath', 'KeyProtected', 'StoredInCertificateStore')
         $run.Result.ClientId | Should -BeExactly $script:ClientId
         $run.Result.Kind | Should -BeExactly 'Interactive'
@@ -374,17 +392,18 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
         $run.Log | Should -Be @(
             'pnp check'
             'redirected?'
-            'ask: Type the name of the tenant to register the app in it'
+            $script:PromptCertificate
             'password'
             'register Certificate contoso.onmicrosoft.com SPSSiteLifecycle password=True folder=True'
             'protect SPSSiteLifecycle.pfx'
             'read SPSSiteLifecycle.cer'
+            'key SPSSiteLifecycle.pfx password=True'
             'protect SPSSiteLifecycle.pfx'
             'tenant id contoso.onmicrosoft.com'
         )
         $run.Result.Thumbprint | Should -BeExactly $script:Thumbprint
-        $run.Result.PfxPath | Should -BeExactly (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx')
-        $run.Result.CerPath | Should -BeExactly (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.cer')
+        $run.Result.PfxPath | Should -BeExactly (Get-KeyPath -Parent $folder)
+        $run.Result.CerPath | Should -BeExactly (Get-KeyPath -Parent $folder -Leaf 'SPSSiteLifecycle.cer')
         $run.Result.ExpiresOn | Should -Be ([System.DateTime]::new(2028, 10, 29, 22, 0, 0, [System.DateTimeKind]::Utc))
         $run.Result.KeyProtected | Should -BeTrue
         $run.Result.StoredInCertificateStore | Should -BeFalse
@@ -401,7 +420,7 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
         $run.Result.TenantId | Should -BeExactly $script:TenantId
         $run.Info | Should -Contain "    TenantId       = '$script:TenantId'"
         $run.Info | Should -Contain "    Authentication = 'Certificate'"
-        $run.Info | Should -Contain "    CertificatePath = '$(Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx')'"
+        $run.Info | Should -Contain "    CertificatePath = '$(Get-KeyPath -Parent $folder)'"
     }
 
     It 'warns, and goes on, when the ID of the tenant cannot be read: it is on the Overview page of the Microsoft Entra admin center' {
@@ -430,15 +449,15 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
 
         $null = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
-        [System.IO.File]::GetUnixFileMode($folder) | Should -Be ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute)
+        [System.IO.File]::GetUnixFileMode((Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle')) | Should -Be ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute)
     }
 
-    It 'gives the number of years to the cmdlet through the plan, and dates the end from the plan when the file cannot be read' {
-        Set-RegisterStub -Data @{ Info = $null }
+    It 'dates the end of the certificate from the certificate that the app got, and from nothing that was only planned' {
+        Set-RegisterStub -Data @{ Info = [PSCustomObject]@{ Thumbprint = $script:Thumbprint; NotAfter = [System.DateTime]::new(2031, 10, 29, 22, 0, 0, [System.DateTimeKind]::Utc) } }
 
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder); ValidYears = 5 }
 
-        $run.Result.ExpiresOn | Should -Be ([System.DateTime]::new(2031, 10, 30, 0, 0, 0, [System.DateTimeKind]::Utc))
+        $run.Result.ExpiresOn | Should -Be ([System.DateTime]::new(2031, 10, 29, 22, 0, 0, [System.DateTimeKind]::Utc))
     }
 
     It 'says that the key could not be restricted when it could not' {
@@ -514,22 +533,21 @@ Describe 'Register-SPSLifecycleApp: when it fails, and what became of the files'
         Clear-ModuleStub
     }
 
-    It 'removes the files that the cmdlet wrote when no app was created, and says so: <Name>' -ForEach @(
-        @{ Name = 'the name is taken'; Fail = 'The application with name SPSSiteLifecycle already exists.'; Expected = '*already exists in this tenant, so nothing was created.*were removed*' }
-        @{ Name = 'the account is refused'; Fail = 'Authorization_RequestDenied: Insufficient privileges to complete the operation.'; Expected = '*not allowed to create an app registration*Nothing was created.*were removed*' }
-    ) {
-        Set-RegisterStub -Data @{ Fail = $Fail }
+    It 'removes the files that the cmdlet wrote, and the folder, when the name is taken: PnP.PowerShell says so before it creates the app' {
+        Set-RegisterStub -Data @{ Fail = 'The application with name SPSSiteLifecycle already exists.' }
         $folder = New-KeyFolder
 
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
-        $run.Error | Should -BeLike $Expected
-        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx') | Should -BeFalse
-        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.cer') | Should -BeFalse
+        $run.Error | Should -BeLike '*already exists in this tenant, so nothing was created.*were removed*'
+        Test-Path -LiteralPath (Get-KeyPath -Parent $folder) | Should -BeFalse
+        Test-Path -LiteralPath (Get-KeyPath -Parent $folder -Leaf 'SPSSiteLifecycle.cer') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle') | Should -BeFalse -Because 'the key folder was made for this run, and is empty'
         $run.Log | Should -Contain 'protect SPSSiteLifecycle.pfx'
     }
 
     It 'keeps the files when an app may exist, and says so: <Name>' -ForEach @(
+        @{ Name = 'the account is refused: a refusal of Graph can come after the app was created'; Fail = 'Authorization_RequestDenied: Insufficient privileges to complete the operation.'; Expected = '*refused your account*does not prove it*look for an app named*were kept*' }
         @{ Name = 'the consent failed'; Fail = 'AADSTS65001: The user or administrator has not consented.'; Expected = '*may have been created*were kept*' }
         @{ Name = 'nobody can tell'; Fail = 'A task was canceled.'; Expected = '*may or may not exist*were kept*' }
     ) {
@@ -539,9 +557,39 @@ Describe 'Register-SPSLifecycleApp: when it fails, and what became of the files'
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
         $run.Error | Should -BeLike $Expected
-        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx') | Should -BeTrue
-        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.cer') | Should -BeTrue
-        $run.Error | Should -BeLike "*$(Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx')*"
+        Test-Path -LiteralPath (Get-KeyPath -Parent $folder) | Should -BeTrue
+        Test-Path -LiteralPath (Get-KeyPath -Parent $folder -Leaf 'SPSSiteLifecycle.cer') | Should -BeTrue
+        $run.Error | Should -BeLike "*$(Get-KeyPath -Parent $folder)*"
+        $run.Error | Should -Not -BeLike '*Nothing was created.*'
+    }
+
+    It 'does not delete a key after a refusal that came when the app already existed: the only copy' {
+        Set-RegisterStub -Data @{ Fail = 'Response status code does not indicate success: 403 (Forbidden). Authorization_RequestDenied (the consent)' }
+        $folder = New-KeyFolder
+
+        $null = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
+
+        (Get-Content -LiteralPath (Get-KeyPath -Parent $folder)) | Should -BeExactly 'THE KEY'
+    }
+
+    It 'removes nothing but the two files of the app, by their names, and keeps the folder when something else is in it' {
+        Set-RegisterStub -Data @{ Fail = 'The application with name SPSSiteLifecycle already exists.' }
+        Set-ModuleStub -Stub @{
+            'Register-SPSLifecycleEntraApp' = @'
+param($Plan, $CertificatePassword)
+Set-Content -LiteralPath $Plan.Certificate.PfxPath -Value 'THE KEY'
+Set-Content -LiteralPath $Plan.Certificate.CerPath -Value 'THE CERTIFICATE'
+Set-Content -LiteralPath (Join-Path -Path $Plan.Certificate.Folder -ChildPath 'notes.txt') -Value 'not ours to remove'
+throw $script:StubData.Fail
+'@
+        } -Data (& $script:Module { $script:StubData })
+        $folder = New-KeyFolder
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
+
+        $run.Error | Should -BeLike '*were removed*'
+        Test-Path -LiteralPath (Get-KeyPath -Parent $folder) | Should -BeFalse
+        Test-Path -LiteralPath (Get-KeyPath -Parent $folder -Leaf 'notes.txt') | Should -BeTrue
     }
 
     It 'says which files could not be removed when one cannot, and that no app uses them' {
@@ -558,7 +606,7 @@ throw $script:StubData.Fail
 
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
-        $run.Error | Should -BeLike "*could not be removed (delete them by hand, no app uses them): $(Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx')*"
+        $run.Error | Should -BeLike "*could not be removed (delete them by hand, no app uses them): $(Get-KeyPath -Parent $folder)*"
     }
 
     It 'keeps the files, and says so, when the cmdlet gave nothing back after it wrote them' {
@@ -568,16 +616,72 @@ throw $script:StubData.Fail
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
         $run.Error | Should -BeLike '*gave nothing back*were kept*an app may exist that they belong to*'
-        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx') | Should -BeTrue
+        Test-Path -LiteralPath (Get-KeyPath -Parent $folder) | Should -BeTrue
     }
 
-    It 'says that nothing came back, with no file to keep, when the sign-in was cancelled before any file was written' {
+    It 'removes the folder that it made, and says that nothing came back, when the sign-in was cancelled before any file was written' {
         Set-RegisterStub -Data @{ Record = $null; WriteFiles = $false }
+        $folder = New-KeyFolder
 
-        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
         $run.Error | Should -BeLike '*gave nothing back*'
         $run.Error | Should -Not -BeLike '*were kept*'
+        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle') | Should -BeFalse
+    }
+
+    It 'removes the folder that it made when the registration failed and wrote nothing, and keeps one that holds a file' {
+        Set-RegisterStub -Data @{ Fail = 'A task was canceled.'; WriteFiles = $false }
+        $folder = New-KeyFolder
+
+        $null = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
+
+        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle') | Should -BeFalse
+    }
+}
+
+Describe 'Register-SPSLifecycleApp: what it checks after the registration, which is no success unless the key is the key' {
+    AfterEach {
+        Clear-ModuleStub
+    }
+
+    It 'stops, and says what to do, when the certificate file cannot be read as a certificate' {
+        Set-RegisterStub -Data @{ Info = $null }
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+
+        $run.Error | Should -BeLike "The app 'SPSSiteLifecycle' was created (client ID $script:ClientId), but the certificate file '*' cannot be read as a certificate*Delete the app*"
+        $null -eq $run.Result | Should -BeTrue
+    }
+
+    It 'stops when the key file cannot be opened with the password that was typed, or is not a key at all' {
+        Set-RegisterStub -Data @{ Key = $null }
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+
+        $run.Error | Should -BeLike "*was created (client ID $script:ClientId), but the key file '*' cannot be opened with the password that was typed, or is not a .pfx file*Delete the app*"
+        $null -eq $run.Result | Should -BeTrue
+    }
+
+    It 'stops when the key file holds no private key, or the key of another certificate: <Name>' -ForEach @(
+        @{ Name = 'no private key'; Key = @{ Thumbprint = '0123456789ABCDEF0123456789ABCDEF01234567'; HasPrivateKey = $false } }
+        @{ Name = 'another certificate'; Key = @{ Thumbprint = ('F' * 40); HasPrivateKey = $true } }
+    ) {
+        Set-RegisterStub -Data @{ Key = [PSCustomObject]$Key }
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+
+        $run.Error | Should -BeLike "*does not hold the private key of the certificate that the app got (thumbprint $script:Thumbprint)*Delete the app*"
+        $null -eq $run.Result | Should -BeTrue
+    }
+
+    It 'does not say that the certificate is in the store when what was added is not the one that the app got' {
+        Set-RegisterStub -Data @{ Windows = $true; StoreThumbprint = ('F' * 40) }
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder); UseCertificateStore = $true }
+
+        $run.Result.StoredInCertificateStore | Should -BeFalse
+        ($run.Warnings -join ' ') | Should -BeLike '*added to the CurrentUser store is not the one that the app got*'
     }
 }
 
@@ -659,7 +763,7 @@ $null = Register-SPSLifecycleApp -TenantName contoso -Kind Certificate -OutputFo
 
         $null = & $script:Pwsh -NoProfile -File $file 2>&1
 
-        $key = Join-Path -Path $folder -ChildPath 'keys/SPSSiteLifecycle.pfx'
+        $key = Join-Path -Path $folder -ChildPath 'keys/SPSSiteLifecycle/SPSSiteLifecycle.pfx'
         Test-Path -LiteralPath $key | Should -BeTrue
         [System.IO.File]::GetUnixFileMode($key) | Should -Be ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite)
         (Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'warnings.txt') -Raw) | Should -BeLike "*The registration was interrupted. The app 'SPSSiteLifecycle' may have been created*Microsoft Entra admin center*were kept.*"
@@ -699,7 +803,7 @@ $null = Register-SPSLifecycleApp -TenantName contoso -Kind Certificate -OutputFo
             if (-not $process.HasExited) { $process.Kill($true) }
         }
 
-        $key = Join-Path -Path $folder -ChildPath 'keys/SPSSiteLifecycle.pfx'
+        $key = Join-Path -Path $folder -ChildPath 'keys/SPSSiteLifecycle/SPSSiteLifecycle.pfx'
         [System.IO.File]::GetUnixFileMode($key) | Should -Be ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite)
         (Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'warnings.txt') -Raw) | Should -BeLike '*The registration was interrupted*'
     }

@@ -87,11 +87,13 @@ Describe 'Format-SPSLifecycleAppFailure' {
         $text | Should -BeLike '*another name with -ApplicationName*Microsoft Entra admin center*'
     }
 
-    It 'says that the account is not allowed, with the reason, the roles that are, and that nothing was created' {
+    It 'says that Graph refused the account, with the reason and the roles that can create the app, and that a refusal does not prove that no app was created' {
         $text = Format-Failure -Kind Forbidden -Message 'Authorization_RequestDenied.'
 
-        $text | Should -BeLike '*not allowed to create an app registration*(Authorization_RequestDenied)*Nothing was created.*'
+        $text | Should -BeLike '*Microsoft Graph refused your account (Authorization_RequestDenied)*not allowed to create an app registration*a refusal does not prove it*'
+        $text | Should -BeLike "*look for an app named 'SPSSiteLifecycle' in the Microsoft Entra admin center*"
         $text | Should -BeLike '*Application Developer*Global Administrator*'
+        $text | Should -Not -BeLike '*Nothing was created.*'
     }
 
     It 'says that the consent may be what is missing, who gives it, and how, with the link of the tenant' {
@@ -313,7 +315,7 @@ $answer
 Describe 'Confirm-SPSLifecycleAppRegistration' {
     BeforeAll {
         function script:Invoke-Confirm {
-            param([string[]]$Answer = @('contoso'), [bool]$Redirected = $false)
+            param([string[]]$Answer = @('contoso'), [bool]$Redirected = $false, [string]$Kind = 'Interactive')
 
             Set-ModuleStub -Stub @{
                 'Test-SPSLifecycleInputRedirected' = @'
@@ -330,7 +332,7 @@ $answer
 '@
             } -Data @{ Redirected = $Redirected; Answers = $Answer; Index = 0 }
 
-            $plan = New-AppPlan
+            $plan = New-AppPlan -Kind $Kind
             & $script:Module { param($p) Confirm-SPSLifecycleAppRegistration -Plan $p } $plan
         }
     }
@@ -346,7 +348,16 @@ $answer
     ) {
         { Invoke-Confirm -Answer @($Typed) } | Should -Not -Throw
 
-        @(Get-StubLog) | Should -Be @('redirected?', 'ask: Type the name of the tenant to register the app in it')
+        @(Get-StubLog) | Should -Be @('redirected?', "ask: Register the app 'SPSSiteLifecycle' (Interactive) in the tenant contoso, with the permissions SharePoint AllSites.FullControl, Graph Group.ReadWrite.All. Type the name of the tenant to go on")
+    }
+
+    It 'says in the question what is registered, so that a person who cannot see the plan sees it: the app, the kind, the tenant and every permission' {
+        Invoke-Confirm -Kind Certificate
+
+        $question = @(Get-StubLog | Where-Object { $_ -like 'ask:*' })[0]
+        $question | Should -BeLike "*app 'SPSSiteLifecycle' (Certificate) in the tenant contoso*"
+        $question | Should -BeLike '*SharePoint Sites.FullControl.All, Graph Group.ReadWrite.All*'
+        $question | Should -BeLike '*Type the name of the tenant to go on'
     }
 
     It 'stops, with nothing changed, when what is typed is not the tenant: <Typed>' -ForEach @(

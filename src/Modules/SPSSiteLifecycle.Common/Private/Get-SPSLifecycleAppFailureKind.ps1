@@ -7,9 +7,10 @@
         Register-PnPEntraIDApp signs in first (a sign-in that fails returns nothing), then writes the certificate files, then asks
         Microsoft Graph whether an app of that name exists, creates the app, and finally runs the consent. So:
 
-        - AppExists: "The application with name ... already exists": no app was created;
-        - Forbidden: Microsoft Graph refused the account (Authorization_RequestDenied, Forbidden, Unauthorized, access denied): no app was
-          created;
+        - AppExists: "The application with name ... already exists": the name is taken, and PnP.PowerShell says so before it creates the
+          app, so no app was created. It is the only kind that proves it, and the only one for which the files that were written are removed;
+        - Forbidden: Microsoft Graph refused the account (Authorization_RequestDenied, Forbidden, Unauthorized, access denied): most likely
+          before the app was created, but the same words can come from a later call, so it proves nothing and the files are kept;
         - Consent: a Microsoft Entra sign-in error (AADSTS...), which comes at the consent, after the app was created, as far as is known;
         - Unknown: anything else: nobody can tell whether the app exists.
 
