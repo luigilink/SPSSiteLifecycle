@@ -93,7 +93,6 @@ $script:StubData.Windows
             Set-ModuleStub -Stub @{
                 'New-SPSLifecycleProtectedFolder' = @'
 param($Path)
-$script:StubLog.Add('folder')
 $null = New-Item -Path $Path -ItemType Directory -Force
 $true
 '@
@@ -330,6 +329,8 @@ Describe 'Register-SPSLifecycleApp: an app that a person signs in with' {
         $run.Result.ClientId | Should -BeExactly $script:ClientId
         $run.Result.Kind | Should -BeExactly 'Interactive'
         $run.Result.PfxPath | Should -BeExactly ''
+        $run.Result.KeyProtected | Should -BeExactly $false
+        $run.Result.StoredInCertificateStore | Should -BeExactly $false
         $run.Info | Should -Contain "    TenantName = 'contoso'"
         $run.Info | Should -Contain "    ClientId   = '$script:ClientId'"
     }
@@ -396,8 +397,8 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
         $run.Result.PfxPath | Should -BeExactly (Get-KeyPath -Parent $folder)
         $run.Result.CerPath | Should -BeExactly (Get-KeyPath -Parent $folder -Leaf 'SPSSiteLifecycle.cer')
         $run.Result.ExpiresOn | Should -Be ([System.DateTime]::new(2028, 10, 29, 22, 0, 0, [System.DateTimeKind]::Utc))
-        $run.Result.KeyProtected | Should -BeTrue
-        $run.Result.StoredInCertificateStore | Should -BeFalse
+        $run.Result.KeyProtected | Should -BeExactly $true
+        $run.Result.StoredInCertificateStore | Should -BeExactly $false
         ($run.Info -join "`n") | Should -BeLike "*thumbprint $script:Thumbprint, and it ends on 2028-10-29*"
         ($run.Info -join "`n") | Should -BeLike '*can be read by your account only*'
     }
@@ -409,6 +410,51 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
         $null = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
 
         [System.IO.File]::GetUnixFileMode((Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle')) | Should -Be ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute)
+    }
+
+    It 'makes the certificate valid for 2 years when it is not told otherwise' {
+        Set-RegisterStub
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+
+        ($run.Info -join "`n") | Should -BeLike '*self-signed, valid 2 years (until about*'
+    }
+
+    It 'accepts the thumbprint that the store gives in lower case: it is the same certificate' {
+        Set-RegisterStub -Data @{ Windows = $true; StoreThumbprint = $script:Thumbprint.ToLowerInvariant() }
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder); UseCertificateStore = $true }
+
+        $run.Error | Should -BeNullOrEmpty
+        $run.Result.StoredInCertificateStore | Should -BeExactly $true
+    }
+
+    It 'checks the folder again once it exists, and stops before the cmdlet writes in a folder that is then found inside a repository or the tool' {
+        Set-RegisterStub
+        Set-ModuleStub -Stub @{
+            'Assert-SPSLifecycleOutsideRepository' = @'
+param($Path, $ToolRoot)
+if (Test-Path -LiteralPath $Path) { throw "The folder '$Path' is inside a repository (found once it was made)." }
+'@
+        } -Data (& $script:Module { $script:StubData })
+        $folder = New-KeyFolder
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
+
+        $run.Error | Should -BeLike '*inside a repository (found once it was made)*'
+        @($run.Log | Where-Object { $_ -like 'register*' }) | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle') | Should -BeFalse
+    }
+
+    It 'does not say that the registration was interrupted when it ended, with an app or with a failure' {
+        Set-RegisterStub
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+        ($run.Warnings -join "`n") | Should -Not -BeLike '*interrupted*'
+
+        Set-RegisterStub -Data @{ Fail = 'The application with name SPSSiteLifecycle already exists.' }
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+        $run.Error | Should -Not -BeNullOrEmpty
+        ($run.Warnings -join "`n") | Should -Not -BeLike '*interrupted*'
     }
 
     It 'dates the end of the certificate from the certificate that the app got, and from nothing that was only planned' {
@@ -425,7 +471,7 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
         $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
 
         $run.Error | Should -BeNullOrEmpty
-        $run.Result.KeyProtected | Should -BeFalse
+        $run.Result.KeyProtected | Should -BeExactly $false
         ($run.Info -join "`n") | Should -BeLike '*could not be restricted to your account: do it by hand*'
     }
 

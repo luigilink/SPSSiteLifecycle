@@ -107,6 +107,33 @@ Describe 'Resolve-SPSLifecyclePhysicalPath' {
 
         { Resolve-Physical -Path $first } | Should -Throw -ExpectedMessage '*too many links*'
     }
+
+    It 'follows a long chain of links in one step: it does not count each of them as a place where the path was resolved again' -Skip:($IsWindows) {
+        $real = New-Folder -Name 'chain-real'
+        $next = $real
+        foreach ($number in 34..0) {
+            $link = Join-Path -Path $TestDrive -ChildPath "chain-$number"
+            $null = New-Item -Path $link -ItemType SymbolicLink -Value $next
+            $next = $link
+        }
+
+        Resolve-Physical -Path (Join-Path -Path $TestDrive -ChildPath 'chain-0') | Should -BeExactly $real
+    }
+
+    It 'goes through 32 places where the path has to be resolved again, and refuses the 33rd' -Skip:($IsWindows) {
+        $real = New-Folder -Name 'hop-real'
+        foreach ($hops in 32, 33) {
+            $name = "hop$hops"
+            foreach ($number in ($hops - 1)..0) {
+                $target = if ($number -eq ($hops - 1)) { Join-Path -Path $real -ChildPath 's' } else { Join-Path -Path (Join-Path -Path $TestDrive -ChildPath "$name-$($number + 1)") -ChildPath 's' }
+                $null = New-Item -Path (Join-Path -Path $TestDrive -ChildPath "$name-$number") -ItemType SymbolicLink -Value $target
+            }
+        }
+
+        # Each link adds the folder that follows it to what is left of the path.
+        Resolve-Physical -Path (Join-Path -Path $TestDrive -ChildPath 'hop32-0') | Should -BeExactly ($real + ('/s' * 32))
+        { Resolve-Physical -Path (Join-Path -Path $TestDrive -ChildPath 'hop33-0') } | Should -Throw -ExpectedMessage '*too many links*'
+    }
 }
 
 Describe 'Assert-SPSLifecycleOutsideRepository' {
@@ -157,6 +184,15 @@ Describe 'Assert-SPSLifecycleOutsideRepository' {
         { Assert-Outside -Path $link -ToolRoot $tool } | Should -Throw -ExpectedMessage '*inside the folder of the tool*the folder leads there*'
     }
 
+    It 'refuses the folder of the tool itself, and what is in it, whatever the case of the letters' {
+        $tool = New-Folder -Name 'Tool-Case-Of-Letters'
+        $other = $tool.ToUpperInvariant()
+
+        { Assert-Outside -Path $tool -ToolRoot $tool } | Should -Throw -ExpectedMessage '*inside the folder of the tool*'
+        { Assert-Outside -Path $other -ToolRoot $tool } | Should -Throw -ExpectedMessage '*inside the folder of the tool*'
+        { Assert-Outside -Path (Join-Path -Path $other -ChildPath 'keys') -ToolRoot $tool } | Should -Throw -ExpectedMessage '*inside the folder of the tool*'
+    }
+
     It 'refuses the folder of the tool when the tool itself is reached through a link' {
         $tool = New-Folder -Name 'tool-real'
         $toolLink = Join-Path -Path $TestDrive -ChildPath 'tool-by-link'
@@ -200,6 +236,42 @@ Describe 'Assert-SPSLifecycleOwnerOnlyAccess' {
         $own = Join-Path -Path $TestDrive -ChildPath 'own'
         $null = & $script:Module { param($p) New-SPSLifecycleProtectedFolder -Path $p } $own
         { & $script:Module { param($p) Assert-SPSLifecycleOwnerOnlyAccess -Path $p } $own } | Should -Not -Throw
+    }
+}
+
+Describe 'Assert-SPSLifecycleOwnerOnlyAccess, on Windows, when the list is protected but is not for the account alone' {
+    It 'refuses a list that has another account, a refusal for the account, or nobody: <Name>' -Skip:(-not $IsWindows) -ForEach @(
+        @{ Name = 'another account'; Own = 'Allow'; Others = $true }
+        @{ Name = 'a refusal for the account'; Own = 'Deny'; Others = $false }
+        @{ Name = 'nobody'; Own = ''; Others = $false }
+    ) {
+        $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $everyone = [System.Security.Principal.SecurityIdentifier]::new([System.Security.Principal.WellKnownSidType]::WorldSid, $null)
+        $folder = New-Folder -Name "acl-$([System.Guid]::NewGuid().ToString('N'))"
+        $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+        $none = [System.Security.AccessControl.PropagationFlags]::None
+        try {
+            $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+            $acl.SetAccessRuleProtection($true, $false)
+            if ($Own) {
+                $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($user, $rights, $inherit, $none, [System.Security.AccessControl.AccessControlType]$Own))
+            }
+
+            if ($Others) {
+                $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($everyone, $rights, $inherit, $none, [System.Security.AccessControl.AccessControlType]::Allow))
+            }
+
+            Set-Acl -LiteralPath $folder -AclObject $acl
+
+            { & $script:Module { param($p) Assert-SPSLifecycleOwnerOnlyAccess -Path $p } $folder } | Should -Throw -ExpectedMessage '*more than the account that runs the tool*'
+        }
+        finally {
+            $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+            $acl.SetAccessRuleProtection($true, $false)
+            $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($user, $rights, $inherit, $none, [System.Security.AccessControl.AccessControlType]::Allow))
+            Set-Acl -LiteralPath $folder -AclObject $acl
+        }
     }
 }
 
@@ -252,7 +324,7 @@ Describe 'Clear-SPSLifecycleKeyFolder' {
 
         $result = Clear-Key -Folder $folder
 
-        $result.FolderRemoved | Should -BeFalse
+        $result.FolderRemoved | Should -BeExactly $false
         Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'other.txt') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'sub') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx') | Should -BeFalse
@@ -296,7 +368,7 @@ Describe 'Clear-SPSLifecycleKeyFolder' {
         Set-Content -LiteralPath (Join-Path -Path $full -ChildPath 'SPSSiteLifecycle.pfx') -Value 'k'
 
         (Clear-Key -Folder $empty -FolderOnly).FolderRemoved | Should -BeTrue
-        (Clear-Key -Folder $full -FolderOnly).FolderRemoved | Should -BeFalse
+        (Clear-Key -Folder $full -FolderOnly).FolderRemoved | Should -BeExactly $false
 
         Test-Path -LiteralPath $empty | Should -BeFalse
         Test-Path -LiteralPath (Join-Path -Path $full -ChildPath 'SPSSiteLifecycle.pfx') | Should -BeTrue
@@ -308,7 +380,7 @@ Describe 'Clear-SPSLifecycleKeyFolder' {
         $target = New-Folder -Name 'clear-7-target'
         $link = Join-Path -Path $TestDrive -ChildPath 'clear-7-link'
         New-FolderLink -Path $link -Target $target
-        (Clear-Key -Folder $link -FolderOnly).FolderRemoved | Should -BeFalse
+        (Clear-Key -Folder $link -FolderOnly).FolderRemoved | Should -BeExactly $false
         Test-Path -LiteralPath $target | Should -BeTrue
     }
 }
@@ -417,6 +489,14 @@ Describe 'ConvertTo-SPSLifecycleSecretFreeText' {
 
     It 'takes out each secret that it is given, wherever it is, and more than once' {
         Remove-Secret -Text 'Bad password Correct-Horse-1 for the file; Correct-Horse-1 again' -Secret @('Correct-Horse-1') | Should -BeExactly 'Bad password [removed] for the file; [removed] again'
+    }
+
+    It 'cuts a text when it is longer than 800 characters, and only then' {
+        $exact = ('abcd ' * 159) + 'abcde'
+
+        $exact.Length | Should -Be 800
+        Remove-Secret -Text $exact | Should -BeExactly $exact
+        Remove-Secret -Text ($exact + 'f') | Should -BeExactly ($exact + '...')
     }
 
     It 'cuts a text that is too long, after the rest was taken out' {

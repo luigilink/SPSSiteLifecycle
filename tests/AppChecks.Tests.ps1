@@ -205,8 +205,15 @@ Describe 'Resolve-SPSLifecycleAppFolder' {
 
         foreach ($relative in 'keys', 'a/b/c', '.') {
             $folder = if ($relative -eq '.') { $repository } else { Join-Path -Path $repository -ChildPath $relative }
-            { Invoke-AppFolder -Folder $folder } | Should -Throw -ExpectedMessage '*inside a repository*outside*'
+            { Invoke-AppFolder -Folder $folder } | Should -Throw -ExpectedMessage "*The folder '$folder' is inside a repository*outside*"
         }
+    }
+
+    It 'refuses a key folder that is the folder of the tool, and says that it is the tool, before it says that the folder is there' {
+        $parent = New-Folder -Name 'around-the-tool'
+        $tool = New-Folder -Name 'around-the-tool/SPSSiteLifecycle'
+
+        { Invoke-AppFolder -Folder $parent -ToolRoot $tool } | Should -Throw -ExpectedMessage '*inside the folder of the tool*'
     }
 
     It 'refuses a folder inside a worktree or a submodule, where .git is a file' {
