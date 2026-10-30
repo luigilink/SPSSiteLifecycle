@@ -672,14 +672,16 @@ $module = Get-Module -Name SPSSiteLifecycle.Common
     param($filter, $startIndex, $queryError)
 
     $script:Sent = [System.Collections.Generic.List[System.String]]::new()
-    $script:Context = [Microsoft.SharePoint.Client.ClientContext]::new('https://contoso-admin.sharepoint.com')
+    # Not named like a variable of the adapter (context): the names do not depend on the case, and the adapter would find this one
+    # by the scope above its own when it did not read the context itself.
+    $script:SyntheticClientContext = [Microsoft.SharePoint.Client.ClientContext]::new('https://contoso-admin.sharepoint.com')
 
-    function script:Get-PnPContext { [CmdletBinding()] param($Connection) $script:Context }
+    function script:Get-PnPContext { [CmdletBinding()] param($Connection) $script:SyntheticClientContext }
     function script:Invoke-PnPQuery {
         [CmdletBinding()]
         param($RetryCount, $Connection)
         if ($queryError) { Write-Error 'The query failed for a part of the tenant.'; return }
-        $request = $script:Context.PendingRequest
+        $request = $script:SyntheticClientContext.PendingRequest
         $build = $request.GetType().GetMethod('BuildQuery', [System.Reflection.BindingFlags]'Instance,Public,NonPublic')
         $script:Sent.Add($build.Invoke($request, @()).CreateTextReader().ReadToEnd())
         $script:Retry = $RetryCount
