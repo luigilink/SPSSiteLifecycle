@@ -387,6 +387,16 @@ Describe 'ConvertTo-SPSLifecycleSitePage' {
         { ConvertTo-TestPage -Item @($item, (New-TestItem)) } | Should -Throw -ExpectedMessage "*'GroupId'*not been loaded*"
     }
 
+    It 'stops on a site that is not the first of the page, and names its property: <Position>' -ForEach @(
+        @{ Position = 'the second'; Index = 1 }
+        @{ Position = 'the last of three'; Index = 2 }
+    ) {
+        $sites = @(1..3 | ForEach-Object { [SPSLifecycleTest.Listing.FakeSiteProperties]::new() })
+        $null = $sites[$Index].Unloaded.Add('LastContentModifiedDate')
+
+        { ConvertTo-TestPage -Item $sites } | Should -Throw -ExpectedMessage "*'LastContentModifiedDate'*not been loaded*"
+    }
+
     It 'gives the sites of a .NET object of the admin API' {
         $page = ConvertTo-TestPage -Item @([SPSLifecycleTest.Listing.FakeSiteProperties]::new())
 

@@ -125,9 +125,9 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             (ConvertTo-TestRecord -Item (New-TestItem -Source Cmdlet) -Source Cmdlet).StorageUsedMB | Should -Be 12
         }
 
-        It 'is not read from the other name: an unknown size is not a size of zero' {
-            (ConvertTo-TestRecord -Item (New-TestItem -Source Cmdlet) -Source Csom).StorageUsedMB | Should -BeNullOrEmpty
-            (ConvertTo-TestRecord -Item (New-TestItem -Source Csom) -Source Cmdlet).StorageUsedMB | Should -BeNullOrEmpty
+        It 'is not read from the other name: a site that has its size under the other name is refused, as the call is wrong, and its size is not read as zero' {
+            { ConvertTo-TestRecord -Item (New-TestItem -Source Cmdlet) -Source Csom } | Should -Throw -ExpectedMessage "*no property 'StorageUsage'*"
+            { ConvertTo-TestRecord -Item (New-TestItem -Source Csom) -Source Cmdlet } | Should -Throw -ExpectedMessage "*no property 'StorageUsageCurrent'*"
         }
 
         It 'refuses a size that is not a number, and names the property and the site' {
@@ -147,6 +147,62 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             } $item
 
             $null -eq $record.StorageUsedMB | Should -BeTrue
+        }
+
+        It 'reads a size that is a whole number, whatever the type that carries it: <Name>' -ForEach @(
+            @{ Name = 'a long'; Value = [long]12; Expected = 12 }
+            @{ Name = 'an int'; Value = 12; Expected = 12 }
+            @{ Name = 'a byte'; Value = [byte]12; Expected = 12 }
+            @{ Name = 'an unsigned int'; Value = [uint32]12; Expected = 12 }
+            @{ Name = 'a double that is whole'; Value = 12.0; Expected = 12 }
+            @{ Name = 'a decimal that is whole'; Value = [decimal]12; Expected = 12 }
+            @{ Name = 'a text of digits'; Value = '12'; Expected = 12 }
+            @{ Name = 'a text of digits with spaces around'; Value = '  12 '; Expected = 12 }
+            @{ Name = 'a text with a plus sign'; Value = '+12'; Expected = 12 }
+            @{ Name = 'zero'; Value = [long]0; Expected = 0 }
+            @{ Name = 'the largest size'; Value = [long]::MaxValue; Expected = [long]::MaxValue }
+        ) {
+            $record = ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = $Value })
+
+            $record.StorageUsedMB | Should -BeOfType [long]
+            $record.StorageUsedMB | Should -Be $Expected
+        }
+
+        It 'reads no size, and not a size of zero, from a blank text: <Name>' -ForEach @(
+            @{ Name = 'an empty text'; Value = '' }
+            @{ Name = 'spaces'; Value = '   ' }
+            @{ Name = 'a tab and a line break'; Value = "`t`r`n" }
+        ) {
+            $record = ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = $Value })
+
+            $null -eq $record.StorageUsedMB | Should -BeTrue
+        }
+
+        It 'refuses what is not a size, and does not turn it into a number: <Name>' -ForEach @(
+            @{ Name = 'false'; Value = $false }
+            @{ Name = 'true'; Value = $true }
+            @{ Name = 'a word'; Value = 'many' }
+            @{ Name = 'a fraction as a text'; Value = '1.5' }
+            @{ Name = 'a fraction'; Value = 1.5 }
+            @{ Name = 'an exponent'; Value = '1e3' }
+            @{ Name = 'a thousands separator'; Value = '1,000' }
+            @{ Name = 'a number with a space inside'; Value = '1 000' }
+            @{ Name = 'a hexadecimal text'; Value = '0x10' }
+            @{ Name = 'not a number'; Value = [double]::NaN }
+            @{ Name = 'infinity'; Value = [double]::PositiveInfinity }
+            @{ Name = 'a number that does not fit'; Value = 1e30 }
+            @{ Name = 'an unsigned number that does not fit'; Value = [uint64]::MaxValue }
+            @{ Name = 'an object'; Value = (Get-Date) }
+            @{ Name = 'a list'; Value = @(1, 2) }
+        ) {
+            { ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = $Value }) } | Should -Throw -ExpectedMessage "*'StorageUsage' is not a number of megabytes*"
+        }
+
+        It 'refuses a size below zero, which no site has, and says so: <Name>' -ForEach @(
+            @{ Name = 'a number'; Value = [long]-1 }
+            @{ Name = 'a text'; Value = '-5' }
+        ) {
+            { ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = $Value }) } | Should -Throw -ExpectedMessage "*'StorageUsage' is below zero*"
         }
 
         It 'stays a size of zero when the site holds nothing' {
@@ -174,6 +230,11 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             $record = ConvertTo-TestRecord -Item (New-TestItem -Override @{ GroupId = [guid]::Empty })
 
             $record.GroupId | Should -BeExactly '00000000-0000-0000-0000-000000000000'
+        }
+
+        It 'refuses a site ID that is all zeros: it is no identity, and the pager would take every such site for one' {
+            { ConvertTo-TestRecord -Item (New-TestItem -Override @{ SiteId = [guid]::Empty }) } | Should -Throw -ExpectedMessage "*'SiteId' is empty*"
+            { ConvertTo-TestRecord -Item (New-TestItem -Override @{ SiteId = '00000000-0000-0000-0000-000000000000' }) } | Should -Throw -ExpectedMessage "*'SiteId' is empty*"
         }
 
         It 'keeps a value that is not a GUID as it is, so that the Scan core stops on it instead of reading no group' {
@@ -264,6 +325,41 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             $record.ArchiveStatus | Should -BeExactly ''
             $null -eq $record.StorageUsedMB | Should -BeTrue
             $null -eq $record.LastContentModified | Should -BeTrue
+        }
+    }
+
+    Context 'A property that was not loaded' {
+        It 'is found on a site, whichever the property: <Name>' -ForEach @(
+            @{ Name = 'Url' }
+            @{ Name = 'SiteId' }
+            @{ Name = 'Title' }
+            @{ Name = 'Template' }
+            @{ Name = 'LockState' }
+            @{ Name = 'GroupId' }
+            @{ Name = 'IsHubSite' }
+            @{ Name = 'IsTeamsConnected' }
+            @{ Name = 'IsTeamsChannelConnected' }
+            @{ Name = 'ArchiveStatus' }
+            @{ Name = 'StorageUsage' }
+            @{ Name = 'LastContentModifiedDate' }
+        ) {
+            $item = [SPSLifecycleTest.Listing.FakeSiteProperties]::new()
+            $null = $item.Unloaded.Add($Name)
+
+            { ConvertTo-TestRecord -Item $item } | Should -Throw -ExpectedMessage "*'$Name'*not been loaded*"
+        }
+
+        It 'is not mistaken for a date that the site does not have, which would take a protection away from it' {
+            $item = [SPSLifecycleTest.Listing.FakeSiteProperties]::new()
+            $null = $item.Unloaded.Add('LastContentModifiedDate')
+
+            { ConvertTo-TestRecord -Item $item } | Should -Throw -ExpectedMessage '*reading it fails: The property or field has not been initialized*'
+        }
+
+        It 'is not found on a site that has everything, including the empty date of .NET, which is a date that the site does not have' {
+            $item = New-TestItem -Override @{ LastContentModifiedDate = [System.DateTime]::MinValue }
+
+            $null -eq (ConvertTo-TestRecord -Item $item).LastContentModified | Should -BeTrue
         }
     }
 
