@@ -70,9 +70,30 @@
     $sharedNames = @($schema | Where-Object { $_.Section -eq 'Shared' } | ForEach-Object { $_.Name })
     $allNames = @($schema | ForEach-Object { $_.Name }) + $sections
 
+    # A name is compared one character at a time, ignoring the case: the comparison operators of PowerShell (-in, -ieq,
+    # -contains) skip a zero-width space and a soft hyphen, so 'Refused<zero-width space>Tenants' would be read as the
+    # name RefusedTenants, kept under its own spelling, never found when the setting is read, and the refusal of the
+    # tenants would silently not apply. The name that is returned is the one of the schema, and the settings are kept
+    # under it.
+    $findName = {
+        param($Names, $Key)
+        foreach ($candidate in $Names) {
+            if ([System.String]::Equals($candidate, "$Key", [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $candidate
+            }
+        }
+
+        $null
+    }
+
     $describeUnknown = {
         param($Key, $Where)
-        $elsewhere = @($schema | Where-Object { $_.Name -ieq $Key })
+        $shown = ConvertTo-SPSLifecycleVisibleText -Text "$Key" -AsciiOnly
+        if ([System.Text.RegularExpressions.Regex]::IsMatch("$Key", 'pass|pwd|secret', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+            return "'$shown' looks like a password or a secret, and a password never goes in the settings file, where it is read, copied and committed. Put the password of the .pfx file in an environment variable and name it in CertificatePasswordVariable, or leave that out and the tool asks for it. The tool uses no client secret."
+        }
+
+        $elsewhere = @($schema | Where-Object { [System.String]::Equals($_.Name, "$Key", [System.StringComparison]::OrdinalIgnoreCase) })
         if ($elsewhere.Count -gt 0) {
             $row = $elsewhere[0]
             if ($row.Section -eq 'Shared') {
@@ -82,27 +103,29 @@
             return "'$($row.Name)' belongs in the $($row.Section) section: $($row.Section) = @{ $($row.Name) = ... }."
         }
 
-        $similar = Get-SPSLifecycleSimilarName -Name $Key -Candidate $allNames
+        $similar = Get-SPSLifecycleSimilarName -Name "$Key" -Candidate $allNames
         $hint = if ($similar) { " Did you mean '$similar'?" } else { '' }
-        "Unknown setting '$Key'.$hint"
+        "Unknown setting '$shown'.$hint"
     }
 
     $raw = @{ Shared = @{}; Scan = @{}; Act = @{} }
     foreach ($key in $data.Keys) {
-        if ($key -in $sharedNames) {
-            $raw.Shared[$key] = $data[$key]
+        $sharedName = & $findName $sharedNames $key
+        $canonical = & $findName $sections $key
+        if ($sharedName) {
+            $raw.Shared[$sharedName] = $data[$key]
         }
-        elseif ($key -in $sections) {
+        elseif ($canonical) {
             if ($data[$key] -isnot [System.Collections.IDictionary]) {
-                $problems.Add("$key must be a section: $key = @{ ... }.")
+                $problems.Add("$canonical must be a section: $canonical = @{ ... }.")
                 continue
             }
 
-            $canonical = $sections | Where-Object { $_ -ieq $key }
             $sectionNames = @($schema | Where-Object { $_.Section -eq $canonical } | ForEach-Object { $_.Name })
             foreach ($inner in $data[$key].Keys) {
-                if ($inner -in $sectionNames) {
-                    $raw[$canonical][$inner] = $data[$key][$inner]
+                $innerName = & $findName $sectionNames $inner
+                if ($innerName) {
+                    $raw[$canonical][$innerName] = $data[$key][$inner]
                 }
                 else {
                     $problems.Add("$canonical section: $(& $describeUnknown $inner $canonical)")
@@ -156,9 +179,9 @@
         $shared.TenantName = $shared.TenantName.ToLowerInvariant()
     }
 
-    $refused = @(@('microsoft', 'microsoftonline') + @($shared.RefusedTenants | ForEach-Object { "$_".ToLowerInvariant() }) | Select-Object -Unique)
+    $refused = @(Get-SPSLifecycleRefusedTenantList -RefusedTenant $shared.RefusedTenants)
     $shared.RefusedTenants = $refused
-    if ($shared.TenantName -and $refused -contains $shared.TenantName) {
+    if ($shared.TenantName -and (Test-SPSLifecycleRefusedTenant -TenantName $shared.TenantName -RefusedTenant $refused)) {
         $problems.Add("TenantName: the tenant '$($shared.TenantName)' is refused. The tool never runs on the Microsoft corporate tenants or on a tenant listed in RefusedTenants.")
     }
 
@@ -166,6 +189,27 @@
         $reports = @('Scan.SharePointUsageReport', 'Scan.TeamsActivityReport', 'Scan.GroupsActivityReport')
         if (@($reports | Where-Object { $provided[$_] }).Count -eq 0) {
             $problems.Add('Scan: give at least one activity report: SharePointUsageReport, TeamsActivityReport or GroupsActivityReport. Without one, the tool cannot tell which sites are inactive.')
+        }
+    }
+
+    if ($shared.Authentication -eq 'Certificate') {
+        if (-not $provided['TenantId']) {
+            $problems.Add('TenantId: required when Authentication is Certificate. It is the ID of your Microsoft Entra tenant (a GUID), asked for instead of built from TenantName, because the SharePoint name is not always the name of the tenant.')
+        }
+
+        if (($provided['CertificateThumbprint'] -eq $true) -eq ($provided['CertificatePath'] -eq $true)) {
+            $problems.Add('Authentication is Certificate, which needs exactly one of CertificateThumbprint (a certificate of the Windows store) and CertificatePath (a .pfx file).')
+        }
+
+        if ($provided['CertificateThumbprint'] -eq $true -and $provided['CertificatePasswordVariable'] -eq $true) {
+            $problems.Add('CertificatePasswordVariable: only for CertificatePath, since a certificate of the store has no password to give.')
+        }
+    }
+    else {
+        foreach ($name in 'TenantId', 'CertificateThumbprint', 'CertificatePath', 'CertificatePasswordVariable') {
+            if ($provided[$name] -eq $true) {
+                $problems.Add("${name}: only used when Authentication is Certificate. Set Authentication = 'Certificate', or remove it.")
+            }
         }
     }
 

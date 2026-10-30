@@ -33,8 +33,25 @@ The inactive site policy of Microsoft 365 can make inactive sites read-only, the
 
 - **PowerShell 7.4 or later** (PnP.PowerShell 3.x does not run on Windows PowerShell 5.1).
 - **PnP.PowerShell 3.x.**
-- **An Entra ID app registration** for the interactive sign-in, as PnP.PowerShell requires your own app: see [Register an Entra ID application to use with PnP PowerShell](https://pnp.github.io/powershell/articles/registerapplication.html).
+- **A Microsoft Entra app registration** for the sign-in, as PnP.PowerShell requires your own app. The script `src/Register-SPSSiteLifecycleApp.ps1` makes it in one guided run (see below and the [App registration](https://github.com/luigilink/SPSSiteLifecycle/wiki/App-Registration) page). A person signs in by default; a run that nobody watches signs in with a certificate (`Authentication = 'Certificate'` in the settings).
 - **SharePoint Administrator** on the tenant, plus **Groups Administrator** to delete Microsoft 365 groups. Archiving also needs Microsoft 365 Archive turned on (pay-as-you-go billing) and a site collection admin role on each archived site.
+
+## Usage
+
+```powershell
+# Once: register the app that the tool signs in with. It shows its plan first (-WhatIf stops there), asks for the name of the tenant, then registers it
+pwsh ./src/Register-SPSSiteLifecycleApp.ps1 -TenantName contoso
+
+# Phase 1: read the tenant and write the report (nothing is changed)
+pwsh ./src/SPSSiteLifecycle.ps1 -ConfigFile ./contoso.psd1 -Phase Scan
+
+# Between the phases, a person opens the CSV, filters it, writes Delete, Archive or Lock in the Decision column, and saves it as CSV
+
+# Phase 2: read each decided site again and say what would be done (report only), or do it (Execute = $true, after a typed confirmation)
+pwsh ./src/SPSSiteLifecycle.ps1 -ConfigFile ./contoso.psd1 -Phase Act
+```
+
+The script has two parameters. Everything else is a setting in the `.psd1` file (see `src/config/SPSSiteLifecycle.example.psd1`). Its exit code is `0` when the phase ended as planned, `1` on an error, and, for the Act, `2` when the run ended with rows that failed or stopped after 3 errors in a row. See [Getting Started](https://github.com/luigilink/SPSSiteLifecycle/wiki/Getting-Started).
 
 ## Quick links
 
