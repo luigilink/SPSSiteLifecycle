@@ -74,7 +74,7 @@
     }
 
     $pages = @($Manifest.Pages)
-    $entryNames = @('Number', 'File', 'Token', 'Read', 'Sites', 'Sha256', 'Seconds')
+    $entryNames = @('Number', 'File', 'Token', 'NextToken', 'Read', 'Sites', 'Sha256', 'Seconds')
     for ($index = 0; $index -lt $pages.Count; $index++) {
         $page = $pages[$index]
         $label = "page $($index + 1)"
@@ -113,6 +113,19 @@
             return "the token of $label is not a text."
         }
 
+        if ($page.NextToken -isnot [System.String]) {
+            return "the next token of $label is not a text."
+        }
+
+        if ($index -eq 0) {
+            if ($page.Token -cne '') {
+                return "the first page was not asked with the first token (an empty one), but with '$(ConvertTo-SPSLifecycleVisibleText -Text $page.Token)'."
+            }
+        }
+        elseif ($page.Token -cne $pages[$index - 1].NextToken) {
+            return "the token of $label is not the one that page $index gave."
+        }
+
         if ($page.Sites -gt $page.Read) {
             return "$label kept more sites than it read."
         }
@@ -140,6 +153,10 @@
 
     if ($Manifest.State -ceq 'Completed' -and -not $Manifest.ListingComplete) {
         return 'the listing is marked finished and is not complete.'
+    }
+
+    if ($pages.Count -gt 0 -and $pages[$pages.Count - 1].NextToken -cne $Manifest.NextToken) {
+        return 'the token to go on with is not the one that the last page gave.'
     }
 
     ''

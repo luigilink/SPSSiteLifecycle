@@ -119,9 +119,14 @@
     }
 
     $started = ConvertFrom-SPSLifecycleCheckpointDate -Text $json.StartedOn
+    $updated = ConvertFrom-SPSLifecycleCheckpointDate -Text $json.UpdatedOn
     $age = $Now.ToUniversalTime() - $started
-    if ($age.TotalMinutes -lt -5) {
+    if ($age.TotalMinutes -lt -5 -or ($updated - $Now.ToUniversalTime()).TotalMinutes -gt 5) {
         return & $result $true $false 'The checkpoint is dated in the future (was the clock of this machine set back?), so it is not trusted.' $null
+    }
+
+    if ($updated -lt $started) {
+        return & $result $true $false 'The dates of the checkpoint are not in order (the last update is before the start: was the clock of this machine set back while the listing ran?), so it is not trusted.' $null
     }
 
     if ($age.TotalHours -gt $MaxAgeHours) {
@@ -157,6 +162,7 @@
                 Number  = [System.Int32]$page.Number
                 File    = $page.File
                 Token   = $page.Token
+                NextToken = $page.NextToken
                 Read    = [System.Int32]$page.Read
                 Sites   = [System.Int32]$page.Sites
                 Sha256  = $page.Sha256

@@ -28,7 +28,7 @@
     }
 
     foreach ($file in @(Get-ChildItem -LiteralPath $fullFolder -File)) {
-        if ($file.Name -ceq 'manifest.json' -or $file.Name -cmatch '\Apage-[0-9]{6}\.csv\z' -or $file.Name -cmatch '\.partial\z') {
+        if ($file.Name -cmatch '\A(manifest\.json|page-[0-9]{6}\.csv)(\.[0-9a-f]{8}\.partial)?\z') {
             Remove-Item -LiteralPath $file.FullName -Force
         }
     }

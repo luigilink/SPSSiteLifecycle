@@ -130,6 +130,7 @@
         Number  = $number
         File    = $file
         Token   = $Token
+        NextToken = $NextToken
         Read    = $Read
         Sites   = $Record.Count
         Sha256  = $hash

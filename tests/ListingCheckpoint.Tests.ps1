@@ -237,6 +237,13 @@ Describe 'Get-SPSLifecycleListingManifestProblem' {
         @{ Name = 'a hash that is a number'; Edit = { param($m) $m.Pages[0].Sha256 = 5 }; Reason = 'the hash of page 1 is not a SHA-256 in lowercase hexadecimal.' }
         @{ Name = 'a time below zero'; Edit = { param($m) $m.Pages[0].Seconds = -1 }; Reason = 'the time of page 1 is not a number of seconds.' }
         @{ Name = 'a time that is a text'; Edit = { param($m) $m.Pages[0].Seconds = 'fast' }; Reason = 'the time of page 1 is not a number of seconds.' }
+        @{ Name = 'a page that lacks the token that it gave'; Edit = { param($m) $m.Pages[0].PSObject.Properties.Remove('NextToken') }; Reason = "the entry of page 1 lacks 'NextToken'." }
+        @{ Name = 'a token given that is a number'; Edit = { param($m) $m.Pages[0].NextToken = 5 }; Reason = 'the next token of page 1 is not a text.' }
+        @{ Name = 'a first page that was not asked with the first token'; Edit = { param($m) $m.Pages[0].Token = 'x' }; Reason = 'the first page was not asked with the first token (an empty one), but with ''x''.' }
+        @{ Name = 'a page that was not asked with the token that the page before gave'; Edit = { param($m) $m.Pages[1].Token = 'other' }; Reason = "the token of page 2 is not the one that page 1 gave." }
+        @{ Name = 'a last page that gave another token than the one to go on with'; Edit = { param($m) $m.Pages[1].NextToken = 'other' }; Reason = 'the token to go on with is not the one that the last page gave.' }
+        @{ Name = 'a manifest from which the last page was removed'; Edit = { param($m) $m.Pages = @($m.Pages[0]) }; Reason = 'the token to go on with is not the one that the last page gave.' }
+        @{ Name = 'a manifest from which the first page was removed'; Edit = { param($m) $m.Pages = @($m.Pages[1]); $m.Pages[0].Number = 1; $m.Pages[0].File = 'page-000001.csv' }; Reason = 'the first page was not asked with the first token (an empty one), but with ''next-1''.' }
         @{ Name = 'a listing that is complete and has a token'; Edit = { param($m) $m.ListingComplete = $true }; Reason = 'the listing is complete and still has a token to go on with.' }
         @{ Name = 'a listing that has pages, is not complete and has no token'; Edit = { param($m) $m.NextToken = '' }; Reason = 'the listing is not complete and has no token to go on with.' }
         @{ Name = 'a listing that is marked finished and is not complete'; Edit = { param($m) $m.State = 'Completed' }; Reason = 'the listing is marked finished and is not complete.' }
@@ -711,6 +718,26 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
             $null -eq $state.Manifest | Should -BeTrue
         }
 
+        It 'is not trusted when the dates are not in order, as the clock of the machine was set back while the listing ran: <Name>' -ForEach @(
+            @{ Name = 'an update a second before the start'; UpdatedOn = '20261030T085959.0000000Z'; Usable = $false }
+            @{ Name = 'an update an hour before the start'; UpdatedOn = '20261030T080000.0000000Z'; Usable = $false }
+            @{ Name = 'an update at the very moment of the start'; UpdatedOn = '20261030T090000.0000000Z'; Usable = $true }
+            @{ Name = 'an update after the start'; UpdatedOn = '20261030T090100.0000000Z'; Usable = $true }
+        ) {
+            $folder = New-TestFolder
+            $manifest = New-TestManifest
+            $null = Save-TestPage -Folder $folder -Manifest $manifest
+            $manifest.UpdatedOn = $UpdatedOn
+            & $script:Module { param($f, $m) Write-SPSLifecycleListingManifest -Folder $f -Manifest $m } $folder $manifest
+
+            $state = Read-TestCheckpoint -Folder $folder -Now $script:Now.AddMinutes(10)
+
+            $state.Usable | Should -Be $Usable
+            if (-not $Usable) {
+                $state.Reason | Should -BeLike '*not in order*clock*'
+            }
+        }
+
         It 'says what the filter was and what it is, with none written as (none): <Name>' -ForEach @(
             @{ Name = 'changed'; Filter = "LockState -eq 'Unlock'"; Expected = "The filter changed (it was LockState -eq 'ReadOnly', it is LockState -eq 'Unlock')." }
             @{ Name = 'removed'; Filter = ''; Expected = "The filter changed (it was LockState -eq 'ReadOnly', it is (none))." }
@@ -728,6 +755,26 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
             $null = Save-TestPage -Folder $folder -Manifest $manifest
 
             (Read-TestCheckpoint -Folder $folder -Filter "LockState -eq 'ReadOnly'").Reason | Should -BeExactly "The filter changed (it was (none), it is LockState -eq 'ReadOnly')."
+        }
+
+        It 'is not trusted when the last update is dated in the future, as the clock of the machine may have been set back: <Name>' -ForEach @(
+            @{ Name = 'two hours ahead'; UpdatedOn = '20261030T110000.0000000Z'; Usable = $false }
+            @{ Name = 'a second more than the five minutes of tolerance'; UpdatedOn = '20261030T090501.0000000Z'; Usable = $false }
+            @{ Name = 'exactly the five minutes of tolerance'; UpdatedOn = '20261030T090500.0000000Z'; Usable = $true }
+            @{ Name = 'now'; UpdatedOn = '20261030T090000.0000000Z'; Usable = $true }
+        ) {
+            $folder = New-TestFolder
+            $manifest = New-TestManifest
+            $null = Save-TestPage -Folder $folder -Manifest $manifest
+            $manifest.UpdatedOn = $UpdatedOn
+            & $script:Module { param($f, $m) Write-SPSLifecycleListingManifest -Folder $f -Manifest $m } $folder $manifest
+
+            $state = Read-TestCheckpoint -Folder $folder
+
+            $state.Usable | Should -Be $Usable
+            if (-not $Usable) {
+                $state.Reason | Should -BeLike '*future*'
+            }
         }
 
         It 'is refused when the filter differs only by the case: the server reads it as written' {
@@ -975,6 +1022,7 @@ Describe 'Complete-SPSLifecycleListingCheckpoint and Clear-SPSLifecycleListingCh
         $manifest = New-TestManifest
         $null = Save-TestPage -Folder $folder -Manifest $manifest -From 1 -NextToken 'next-1'
         Set-Content -LiteralPath (Join-Path $folder 'page-000002.csv.1a2b3c4d.partial') -Value 'half' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $folder 'manifest.json.5e6f7a8b.partial') -Value '{ half' -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $folder 'listing.lock') -Value '' -Encoding utf8NoBOM
         Set-Content -LiteralPath (Join-Path $folder 'notes.txt') -Value 'mine' -Encoding utf8NoBOM
 
@@ -1001,6 +1049,13 @@ Describe 'Complete-SPSLifecycleListingCheckpoint and Clear-SPSLifecycleListingCh
         @{ Name = 'a page with a prefix'; Leave = 'old-page-000001.csv' }
         @{ Name = 'a partial file in capitals'; Leave = 'page-000003.csv.1a2b3c4d.PARTIAL' }
         @{ Name = 'a file that only mentions partial'; Leave = 'partial.txt' }
+        @{ Name = 'a file of the user that ends with .partial'; Leave = 'customer-notes.partial' }
+        @{ Name = 'a partial file of another name'; Leave = 'notes.csv.1a2b3c4d.partial' }
+        @{ Name = 'a partial file with no suffix'; Leave = 'page-000003.csv.partial' }
+        @{ Name = 'a partial file whose suffix is too short'; Leave = 'page-000003.csv.1a2b3c.partial' }
+        @{ Name = 'a partial file whose suffix is too long'; Leave = 'manifest.json.1a2b3c4d5.partial' }
+        @{ Name = 'a partial file whose suffix is not hexadecimal'; Leave = 'manifest.json.1a2b3c4z.partial' }
+        @{ Name = 'a partial file whose suffix is in capitals'; Leave = 'manifest.json.1A2B3C4D.partial' }
     ) {
         # No real manifest or page of the same number is written here: on a file system that ignores the case (Windows, macOS), a
         # file that only differs by the case from the one of the tool would be that very file.
