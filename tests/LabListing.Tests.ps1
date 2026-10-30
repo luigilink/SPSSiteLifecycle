@@ -187,6 +187,8 @@ if ($script:StubData.Noise) {
     $DebugPreference = 'Continue'
     Write-Debug 'Debug text of SyntheticPrivateBoard'
     Write-Error 'Error text of SyntheticPrivateBoard' -ErrorAction Continue
+    Write-Verbose 'Verbose text of SyntheticPrivateBoard' -Verbose
+    Write-Progress -Activity 'Progress text of SyntheticPrivateBoard' -Status 'Status text of SyntheticPrivateBoard'
 }
 if ($script:StubData.Warn) {
     Write-Warning 'Warning text of SyntheticPrivateBoard'
@@ -730,7 +732,7 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             ($run.Text -join "`n") | Should -BeLike '*Listing the sites a second time with Get-PnPTenantSite (the sign-in is asked again).*'
             @($run.Text | Where-Object { $_ -like '  page 1:*' }) | Should -HaveCount 1
             $run.Report.Summary.WarningCount | Should -Be 3
-            $run.Report.Summary.OutputCount | Should -Be 12
+            $run.Report.Summary.OutputCount | Should -Be 15
             $run.Report.Compare.PagedSites | Should -Be 5
             $run.Report.Compare.CmdletSites | Should -Be 5
         }
@@ -752,8 +754,8 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
 
         It 'tells the warnings and the other lines of output apart in what it says: <Name>' -ForEach @(
             @{ Name = 'a warning only'; Noise = $false; Warn = $true; Line = '  Warnings of the listing: 2; other lines of output: 0 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 2 warning(s), not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
-            @{ Name = 'other lines only'; Noise = $true; Warn = $false; Line = '  Warnings of the listing: 0; other lines of output: 8 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 8 other line(s) of output, not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
-            @{ Name = 'both'; Noise = $true; Warn = $true; Line = '  Warnings of the listing: 2; other lines of output: 8 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 2 warning(s) and 8 other line(s) of output, not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
+            @{ Name = 'other lines only'; Noise = $true; Warn = $false; Line = '  Warnings of the listing: 0; other lines of output: 10 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 10 other line(s) of output, not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
+            @{ Name = 'both'; Noise = $true; Warn = $true; Line = '  Warnings of the listing: 2; other lines of output: 10 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 2 warning(s) and 10 other line(s) of output, not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
         ) {
             $null = Set-LabPages
             & $script:Module { param($n, $w) $script:StubData.Noise = $n; $script:StubData.Warn = $w } $Noise $Warn
@@ -1122,12 +1124,31 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             ($run.Text -join "`n") | Should -BeLike '*page 1: 3 sites so far*'
             ($run.Text -join "`n") | Should -BeLike '*page 2: 5 sites so far*'
             $run.Report.Summary.WarningCount | Should -Be 2
-            $run.Report.Summary.OutputCount | Should -Be 8
-            (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Detail | Should -BeLike '*2 warning(s) and 8 other line(s) of output, not shown*'
+            $run.Report.Summary.OutputCount | Should -Be 10
+            (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Detail | Should -BeLike '*2 warning(s) and 10 other line(s) of output, not shown*'
             (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Status | Should -BeExactly 'INFO'
             $run.Warnings | Should -HaveCount 0
+            $run.Verbose | Should -HaveCount 0
             $run.Debug | Should -HaveCount 0
             $run.Errors | Should -HaveCount 0
+        }
+
+        It 'does not let the progress that a library writes reach the screen, and writes none itself' {
+            Set-ModuleStub -Stub @{
+                'Write-Progress' = @'
+param([string]$Activity, [string]$Status, [switch]$Completed, [int]$Id, [int]$PercentComplete)
+if ($null -eq $script:StubData.Progress) { $script:StubData.Progress = [System.Collections.Generic.List[string]]::new() }
+$script:StubData.Progress.Add("$ProgressPreference")
+'@
+            } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; PageException = $null; Noise = $true; Warn = $false }
+            $null = Set-LabPages
+
+            $run = Invoke-Lab
+
+            $seen = @(& $script:Module { $script:StubData.Progress })
+            $seen.Count | Should -BeGreaterOrEqual 2
+            @($seen | Where-Object { $_ -ne 'SilentlyContinue' }) | Should -HaveCount 0
+            $run.Report.Completed | Should -BeTrue
         }
 
         It 'counts no line of output when the listing writes none' {

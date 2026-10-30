@@ -28,8 +28,9 @@
     know. What is shown comes from lists that are written in the script: the reason why a checkpoint was not taken up is told
     in one of a few fixed sentences (its code is StartCode in the report); the reason why the paged call cannot be used is shown
     when it is one of the sentences that the tool writes, and as a reason that the script does not know otherwise; the warnings
-    of the listing are counted and not shown, and so is anything else that the listing and the libraries write (information,
-    host, debug and error lines), which is counted too. The versions are shown by their numbers, and the system by its name.
+    of the listing are counted and not shown, and so is anything else that the listing and the libraries write through the
+    streams of PowerShell (information, host, debug, verbose and error lines), which is counted too, and no progress is
+    written. The versions are shown by their numbers, and the system by its name.
     The values of a site are shown only when they are words of a list: the words that SharePoint writes for a lock state and an
     archive status, the web templates that it has (in its spelling, with the number), an ID only when it is one. The text of an
     error is never shown: the lab says the sentence of this repository that the error is, if it is one of a few, the type of
@@ -42,7 +43,8 @@
     What you type is checked by the script, and when a value is not right the lab says which parameter and what it takes, without
     the value. PowerShell does not do that when it refuses a name of parameter that does not exist, a value that goes with no
     parameter, or the value of a common parameter (-ErrorAction and the like): it gives back what was typed, so do not paste
-    that line.
+    that line. A library that writes straight to the console, outside the streams of PowerShell, is not held back either: if a
+    line shows that the lab did not write, do not paste it.
 
     .PARAMETER TenantName
     The name of the tenant, in lowercase, as in <name>.onmicrosoft.com. The Microsoft corporate tenants are refused.
@@ -819,13 +821,16 @@ function Invoke-LabListing {
     $completed = $false
     try {
         # What the listing and the libraries write, other than the sites, can name the tenant, a filter or a site: the warnings, and the
-        # information, host, debug and error lines, are counted and not shown, and the verbose lines are not written.
+        # information, host, debug, verbose and error lines, are counted and not shown (a library can force the verbose lines with
+        # -Verbose, whatever the preference), and no progress is written: the text of a progress bar goes straight to the screen, and
+        # the lab prints its own progress lines.
         & $Module {
             param($p)
             $WarningPreference = 'Continue'
             $VerbosePreference = 'SilentlyContinue'
+            $ProgressPreference = 'SilentlyContinue'
             Get-SPSLifecycleTenantSite @p
-        } $parameters 2>&1 3>&1 5>&1 6>&1 | ForEach-Object {
+        } $parameters 2>&1 3>&1 4>&1 5>&1 6>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.WarningRecord]) {
                 $state.Warnings++
             }
