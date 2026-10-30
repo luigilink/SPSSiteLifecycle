@@ -17,19 +17,23 @@
     [OutputType([System.Management.Automation.PSObject[]])]
     param ()
 
-    @(
-        [PSCustomObject]@{ Template = 'STS#0'; Name = 'Team site (classic experience)' }
-        [PSCustomObject]@{ Template = 'STS#1'; Name = 'Blank site' }
-        [PSCustomObject]@{ Template = 'STS#2'; Name = 'Document workspace' }
-        [PSCustomObject]@{ Template = 'STS#3'; Name = 'Team site' }
-        [PSCustomObject]@{ Template = 'SITEPAGEPUBLISHING#0'; Name = 'Communication site' }
-        [PSCustomObject]@{ Template = 'GROUP#0'; Name = 'Microsoft 365 group-connected team site' }
-        [PSCustomObject]@{ Template = 'SPSNEWS#0'; Name = 'News site' }
-        [PSCustomObject]@{ Template = 'SPSNHOME#0'; Name = 'News site' }
-        [PSCustomObject]@{ Template = 'WIKI#0'; Name = 'Wiki site' }
-        [PSCustomObject]@{ Template = 'ENTERWIKI#0'; Name = 'Enterprise wiki' }
-        [PSCustomObject]@{ Template = 'BDR#0'; Name = 'Document center' }
-        [PSCustomObject]@{ Template = 'OFFILE#0'; Name = 'Records center' }
-        [PSCustomObject]@{ Template = 'OFFILE#1'; Name = 'Records center' }
-    )
+    if ($null -eq $script:ArchivableTemplateTable) {
+        $script:ArchivableTemplateTable = @(
+            [PSCustomObject]@{ Template = 'STS#0'; Name = 'Team site (classic experience)' }
+            [PSCustomObject]@{ Template = 'STS#1'; Name = 'Blank site' }
+            [PSCustomObject]@{ Template = 'STS#2'; Name = 'Document workspace' }
+            [PSCustomObject]@{ Template = 'STS#3'; Name = 'Team site' }
+            [PSCustomObject]@{ Template = 'SITEPAGEPUBLISHING#0'; Name = 'Communication site' }
+            [PSCustomObject]@{ Template = 'GROUP#0'; Name = 'Microsoft 365 group-connected team site' }
+            [PSCustomObject]@{ Template = 'SPSNEWS#0'; Name = 'News site' }
+            [PSCustomObject]@{ Template = 'SPSNHOME#0'; Name = 'News site' }
+            [PSCustomObject]@{ Template = 'WIKI#0'; Name = 'Wiki site' }
+            [PSCustomObject]@{ Template = 'ENTERWIKI#0'; Name = 'Enterprise wiki' }
+            [PSCustomObject]@{ Template = 'BDR#0'; Name = 'Document center' }
+            [PSCustomObject]@{ Template = 'OFFILE#0'; Name = 'Records center' }
+            [PSCustomObject]@{ Template = 'OFFILE#1'; Name = 'Records center' }
+        )
+    }
+
+    $script:ArchivableTemplateTable
 }

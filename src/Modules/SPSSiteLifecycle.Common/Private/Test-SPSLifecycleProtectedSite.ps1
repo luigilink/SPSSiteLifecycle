@@ -61,9 +61,17 @@
         }
     }
 
-    $template = "$($Site.Template)"
-    foreach ($protected in @(Get-SPSLifecycleProtectedTemplate)) {
-        if ($template -like $protected.Pattern) {
+    # The -like operator reads the case with the culture of the machine, and Turkish does not match FUNSITE to FunSite:
+    # the patterns are compiled once, without regard to the case and not to the culture.
+    if ($null -eq $script:ProtectedTemplateMatcher) {
+        $script:ProtectedTemplateMatcher = @(foreach ($row in Get-SPSLifecycleProtectedTemplate) {
+                [System.Management.Automation.WildcardPattern]::new($row.Pattern, [System.Management.Automation.WildcardOptions]::IgnoreCase -bor [System.Management.Automation.WildcardOptions]::CultureInvariant)
+            })
+    }
+
+    $template = "$($Site.Template)".Trim()
+    foreach ($matcher in $script:ProtectedTemplateMatcher) {
+        if ($matcher.IsMatch($template)) {
             return $true
         }
     }

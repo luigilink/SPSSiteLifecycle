@@ -105,17 +105,16 @@
         $HomeSiteUrl = ''
     )
 
-    $template = "$($Site.Template)"
+    $template = "$($Site.Template)".Trim()
     $lockState = "$($Site.LockState)"
     $groupId = ConvertTo-SPSLifecycleId -Value $Site.GroupId
-    $urlKey = ConvertTo-SPSLifecycleUrlKey -Url $Site.Url
     $accepted = @($Setting.AcceptedLockStates)
 
-    if ($template -like 'SPSPERS#*' -or $urlKey.StartsWith("https://$($Setting.TenantName)-my.sharepoint.com")) {
+    if (Test-SPSLifecycleOneDrive -Site $Site -TenantName $Setting.TenantName) {
         return 'SKIP-ONEDRIVE'
     }
 
-    if ($template -like 'TEAMCHANNEL#*' -or $Site.IsTeamsChannelConnected -eq $true) {
+    if ($template.StartsWith('TEAMCHANNEL#', [System.StringComparison]::OrdinalIgnoreCase) -or $Site.IsTeamsChannelConnected -eq $true) {
         return 'SKIP-CHANNEL-SITE'
     }
 
@@ -204,7 +203,6 @@
 
     $tooLarge = $sizeKnown -and (($sizeMB / 1024) -gt $Setting.DeleteMaxSizeGB)
     $deleteVerdict = if ($groupId) { 'DELETE-VIA-GROUP' } else { 'DELETE-SITE' }
-    $archivable = Test-SPSLifecycleArchivableTemplate -Template $template
 
     switch ($Action) {
         'Lock' {
@@ -212,7 +210,7 @@
         }
 
         'Archive' {
-            if (-not $archivable) {
+            if (-not (Test-SPSLifecycleArchivableTemplate -Template $template)) {
                 return 'SKIP-NOT-ARCHIVABLE'
             }
 
@@ -236,7 +234,7 @@
                 return $deleteVerdict
             }
 
-            if (-not $archivable) {
+            if (-not (Test-SPSLifecycleArchivableTemplate -Template $template)) {
                 return 'SKIP-NOT-ARCHIVABLE'
             }
 

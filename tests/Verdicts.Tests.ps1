@@ -222,6 +222,18 @@ Describe 'Get-SPSLifecycleVerdict' {
             @{ Name = 'a OneDrive template'; Expected = 'SKIP-ONEDRIVE'; Action = 'Archive'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'SPSPERS#10' }
             @{ Name = 'a OneDrive template'; Expected = 'SKIP-ONEDRIVE'; Action = 'Lock'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'SPSPERS#10' }
             @{ Name = 'a OneDrive URL on a team template'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'STS#3' }
+            @{ Name = 'a OneDrive host with the dot of the DNS root'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso-my.sharepoint.com./personal/a_contoso_com'; Template = 'STS#3' }
+            @{ Name = 'a OneDrive host with a port'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso-my.sharepoint.com:8443/personal/a_contoso_com'; Template = 'STS#3' }
+            @{ Name = 'a OneDrive host with a soft hyphen in it'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = "https://contoso-my.share$([char]0xAD)point.com/personal/a_contoso_com"; Template = 'STS#3' }
+            @{ Name = 'a OneDrive host with user information and a bidirectional isolate in it'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = "https://someone@contoso-my.share$([char]0x2066)point.com/personal/a_contoso_com"; Template = 'STS#3' }
+            @{ Name = 'a OneDrive host with user information and a bidirectional isolate in it'; Expected = 'SKIP-ONEDRIVE'; Action = 'Archive'; Url = "https://someone@contoso-my.share$([char]0x2066)point.com/personal/a_contoso_com"; Template = 'STS#3' }
+            @{ Name = 'a OneDrive host with user information and a bidirectional isolate in it'; Expected = 'SKIP-ONEDRIVE'; Action = 'Lock'; Url = "https://someone@contoso-my.share$([char]0x2066)point.com/personal/a_contoso_com"; Template = 'STS#3' }
+            @{ Name = 'an address that cannot be read'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://someone@contoso-my.sharepoint.com../personal/a_contoso_com'; Template = 'STS#3' }
+            @{ Name = 'the root site with the dot of the DNS root'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com./'; Template = 'SITEPAGEPUBLISHING#0' }
+            @{ Name = 'the root site in http'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'http://contoso.sharepoint.com/'; Template = 'SITEPAGEPUBLISHING#0' }
+            @{ Name = 'the root site with a port that is not the default one'; Expected = 'SKIP-ONEDRIVE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com:8443/'; Template = 'SITEPAGEPUBLISHING#0' }
+            @{ Name = 'a system site whose template has spaces around it'; Expected = 'SKIP-PROTECTED'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/appcatalog2'; Template = ' APPCATALOG#0 ' }
+            @{ Name = 'a channel site whose template has spaces around it'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/a-channel2'; Template = '  TEAMCHANNEL#1 ' }
             @{ Name = 'a channel site'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/sites/a-channel'; Template = 'TEAMCHANNEL#1' }
             @{ Name = 'a channel site'; Expected = 'SKIP-CHANNEL-SITE'; Action = 'Archive'; Url = 'https://contoso.sharepoint.com/sites/a-channel'; Template = 'TEAMCHANNEL#0' }
             @{ Name = 'the root site'; Expected = 'SKIP-PROTECTED'; Action = 'Delete'; Url = 'https://contoso.sharepoint.com/'; Template = 'SITEPAGEPUBLISHING#0' }
@@ -397,5 +409,155 @@ Describe 'Test-SPSLifecycleArchivableTemplate' {
         $result = & $script:Module { param($t) Test-SPSLifecycleArchivableTemplate -Template $t } $Template
 
         $result | Should -Be $Expected
+    }
+}
+
+Describe 'Test-SPSLifecycleOneDrive' {
+    BeforeAll {
+        function script:Test-TestOneDrive {
+            param([string]$Url, [string]$Template, [string]$Tenant = 'contoso')
+            $site = [PSCustomObject]@{ Url = $Url; Template = $Template }
+            & $script:Module { param($s, $t) Test-SPSLifecycleOneDrive -Site $s -TenantName $t } $site $Tenant
+        }
+    }
+
+    It 'answers <Expected> for <Name>' -ForEach @(
+        @{ Name = 'the OneDrive template'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'SPSPERS#10'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'another personal template'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'SPSPERS#2'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a template in lowercase'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'spspers#10'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a template with spaces around it'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = '  SPSPERS#10 '; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a OneDrive address on a team template'; Url = 'https://contoso-my.sharepoint.com/personal/a_contoso_com'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a OneDrive address in capitals, for a tenant written in capitals'; Url = 'HTTPS://CONTOSO-MY.sharepoint.com/Personal/A'; Template = 'STS#3'; Tenant = 'Contoso'; Expected = $true }
+        @{ Name = 'the root of the OneDrive host'; Url = 'https://contoso-my.sharepoint.com'; Template = ''; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a host with the dot of the DNS root'; Url = 'https://contoso-my.sharepoint.com./personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a host with the dot of the DNS root and a port'; Url = 'https://contoso-my.sharepoint.com.:8443/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a port that is not the default one'; Url = 'https://contoso-my.sharepoint.com:8443/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'the default port written out'; Url = 'https://contoso-my.sharepoint.com:443/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'the http scheme'; Url = 'http://contoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information before the host'; Url = 'https://someone@contoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'spaces around the address'; Url = '  https://contoso-my.sharepoint.com/personal/a  '; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and the dot of the DNS root'; Url = 'https://someone@contoso-my.sharepoint.com./personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information, capitals, and a tenant written in capitals'; Url = 'https://someone@CONTOSO-MY.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'Contoso'; Expected = $true }
+        @{ Name = 'a soft hyphen inside the host, which DNS ignores'; Url = "https://contoso-my.share$([char]0xAD)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a zero-width space inside the host'; Url = "https://contoso-my.share$([char]0x200B)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a byte order mark inside the host'; Url = "https://contoso-my.share$([char]0xFEFF)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a combining grapheme joiner inside the host'; Url = "https://contoso-my.share$([char]0x34F)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host, which DNS refuses and a culture ignores: <U+2066>'; Url = "https://contoso-my.share$([char]0x2066)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host: <U+2067>'; Url = "https://contoso-my.share$([char]0x2067)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host: <U+2068>'; Url = "https://contoso-my.share$([char]0x2068)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a bidirectional isolate inside the host: <U+2069>'; Url = "https://contoso-my.share$([char]0x2069)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and a bidirectional isolate inside the host: <U+2066>'; Url = "https://someone@contoso-my.share$([char]0x2066)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and a bidirectional isolate inside the host: <U+2067>'; Url = "https://someone@contoso-my.share$([char]0x2067)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and a bidirectional isolate inside the host: <U+2068>'; Url = "https://someone@contoso-my.share$([char]0x2068)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and a bidirectional isolate inside the host: <U+2069>'; Url = "https://someone@contoso-my.share$([char]0x2069)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information, a soft hyphen and a bidirectional isolate'; Url = "https://someone@contoso-my.share$([char]0xAD)$([char]0x2066)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information, a full-width letter and a bidirectional isolate'; Url = "https://someone@$([char]0xFF43)ontoso-my.share$([char]0x2066)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a port, the dot of the DNS root and a bidirectional isolate'; Url = "https://contoso-my.share$([char]0x2066)point.com.:8443/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a zero-width joiner inside the host, which DNS refuses'; Url = "https://contoso-my.share$([char]0x200D)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and a zero-width joiner inside the host'; Url = "https://someone@contoso-my.share$([char]0x200D)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and a zero-width non-joiner inside the host'; Url = "https://someone@contoso-my.share$([char]0x200C)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and a soft hyphen inside the host'; Url = "https://someone@contoso-my.share$([char]0xAD)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and full-width letters inside the host'; Url = "https://someone@$([char]0xFF43)$([char]0xFF4F)ntoso-my.sharepoint.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and an ideographic full stop in the host'; Url = "https://someone@contoso-my.sharepoint$([char]0x3002)com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a host that DNS refuses, of another tenant: nothing can say what it is, so it is left out'; Url = "https://fabrikam-my.share$([char]0x2066)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a host that has a letter outside ASCII: nothing can say what it is, so it is left out'; Url = "https://b$([char]0xFC)cher.example/sites/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'user information and an address that does not parse'; Url = 'https://someone@contoso-my.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'an address that does not parse and has no OneDrive host in it'; Url = 'https://contoso.sharepoint.com../sites/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a path, which is not an address'; Url = 'sites/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a text that is not an address'; Url = 'not an address'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'another scheme'; Url = 'ftp://contoso.sharepoint.com/sites/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a team site with the dot of the DNS root: a spelling that SharePoint does not give'; Url = 'https://contoso.sharepoint.com./sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a team site with a port that is not the default one'; Url = 'https://contoso.sharepoint.com:8443/sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a team site in http'; Url = 'http://contoso.sharepoint.com/sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'the root site with the dot of the DNS root'; Url = 'https://contoso.sharepoint.com./'; Template = 'SITEPAGEPUBLISHING#0'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a plain address of a team site with user information and the default port written out'; Url = 'https://someone@contoso.sharepoint.com:443/sites/a'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'a plain address of a team site in capitals, with a path that is not ASCII'; Url = "HTTPS://CONTOSO.sharepoint.com/Sites/$([char]0xC9)quipe"; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'an address of spaces'; Url = '   '; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'full-width letters in the host'; Url = "https://$([char]0xFF43)$([char]0xFF4F)$([char]0xFF4E)tos$([char]0xFF4F)-my.sharepoint.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a soft hyphen in an address that does not parse'; Url = "https://contoso-my.share$([char]0xAD)point.com../personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a soft hyphen in an address that does not parse, in http'; Url = "http://contoso-my.share$([char]0xAD)point.com../personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a soft hyphen in the host of another tenant: nothing can say what it is, so it is left out'; Url = "https://fabrikam-my.share$([char]0xAD)point.com/personal/a"; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a host that ends like the OneDrive host'; Url = 'https://notcontoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'a subdomain of the OneDrive host'; Url = 'https://eu.contoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'an address that does not parse, in capitals'; Url = 'HTTPS://CONTOSO-MY.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'an address that does not parse, between spaces'; Url = '   https://contoso-my.sharepoint.com../personal/a  '; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'an address that does not parse and starts with the OneDrive host'; Url = 'https://contoso-my.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'an address that does not parse, in http'; Url = 'http://contoso-my.sharepoint.com../personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $true }
+        @{ Name = 'a team site'; Url = 'https://contoso.sharepoint.com/sites/x'; Template = 'GROUP#0'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'the OneDrive host of another tenant'; Url = 'https://fabrikam-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'the OneDrive host of the tenant that is asked for, whatever the tenant'; Url = 'https://fabrikam-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'fabrikam'; Expected = $true }
+        @{ Name = 'the OneDrive host of a tenant that is not the one that is asked for'; Url = 'https://contoso-my.sharepoint.com/personal/a'; Template = 'STS#3'; Tenant = 'fabrikam'; Expected = $false }
+        @{ Name = 'a host that only starts like the OneDrive host is another host'; Url = 'https://contoso-my.sharepoint.com.example.org/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'user information that only looks like the OneDrive host'; Url = 'https://contoso-my.sharepoint.com@example.org/personal/a'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'a site whose path looks like OneDrive'; Url = 'https://contoso.sharepoint.com/sites/contoso-my.sharepoint.com'; Template = 'STS#3'; Tenant = 'contoso'; Expected = $false }
+        @{ Name = 'no template and no address'; Url = ''; Template = $null; Tenant = 'contoso'; Expected = $false }
+    ) {
+        (Test-TestOneDrive -Url $Url -Template $Template -Tenant $Tenant) | Should -Be $Expected
+    }
+}
+
+Describe 'The template safeguards do not depend on the culture' {
+    BeforeAll {
+        function script:Use-TestCulture {
+            param([string]$Culture, [scriptblock]$Script)
+            $previous = [System.Globalization.CultureInfo]::CurrentCulture
+            try {
+                [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+                & $Script
+            }
+            finally {
+                [System.Globalization.CultureInfo]::CurrentCulture = $previous
+            }
+        }
+    }
+
+    It 'protects every system template, as written, in capitals and in lowercase, under <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }
+        @{ Culture = 'fr-FR' }
+        @{ Culture = 'de-DE' }
+        @{ Culture = 'tr-TR' }
+    ) {
+        $unprotected = Use-TestCulture -Culture $Culture -Script {
+            & $script:Module {
+                $unprotected = [System.Collections.Generic.List[System.String]]::new()
+                foreach ($row in Get-SPSLifecycleProtectedTemplate) {
+                    $template = $row.Pattern.Replace('*', '0')
+                    foreach ($variant in $template, $template.ToUpperInvariant(), $template.ToLowerInvariant()) {
+                        $site = [PSCustomObject]@{ Url = 'https://contoso.sharepoint.com/sites/system'; Template = $variant; IsHubSite = $false }
+                        if (-not (Test-SPSLifecycleProtectedSite -Site $site -TenantUrl 'https://contoso.sharepoint.com')) {
+                            $unprotected.Add($variant)
+                        }
+                    }
+                }
+
+                , $unprotected.ToArray()
+            }
+        }
+
+        @($unprotected) | Should -HaveCount 0 -Because "these templates were not protected under ${Culture}: $($unprotected -join ', ')"
+    }
+
+    It 'gives the verdict of a system, a channel and a OneDrive template whatever its case, under <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }
+        @{ Culture = 'tr-TR' }
+    ) {
+        $setting = [PSCustomObject]@{ TenantName = 'contoso'; TenantUrl = 'https://contoso.sharepoint.com'; AcceptedLockStates = @('Unlock'); MinLockedDays = 365; DeleteMaxSizeGB = 1.0; Scan = [PSCustomObject]@{ InactiveDays = 365 } }
+        $verdicts = Use-TestCulture -Culture $Culture -Script {
+            & $script:Module {
+                param($setting)
+                foreach ($template in 'FUNSITE#0', 'funsite#0', 'TESTSITE#0', 'redirectsite#0', 'EDISC#0', 'TEAMCHANNEL#1', 'teamchannel#1', 'SPSPERS#10', 'spspers#10') {
+                    $site = [PSCustomObject]@{
+                        Url = 'https://contoso.sharepoint.com/sites/x'; Template = $template; LockState = 'Unlock'; GroupId = ''
+                        IsHubSite = $false; IsTeamsChannelConnected = $false; ArchiveStatus = 'NotArchived'; StorageUsedMB = 100
+                    }
+                    '{0}={1}' -f $template, (Get-SPSLifecycleVerdict -Site $site -Setting $setting -Action Delete)
+                }
+            } $setting
+        }
+
+        @($verdicts) | Should -Be @(
+            'FUNSITE#0=SKIP-PROTECTED', 'funsite#0=SKIP-PROTECTED', 'TESTSITE#0=SKIP-PROTECTED', 'redirectsite#0=SKIP-PROTECTED', 'EDISC#0=SKIP-PROTECTED'
+            'TEAMCHANNEL#1=SKIP-CHANNEL-SITE', 'teamchannel#1=SKIP-CHANNEL-SITE', 'SPSPERS#10=SKIP-ONEDRIVE', 'spspers#10=SKIP-ONEDRIVE'
+        )
     }
 }

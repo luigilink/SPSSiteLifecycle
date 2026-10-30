@@ -16,10 +16,14 @@
     [OutputType([System.Management.Automation.PSObject[]])]
     param ()
 
-    @(
-        [PSCustomObject]@{ Path = '/sites/contenttypehub'; Reason = 'Content type hub: holds the content types shared by the whole tenant' }
-        [PSCustomObject]@{ Path = '/sites/compliancepolicycenter'; Reason = 'Compliance policy center' }
-        [PSCustomObject]@{ Path = '/portal/hub'; Reason = 'PointPublishing hub' }
-        [PSCustomObject]@{ Path = '/search'; Reason = 'Search site' }
-    )
+    if ($null -eq $script:ProtectedPathTable) {
+        $script:ProtectedPathTable = @(
+            [PSCustomObject]@{ Path = '/sites/contenttypehub'; Reason = 'Content type hub: holds the content types shared by the whole tenant' }
+            [PSCustomObject]@{ Path = '/sites/compliancepolicycenter'; Reason = 'Compliance policy center' }
+            [PSCustomObject]@{ Path = '/portal/hub'; Reason = 'PointPublishing hub' }
+            [PSCustomObject]@{ Path = '/search'; Reason = 'Search site' }
+        )
+    }
+
+    $script:ProtectedPathTable
 }

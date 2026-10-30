@@ -93,7 +93,7 @@
         @{
             Section = 'Scan'; Name = 'LockStates'; Type = 'ChoiceList'; UsedIn = @('Scan')
             Values = @('ReadOnly', 'Unlock'); Default = @('ReadOnly'); DefaultText = '`@(''ReadOnly'')`'
-            Description = 'Lock states that the Scan phase lists. With `ReadOnly` alone, the server filters the listing, which is much faster on a large tenant. Add `Unlock` to also look for inactive sites that are not locked (suggested action `Lock`).'
+            Description = 'Lock states that the Scan phase lists. With `ReadOnly` alone, the server filters the listing, which is much faster on a large tenant. Add `Unlock` to also look for inactive sites that are not locked (suggested action `Lock`). A site in another lock state is left out of the report and counted in the summary, whether the server filtered the listing or not.'
         }
         @{
             Section = 'Scan'; Name = 'SharePointUsageReport'; Type = 'Path'; Kind = 'File'; MustExist = $true; UsedIn = @('Scan')

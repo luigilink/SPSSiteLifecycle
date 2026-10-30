@@ -176,6 +176,56 @@ Describe 'Import-SPSLifecycleActivityReport' {
             $report.RefreshDate.ToString('yyyy-MM-dd') | Should -Be '2026-10-26'
         }
 
+        It 'records the site ID of the row next to its URL, so that an address that another site has used can be told apart' {
+            $text = "$script:UsageHeader`r`n" +
+            "2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,https://contoso.sharepoint.com/sites/a,Owner A,False,2026-09-15,Group,180`r`n" +
+            "2026-10-26,00000000-0000-0000-0000-000000000000,https://contoso.sharepoint.com/sites/b,Owner B,False,2026-09-16,Group,180`r`n" +
+            "2026-10-26,0d7b4ebb-f68c-4f29-8529-5b46655d0c3c,,Owner C,False,2026-09-17,Group,180`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'urlid.csv' -Text $text) -Kind SharePoint
+
+            $report.ByUrlId['https://contoso.sharepoint.com/sites/a'] | Should -BeExactly 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'
+            $report.ByUrlId.ContainsKey('https://contoso.sharepoint.com/sites/b') | Should -BeTrue
+            $report.ByUrlId['https://contoso.sharepoint.com/sites/b'] | Should -BeExactly ''
+            $report.ByUrlId.Count | Should -Be 2
+        }
+
+        It 'keeps the site ID of an address that the same site has on two rows' {
+            $text = "$script:UsageHeader`r`n" +
+            "2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,https://contoso.sharepoint.com/sites/a,Owner A,False,2026-08-01,Group,180`r`n" +
+            "2026-10-26,{A6E20079-2D1A-4E9D-BC9F-94E3F2EFEB64},https://contoso.sharepoint.com/sites/a/,Owner A,False,2026-09-15,Group,180`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'urlid-same.csv' -Text $text) -Kind SharePoint
+
+            $report.ByUrlId['https://contoso.sharepoint.com/sites/a'] | Should -BeExactly 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'
+        }
+
+        It 'marks with a star an address that rows with different site IDs share, whatever their order: <Order>' -ForEach @(
+            @{ Order = 'IdThenOther'; First = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Second = '0d7b4ebb-f68c-4f29-8529-5b46655d0c3c' }
+            @{ Order = 'IdThenNone'; First = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Second = '00000000-0000-0000-0000-000000000000' }
+            @{ Order = 'NoneThenId'; First = '00000000-0000-0000-0000-000000000000'; Second = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64' }
+        ) {
+            $text = "$script:UsageHeader`r`n" +
+            "2026-10-26,$First,https://contoso.sharepoint.com/sites/a,Owner A,False,2026-08-01,Group,180`r`n" +
+            "2026-10-26,$Second,https://contoso.sharepoint.com/sites/a,Owner B,False,2026-09-15,Group,180`r`n"
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'urlid-star.csv' -Text $text) -Kind SharePoint
+
+            $report.ByUrlId['https://contoso.sharepoint.com/sites/a'] | Should -BeExactly '*'
+            $report.ByUrl['https://contoso.sharepoint.com/sites/a'].ToString('yyyy-MM-dd') | Should -Be '2026-09-15'
+        }
+
+        It 'keeps the star when a third row comes, whatever its ID: <Order>' -ForEach @(
+            @{ Order = 'a third ID'; Ids = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64', '0d7b4ebb-f68c-4f29-8529-5b46655d0c3c', '3c9f7a52-8b1e-4d6a-9f0e-21c4d5e6f708' }
+            @{ Order = 'the first ID again'; Ids = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64', '0d7b4ebb-f68c-4f29-8529-5b46655d0c3c', 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64' }
+            @{ Order = 'the second ID again'; Ids = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64', '0d7b4ebb-f68c-4f29-8529-5b46655d0c3c', '0d7b4ebb-f68c-4f29-8529-5b46655d0c3c' }
+            @{ Order = 'no ID'; Ids = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64', '0d7b4ebb-f68c-4f29-8529-5b46655d0c3c', '00000000-0000-0000-0000-000000000000' }
+            @{ Order = 'no ID in the middle, then an ID'; Ids = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64', '00000000-0000-0000-0000-000000000000', '0d7b4ebb-f68c-4f29-8529-5b46655d0c3c' }
+        ) {
+            $rows = foreach ($id in $Ids) { "2026-10-26,$id,https://contoso.sharepoint.com/sites/a,Owner,False,2026-09-15,Group,180`r`n" }
+            $text = "$script:UsageHeader`r`n" + ($rows -join '')
+            $report = Import-TestReport -Path (Write-TestCsv -Name 'urlid-three.csv' -Text $text) -Kind SharePoint
+
+            $report.ByUrlId['https://contoso.sharepoint.com/sites/a'] | Should -BeExactly '*'
+        }
+
         It 'matches by site ID when the Site URL is empty (BYOK, Customer Lockbox)' {
             $text = "$script:UsageHeader`r`n2026-10-26,a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64,,Owner A,False,2026-09-15,Group,180`r`n"
             $report = Import-TestReport -Path (Write-TestCsv -Name 'nourl.csv' -Text $text) -Kind SharePoint
