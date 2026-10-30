@@ -17,6 +17,30 @@
         Get-SPSLifecycleSetting -Path $Path -Phase $Phase
     }
 
+    function script:Invoke-UnderCulture {
+        param([string]$Culture, [scriptblock]$Action)
+
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+            & $Action
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+    }
+
+    # The row of the schema of a setting, and the value of that row as the settings file reader checks it.
+    function script:Get-TestRow {
+        param([string]$Name)
+        @(& $script:Module { Get-SPSLifecycleSettingSchema } | Where-Object { $_.Name -ceq $Name })[0]
+    }
+
+    function script:Resolve-TestValue {
+        param([string]$Name, $Value)
+        & $script:Module { param($r, $v) Resolve-SPSLifecycleSettingValue -Row $r -Value $v -BaseFolder '.' } (Get-TestRow -Name $Name) $Value
+    }
+
     $script:Valid = @"
 @{
     TenantName = 'Contoso'
@@ -370,6 +394,187 @@ Describe 'The settings schema' {
 
         { Get-TestSetting -Path (Join-Path -Path $folder -ChildPath 'contoso.psd1') -Phase Scan } | Should -Not -Throw
         { Get-TestSetting -Path (Join-Path -Path $folder -ChildPath 'contoso.psd1') -Phase Act } | Should -Not -Throw
+    }
+}
+
+Describe 'The names that the settings hold' {
+    Context 'TenantName is ASCII, whatever the culture and the case folding' {
+        It 'accepts <Name> under <Culture>' -ForEach @(
+            foreach ($culture in 'en-US', 'fr-FR', 'de-DE', 'tr-TR') {
+                @{ Culture = $culture; Name = 'a name in lowercase'; Value = 'contoso' }
+                @{ Culture = $culture; Name = 'a name with a capital'; Value = 'Contoso' }
+                @{ Culture = $culture; Name = 'a name in capitals'; Value = 'CONTOSO' }
+                @{ Culture = $culture; Name = 'one letter'; Value = 'a' }
+                @{ Culture = $culture; Name = 'a hyphen inside'; Value = 'a-b' }
+                @{ Culture = $culture; Name = 'a digit first'; Value = '1abc' }
+                @{ Culture = $culture; Name = 'the letters i and k in capitals, which a Turkish machine reads differently'; Value = 'KIWI-IKI' }
+                @{ Culture = $culture; Name = 'a name of 63 characters'; Value = ('a' * 63) }
+            }
+        ) {
+            Invoke-UnderCulture -Culture $Culture -Action {
+                $result = Resolve-TestValue -Name 'TenantName' -Value $Value
+
+                $result.Error | Should -BeExactly ''
+                $result.Value | Should -BeExactly $Value
+            }
+        }
+
+        It 'refuses <Name> under <Culture>, and writes the character that it is about as \uXXXX' -ForEach @(
+            foreach ($culture in 'en-US', 'fr-FR', 'de-DE', 'tr-TR') {
+                @{ Culture = $culture; Name = 'the Kelvin sign'; Value = "cont$([char]0x212A)so"; Shown = 'cont\u212Aso' }
+                @{ Culture = $culture; Name = 'a capital I with a dot above'; Value = "cont$([char]0x0130)so"; Shown = 'cont\u0130so' }
+                @{ Culture = $culture; Name = 'a dotless i'; Value = "cont$([char]0x0131)so"; Shown = 'cont\u0131so' }
+                @{ Culture = $culture; Name = 'a full-width letter'; Value = "cont$([char]0xFF4F)so"; Shown = 'cont\uFF4Fso' }
+                @{ Culture = $culture; Name = 'a soft hyphen'; Value = "cont$([char]0xAD)oso"; Shown = 'cont\u00ADoso' }
+                @{ Culture = $culture; Name = 'a zero-width space'; Value = "cont$([char]0x200B)oso"; Shown = 'cont\u200Boso' }
+                @{ Culture = $culture; Name = 'an accented letter'; Value = 'contoso-é'; Shown = 'contoso-\u00E9' }
+                @{ Culture = $culture; Name = 'a name of 64 characters'; Value = ('a' * 64); Shown = ('a' * 64) }
+                @{ Culture = $culture; Name = 'a name that starts with a hyphen'; Value = '-contoso'; Shown = '-contoso' }
+                @{ Culture = $culture; Name = 'a URL'; Value = 'https://contoso.sharepoint.com'; Shown = 'https://contoso.sharepoint.com' }
+                @{ Culture = $culture; Name = 'a space inside'; Value = 'con toso'; Shown = 'con toso' }
+            }
+        ) {
+            Invoke-UnderCulture -Culture $Culture -Action {
+                $result = Resolve-TestValue -Name 'TenantName' -Value $Value
+
+                $result.Value | Should -BeNullOrEmpty
+                $result.Error | Should -BeLike 'must be letters, digits and hyphens only*not a URL (now: ''*'').'
+                $result.Error | Should -BeLike "*(now: '$Shown')."
+            }
+        }
+
+        It 'lowercases the name that it accepts, under <Culture>' -ForEach @(
+            @{ Culture = 'en-US' }
+            @{ Culture = 'tr-TR' }
+        ) {
+            $path = New-TestConfig -Body "@{ TenantName = 'KIWI-IKI'; ClientId = '11111111-2222-3333-4444-555555555555'; Scan = @{ SharePointUsageReport = 'usage.csv' } }"
+            Set-Content -LiteralPath (Join-Path -Path (Split-Path -Path $path -Parent) -ChildPath 'usage.csv') -Value 'x'
+            Invoke-UnderCulture -Culture $Culture -Action {
+                $setting = Get-TestSetting -Path $path -Phase Scan
+
+                $setting.TenantName | Should -BeExactly 'kiwi-iki'
+                $setting.AdminUrl | Should -BeExactly 'https://kiwi-iki-admin.sharepoint.com'
+            }
+        }
+
+        It 'refuses a Kelvin sign in the settings file, and does not read it as the letter k' {
+            $path = New-TestConfig -Body "@{ TenantName = 'cont$([char]0x212A)so'; ClientId = '11111111-2222-3333-4444-555555555555' }"
+
+            { Get-TestSetting -Path $path -Phase Scan } | Should -Throw -ExpectedMessage '*TenantName*(now: ''cont\u212Aso'')*'
+        }
+    }
+
+    Context 'RefusedTenants holds tenant names only' {
+        It 'refuses the entry <Name>, which could never be the name of a tenant, and writes it so that it can be read' -ForEach @(
+            @{ Name = 'with a Kelvin sign'; Value = "cont$([char]0x212A)so"; Shown = 'cont\u212Aso' }
+            @{ Name = 'with a dotted capital I'; Value = "$([char]0x0130)stanbul"; Shown = '\u0130stanbul' }
+            @{ Name = 'that is the address of a site'; Value = 'contoso.sharepoint.com'; Shown = 'contoso.sharepoint.com' }
+            @{ Name = 'that is the address of the admin site'; Value = 'contoso-admin.sharepoint.com'; Shown = 'contoso-admin.sharepoint.com' }
+            @{ Name = 'with a space'; Value = 'con toso'; Shown = 'con toso' }
+            @{ Name = 'with a zero-width space'; Value = "con$([char]0x200B)toso"; Shown = 'con\u200Btoso' }
+        ) {
+            $result = Resolve-TestValue -Name 'RefusedTenants' -Value @('fabrikam', $Value)
+
+            @($result.Value) | Should -HaveCount 0
+            $result.Error | Should -BeLike 'has an entry that must be letters, digits and hyphens only*not a URL (now: ''*'').'
+            $result.Error | Should -BeLike "*(now: '$Shown')."
+        }
+
+        It 'accepts a list of tenant names, in any case, and an empty list' {
+            (Resolve-TestValue -Name 'RefusedTenants' -Value @('Fabrikam', 'KIWI-IKI', '1abc')).Error | Should -BeExactly ''
+            (Resolve-TestValue -Name 'RefusedTenants' -Value @()).Error | Should -BeExactly ''
+        }
+
+        It 'stops the tool when the settings file lists an entry that is not a tenant name' {
+            $path = New-TestConfig -Body "@{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; RefusedTenants = @('fabrikam', 'contoso.sharepoint.com') }"
+
+            { Get-TestSetting -Path $path -Phase Scan } | Should -Throw -ExpectedMessage '*RefusedTenants*has an entry that must be*(now: ''contoso.sharepoint.com'')*'
+        }
+    }
+
+    Context 'The names of the settings are compared one character at a time' {
+        BeforeAll {
+            $script:Hidden = [string][char]0x200B
+            $script:Soft = [string][char]0xAD
+        }
+
+        BeforeEach {
+            $script:Folder = Join-Path -Path $TestDrive -ChildPath ([guid]::NewGuid().ToString('N'))
+            $null = New-Item -Path $script:Folder -ItemType Directory
+            Set-Content -LiteralPath (Join-Path -Path $script:Folder -ChildPath 'usage.csv') -Value 'x'
+            Set-Content -LiteralPath (Join-Path -Path $script:Folder -ChildPath 'lock.csv') -Value 'x'
+            $script:Path = Join-Path -Path $script:Folder -ChildPath 'settings.psd1'
+        }
+
+        It 'stops on <Name>, and shows the hidden character, instead of dropping the setting without a word' -ForEach @(
+            @{ Name = 'a shared setting with a zero-width space in its name'; Body = "@{{ TenantName = 'contosoprod'; ClientId = '11111111-2222-3333-4444-555555555555'; 'Refused{0}Tenants' = @('contosoprod'); Scan = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Message = "*Unknown setting 'Refused\u200BTenants'*Did you mean 'RefusedTenants'*" }
+            @{ Name = 'a shared setting with a soft hyphen in its name'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; 'Min{1}LockedDays' = 0; Scan = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Message = "*Unknown setting 'Min\u00ADLockedDays'*Did you mean 'MinLockedDays'*" }
+            @{ Name = 'a section with a zero-width space in its name'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; 'Sc{0}an' = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Message = "*Unknown setting 'Sc\u200Ban'*Did you mean 'Scan'*" }
+            @{ Name = 'a setting of a section with a zero-width space in its name'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; Scan = @{{ 'Inactive{0}Days' = 1; SharePointUsageReport = 'usage.csv' }} }}"; Message = "*Scan section: Unknown setting 'Inactive\u200BDays'*Did you mean 'InactiveDays'*" }
+        ) {
+            Set-Content -LiteralPath $script:Path -Value ($Body -f $script:Hidden, $script:Soft) -Encoding utf8
+
+            { Get-TestSetting -Path $script:Path -Phase Scan } | Should -Throw -ExpectedMessage $Message
+        }
+
+        It 'still reads <Written> written in another case, under <Culture>' -ForEach @(
+            foreach ($culture in 'en-US', 'tr-TR') {
+                @{ Culture = $culture; Written = 'MINLOCKEDDAYS'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; MINLOCKEDDAYS = 10; Scan = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Check = 'Shared' }
+                @{ Culture = $culture; Written = 'minlockeddays'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; minlockeddays = 10; Scan = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Check = 'Shared' }
+                @{ Culture = $culture; Written = 'a section and a setting of it'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; scan = @{{ inactivedays = 10; sharepointusagereport = 'usage.csv' }} }}"; Check = 'Scan' }
+                @{ Culture = $culture; Written = 'LOCKDATEFILES'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; LOCKDATEFILES = @('lock.csv'); Scan = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Check = 'Files' }
+            }
+        ) {
+            Set-Content -LiteralPath $script:Path -Value ($Body -f 0) -Encoding utf8
+            Invoke-UnderCulture -Culture $Culture -Action {
+                $s = Get-TestSetting -Path $script:Path -Phase Scan
+
+                switch ($Check) {
+                    'Shared' { $s.MinLockedDays | Should -Be 10 }
+                    'Scan' { $s.Scan.InactiveDays | Should -Be 10 }
+                    'Files' { @($s.LockDateFiles) | Should -HaveCount 1 }
+                }
+            }
+        }
+
+        It 'says where a setting belongs when it is written in another case in the wrong place: <Name>' -ForEach @(
+            @{ Name = 'a shared setting in Scan'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; Scan = @{{ tenantname = 'x' }} }}"; Message = "*'TenantName' is a shared setting*" }
+            @{ Name = 'an Act setting at the top'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; maxactions = 5 }}"; Message = "*'MaxActions' belongs in the Act section*" }
+        ) {
+            Set-Content -LiteralPath $script:Path -Value ($Body -f 0) -Encoding utf8
+
+            { Get-TestSetting -Path $script:Path -Phase Scan } | Should -Throw -ExpectedMessage $Message
+        }
+
+        It 'reads a choice written in another case, and gives the spelling of the schema: <Written>' -ForEach @(
+            @{ Written = 'culture'; Expected = 'Culture' }
+            @{ Written = 'TAB'; Expected = 'Tab' }
+            @{ Written = ' ; '; Expected = ';' }
+        ) {
+            $result = Resolve-TestValue -Name 'CsvDelimiter' -Value $Written
+
+            $result.Error | Should -BeExactly ''
+            $result.Value | Should -BeExactly $Expected
+        }
+
+        It 'refuses a value of a choice that has a hidden character, and shows it: <Name>' -ForEach @(
+            @{ Name = 'a lock state'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; AcceptedLockStates = @('Read{1}Only'); Scan = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Message = "*AcceptedLockStates*must hold values among: ReadOnly, Unlock (now: 'Read\u00ADOnly')*" }
+            @{ Name = 'a separator'; Body = "@{{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; CsvDelimiter = 'Cult{0}ure'; Scan = @{{ SharePointUsageReport = 'usage.csv' }} }}"; Message = "*CsvDelimiter*must be one of*(now: 'Cult\u200Bure')*" }
+        ) {
+            Set-Content -LiteralPath $script:Path -Value ($Body -f $script:Hidden, $script:Soft) -Encoding utf8
+
+            { Get-TestSetting -Path $script:Path -Phase Scan } | Should -Throw -ExpectedMessage $Message
+        }
+
+        It 'still reads a value of a choice in another case: <Value>' -ForEach @(
+            @{ Value = 'readonly' }
+            @{ Value = 'READONLY' }
+        ) {
+            $result = Resolve-TestValue -Name 'AcceptedLockStates' -Value @($Value)
+
+            $result.Error | Should -BeExactly ''
+            @($result.Value) | Should -Be @('ReadOnly')
+        }
     }
 }
 

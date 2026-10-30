@@ -339,6 +339,34 @@ Describe 'ConvertTo-SPSLifecycleVisibleText' {
     ) {
         (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t } $Text) | Should -BeExactly $Text
     }
+
+    It 'with AsciiOnly, writes <Name> as <Expected>, so that a letter that looks like another one can be told from it' -ForEach @(
+        @{ Name = 'the Kelvin sign'; Text = "cont$([char]0x212A)so"; Expected = 'cont\u212Aso' }
+        @{ Name = 'a capital I with a dot above'; Text = "cont$([char]0x0130)so"; Expected = 'cont\u0130so' }
+        @{ Name = 'a dotless i'; Text = "cont$([char]0x0131)so"; Expected = 'cont\u0131so' }
+        @{ Name = 'a full-width letter'; Text = "cont$([char]0xFF4F)so"; Expected = 'cont\uFF4Fso' }
+        @{ Name = 'an accented letter'; Text = 'Équipe'; Expected = '\u00C9quipe' }
+        @{ Name = 'a soft hyphen'; Text = "a$([char]0xAD)b"; Expected = 'a\u00ADb' }
+        @{ Name = 'a control character'; Text = "a$([char]7)b"; Expected = 'a\u0007b' }
+        @{ Name = 'a tab'; Text = "a`tb"; Expected = 'a\u0009b' }
+        @{ Name = 'a character after the last printable one of ASCII'; Text = "a$([char]0x7F)b"; Expected = 'a\u007Fb' }
+        @{ Name = 'a character outside the Basic Multilingual Plane, as its two halves'; Text = "a$([char]::ConvertFromUtf32(0x1F600))b"; Expected = 'a\uD83D\uDE00b' }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t -AsciiOnly } $Text) | Should -BeExactly $Expected
+    }
+
+    It 'with AsciiOnly, leaves the printable characters of ASCII and the spaces as they are: <Text>' -ForEach @(
+        @{ Text = 'Contoso-1' }
+        @{ Text = 'a b' }
+        @{ Text = '~!@#$%^&*()_+{}|:"<>?`-=[]\;'',./' }
+        @{ Text = '' }
+    ) {
+        (& $script:Module { param($t) ConvertTo-SPSLifecycleVisibleText -Text $t -AsciiOnly } $Text) | Should -BeExactly $Text
+    }
+
+    It 'with AsciiOnly, gives an empty text for a null' {
+        (& $script:Module { ConvertTo-SPSLifecycleVisibleText -Text $null -AsciiOnly }) | Should -BeExactly ''
+    }
 }
 
 Describe 'Split-SPSLifecycleCsvLine' {

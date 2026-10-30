@@ -127,6 +127,12 @@ Describe 'Assert-SPSLifecycleTenantAllowed' {
         { Assert-TestAllowed -Setting $setting } | Should -Throw -ExpectedMessage "*'$($Tenant.ToLowerInvariant())'*refused*"
     }
 
+    It 'stops on a tenant name that is refused, and names the setting, even when the admin address is for another tenant' {
+        $setting = New-TestSetting -Override @{ TenantName = 'microsoft'; AdminUrl = 'https://contoso-admin.sharepoint.com' }
+
+        { Assert-TestAllowed -Setting $setting } | Should -Throw -ExpectedMessage "TenantName: the tenant 'microsoft' is refused.*"
+    }
+
     It 'stops when the admin address is the one of a refused tenant, whatever the name says' {
         $setting = New-TestSetting -Override @{ TenantName = 'contoso'; AdminUrl = 'https://microsoft-admin.sharepoint.com' }
 
@@ -152,6 +158,46 @@ Describe 'Assert-SPSLifecycleTenantAllowed' {
         $setting = New-TestSetting -Override @{ AdminUrl = $Admin }
 
         { Assert-TestAllowed -Setting $setting } | Should -Throw -ExpectedMessage "AdminUrl: '*' is not the address of the admin site of a tenant (https://<tenant>-admin.sharepoint.com)."
+    }
+
+    It 'stops when the tenant name is not the name of a tenant, and writes the character that it is about: <Name>' -ForEach @(
+        @{ Name = 'a Kelvin sign'; Tenant = "cont$([char]0x212A)so"; Admin = "https://cont$([char]0x212A)so-admin.sharepoint.com"; Shown = 'cont\u212Aso' }
+        @{ Name = 'a capital I with a dot above'; Tenant = "$([char]0x0130)stanbul"; Admin = "https://$([char]0x0130)stanbul-admin.sharepoint.com"; Shown = '\u0130stanbul' }
+        @{ Name = 'a dotless i'; Tenant = "cont$([char]0x0131)so"; Admin = 'https://contoso-admin.sharepoint.com'; Shown = 'cont\u0131so' }
+        @{ Name = 'a soft hyphen'; Tenant = "cont$([char]0xAD)oso"; Admin = 'https://contoso-admin.sharepoint.com'; Shown = 'cont\u00ADoso' }
+        @{ Name = 'a name of 64 characters'; Tenant = ('a' * 64); Admin = "https://$('a' * 64)-admin.sharepoint.com"; Shown = ('a' * 64) }
+        @{ Name = 'a name that starts with a hyphen'; Tenant = '-contoso'; Admin = 'https://-contoso-admin.sharepoint.com'; Shown = '-contoso' }
+        @{ Name = 'an address'; Tenant = 'contoso.sharepoint.com'; Admin = 'https://contoso.sharepoint.com-admin.sharepoint.com'; Shown = 'contoso.sharepoint.com' }
+    ) {
+        $setting = New-TestSetting -Override @{ TenantName = $Tenant; AdminUrl = $Admin }
+
+        { Assert-TestAllowed -Setting $setting } | Should -Throw -ExpectedMessage "TenantName: '$Shown' is not the name of a tenant: letters, digits and hyphens only, starting with a letter or a digit, 63 characters at most."
+    }
+
+    It 'stops when the admin address has a letter that only looks like the one of ASCII, and writes it as \uXXXX: <Name>' -ForEach @(
+        @{ Name = 'a capital I with a dot above in admin'; Tenant = 'contoso'; Admin = "https://contoso-adm$([char]0x0130)n.sharepoint.com"; Shown = 'https://contoso-adm\u0130n.sharepoint.com' }
+        @{ Name = 'a capital I with a dot above in sharepoint'; Tenant = 'contoso'; Admin = "https://contoso-admin.sharepo$([char]0x0130)nt.com"; Shown = 'https://contoso-admin.sharepo\u0130nt.com' }
+        @{ Name = 'a Kelvin sign in the tenant of the address'; Tenant = 'kiwi'; Admin = "https://$([char]0x212A)iwi-admin.sharepoint.com"; Shown = 'https://\u212Aiwi-admin.sharepoint.com' }
+        @{ Name = 'a full-width letter'; Tenant = 'contoso'; Admin = "https://contoso-admin.sharepoint.c$([char]0xFF4F)m"; Shown = 'https://contoso-admin.sharepoint.c\uFF4Fm' }
+    ) {
+        $setting = New-TestSetting -Override @{ TenantName = $Tenant; AdminUrl = $Admin }
+
+        { Assert-TestAllowed -Setting $setting } | Should -Throw -ExpectedMessage "AdminUrl: '$Shown' is not the address of the admin site of a tenant (https://<tenant>-admin.sharepoint.com)."
+    }
+
+    It 'accepts the names that the rule allows, under <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }
+        @{ Culture = 'tr-TR' }
+    ) {
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+
+            { Assert-TestAllowed -Setting (New-TestSetting -Override @{ TenantName = 'KIWI-IKI'; AdminUrl = 'https://kiwi-iki-admin.sharepoint.com' }) } | Should -Not -Throw
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
     }
 
     It 'stops when there is no tenant name' {

@@ -5,6 +5,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The tenant name and the names of the settings are read one character at a time (#24). `TenantName` accepted
+  the Kelvin sign (U+212A) and a capital I with a dot above (U+0130), which a regular expression that ignores the case
+  reads as a `k` and an `i`; the rule is now ASCII letters, digits and hyphens, matched as it is written, and a message
+  that shows a name writes the characters that are not printable ASCII as `\uXXXX`. The entries of `RefusedTenants` follow the
+  same rule, because an entry that can never be the name of a tenant refuses nothing. A setting whose name held a
+  zero-width space or a soft hyphen (`Refused<zero-width space>Tenants`) was read as the setting that it looked like, then
+  never found, so the list of refused tenants, or any other setting, was dropped without a message: the names are now
+  compared with `OrdinalIgnoreCase`, and a name that is not known stops the tool and shows the hidden character. The check
+  right before the sign-in repeats the rule on the tenant name, and wants an ASCII admin address.
+
 ### Added
 
 - Project skeleton: CI workflows (Pester on Windows and Linux, PSScriptAnalyzer, release,
