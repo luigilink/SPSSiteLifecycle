@@ -156,7 +156,13 @@ Describe 'The dates of a checkpoint' {
         $date = [System.DateTime]::new(2026, 10, 30, 9, 7, 0, [System.DateTimeKind]::Utc)
 
         $date.ToString('yyyy', [System.Globalization.CultureInfo]::GetCultureInfo('th-TH')) | Should -BeExactly '2569'
-        $date.ToString('yyyy', [System.Globalization.CultureInfo]::GetCultureInfo('ar-SA')) | Should -Not -BeExactly '2026'
+
+        # The calendar that a culture starts with depends on the platform: ar-SA starts with the Umm al-Qura calendar on Windows and
+        # macOS, and with the Gregorian one on the Linux runners of CI, where only the Buddhist year of th-TH is another year.
+        $arabic = [System.Globalization.CultureInfo]::GetCultureInfo('ar-SA')
+        if ($arabic.DateTimeFormat.Calendar -isnot [System.Globalization.GregorianCalendar]) {
+            $date.ToString('yyyy', $arabic) | Should -Not -BeExactly '2026'
+        }
     }
 
     It 'writes and reads the same text whatever the culture and the calendar of the machine: <Culture>' -ForEach @(
