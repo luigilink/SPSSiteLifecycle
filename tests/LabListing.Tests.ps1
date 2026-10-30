@@ -67,15 +67,19 @@
             $arguments[$key] = $Parameter[$key]
         }
 
-        $output = @(& $script:Lab @arguments 3>&1 4>&1)
+        $output = @(& $script:Lab @arguments 2>&1 3>&1 4>&1 5>&1)
         $warning = [System.Management.Automation.WarningRecord]
         $verbose = [System.Management.Automation.VerboseRecord]
+        $debug = [System.Management.Automation.DebugRecord]
+        $failure = [System.Management.Automation.ErrorRecord]
         [PSCustomObject]@{
-            Report   = @($output | Where-Object { $_ -isnot $warning -and $_ -isnot $verbose }) | Select-Object -First 1
+            Report   = @($output | Where-Object { $_ -isnot $warning -and $_ -isnot $verbose -and $_ -isnot $debug -and $_ -isnot $failure }) | Select-Object -First 1
             Text     = @($info | ForEach-Object { "$($_.MessageData)" })
             Folder   = $arguments.OutputFolder
             Warnings = @($output | Where-Object { $_ -is $warning } | ForEach-Object { $_.Message })
             Verbose  = @($output | Where-Object { $_ -is $verbose } | ForEach-Object { $_.Message })
+            Debug    = @($output | Where-Object { $_ -is $debug } | ForEach-Object { $_.Message })
+            Errors   = @($output | Where-Object { $_ -is $failure } | ForEach-Object { "$($_.Exception.Message)" })
         }
     }
 
@@ -85,7 +89,7 @@
 
         $file = Join-Path -Path $Run.Folder -ChildPath 'listing-lab-report.json'
         $json = if (Test-Path -LiteralPath $file) { Get-Content -LiteralPath $file -Raw } else { '' }
-        (@($Run.Text) + @($Run.Warnings) + @($Run.Verbose) + $json) -join "`n"
+        (@($Run.Text) + @($Run.Warnings) + @($Run.Verbose) + @($Run.Debug) + @($Run.Errors) + $json) -join "`n"
     }
 
     function script:Get-LabCheck {
@@ -95,11 +99,48 @@
 
     # An exception type that is not the framework's and is named like what must never be shown, and one whose inner exception is
     # itself (a type of the library can do that, and the lab walks the chain).
-    if (-not ('SyntheticPrivateBoardException' -as [System.Type])) {
+    if (-not ('Microsoft.OfflineLab.SyntheticPrivateBoardException' -as [System.Type])) {
         Add-Type -TypeDefinition @'
 public class SyntheticPrivateBoardException : System.Exception
 {
     public SyntheticPrivateBoardException(string message) : base(message) { }
+}
+
+public class SyntheticPrivateBoardDerivedException : System.InvalidOperationException
+{
+    public SyntheticPrivateBoardDerivedException(string message) : base(message) { }
+}
+
+namespace Microsoft.OfflineLab
+{
+    public class SyntheticPrivateBoardException : System.Exception
+    {
+        public SyntheticPrivateBoardException(string message) : base(message) { }
+    }
+}
+
+namespace System.OfflineLab
+{
+    public class SyntheticPrivateBoardException : System.Exception
+    {
+        public SyntheticPrivateBoardException(string message) : base(message) { }
+    }
+}
+
+namespace PnP.OfflineLab
+{
+    public class SyntheticPrivateBoardException : System.Exception
+    {
+        public SyntheticPrivateBoardException(string message) : base(message) { }
+    }
+}
+
+namespace Newtonsoft.OfflineLab
+{
+    public class SyntheticPrivateBoardException : System.Exception
+    {
+        public SyntheticPrivateBoardException(string message) : base(message) { }
+    }
 }
 
 public class SyntheticCyclicException : System.Exception
@@ -140,6 +181,16 @@ param([double]$Seconds)
             'Get-SPSLifecycleTenantSitePage'  = @'
 param($Session, $Source, [string]$StartIndex, [string]$Filter)
 $script:StubLog.Add("page source=$Source start=[$StartIndex]")
+if ($script:StubData.Noise) {
+    Write-Information 'SyntheticPrivateBoard for syntheticowner@fabrikam.example' -InformationAction Continue
+    Write-Host 'Host text of SyntheticPrivateBoard'
+    $DebugPreference = 'Continue'
+    Write-Debug 'Debug text of SyntheticPrivateBoard'
+    Write-Error 'Error text of SyntheticPrivateBoard' -ErrorAction Continue
+}
+if ($script:StubData.Warn) {
+    Write-Warning 'Warning text of SyntheticPrivateBoard'
+}
 if ($script:StubData.PageException) { throw $script:StubData.PageException }
 if ($script:StubData.PageError -and $script:StubData.PageErrorLeft -ne 0) { $script:StubData.PageErrorLeft--; throw $script:StubData.PageError }
 if ($Source -eq 'Cmdlet') {
@@ -152,7 +203,7 @@ $index = if ($StartIndex -eq '') { 0 } else { [int]$StartIndex.Substring(1) }
 $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
 [PSCustomObject]@{ Items = @($pages[$index]); NextStartIndex = $next }
 '@
-        } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; PageException = $null }
+        } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; PageException = $null; Noise = $false }
     }
 
     AfterEach {
@@ -433,13 +484,15 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             @{ Code = 'clock'; Words = '*clock*' }
             @{ Code = 'too-old'; Words = '*too old*' }
             @{ Code = 'a-code-from-the-future'; Words = '*does not know*' }
+            @{ Code = 'DAMAGED'; Words = '*does not know*' }
+            @{ Code = 'Other-Tenant'; Words = '*does not know*' }
             @{ Code = 'a code that names fabrikam@contoso.com'; Words = '*does not know*' }
         ) {
             Set-ModuleStub -Stub @{
                 'Read-SPSLifecycleListingCheckpoint' = @'
 [PSCustomObject]@{ Exists = $true; Usable = $false; Finished = $false; Reason = "The checkpoint was made for fabrikam ($($script:StubData.ReaderCode))."; Code = $script:StubData.ReaderCode; Manifest = $null }
 '@
-            } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; PageException = $null; ReaderCode = $Code }
+            } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; PageException = $null; Noise = $false; ReaderCode = $Code }
             $null = Set-LabPages
 
             $run = Invoke-Lab
@@ -536,6 +589,227 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             $thrown.Exception.Message | Should -Not -BeLike '*jc@*'
             $thrown.Exception.Message | Should -Not -BeLike '*contoso*'
             $thrown.Exception.Message | Should -Not -BeLike '*credentials*'
+        }
+
+        It 'prints the sections of the report, each after a blank line, with the lines of the listing and of the sites' {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab
+
+            $text = @($run.Text)
+            foreach ($heading in 'The listing', 'The sites', 'The checks') {
+                $at = [System.Array]::IndexOf($text, $heading)
+                $at | Should -BeGreaterThan 0 -Because $heading
+                $text[$at - 1] | Should -BeExactly '' -Because $heading
+            }
+
+            [System.Array]::IndexOf($text, 'The listing') | Should -BeLessThan ([System.Array]::IndexOf($text, 'The sites'))
+            [System.Array]::IndexOf($text, 'The sites') | Should -BeLessThan ([System.Array]::IndexOf($text, 'The checks'))
+            $format = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+            $text | Should -Contain '  Source: Csom'
+            $text | Should -Contain '  Filter of the server: (none)'
+            $text | Should -Contain '  Checkpoint: none to take up'
+            $text | Should -Contain '  Pages read from the tenant: 2, 5 sites; retries: 0'
+            $text | Should -Contain '  Sites returned: 5'
+            $text | Should -Contain '  Lock states: ReadOnly 4, Unlock 1'
+            $text | Should -Contain '  Templates (top 10): GROUP#0 3, SITEPAGEPUBLISHING#0 1, STS#3 1'
+            $text | Should -Contain '  Archive status: NotArchived 5'
+            $text | Should -Contain '  Connected to Teams: 2; channel sites: 0; hub sites: 1; with no group: 2'
+            $text | Should -Contain '  Size: 0.1 GB in all'
+            $text | Should -Contain "  Last change (UTC): oldest $($script:Now.AddDays(-5).ToString($format, [System.Globalization.CultureInfo]::InvariantCulture)), newest $($script:Now.AddDays(-1).ToString($format, [System.Globalization.CultureInfo]::InvariantCulture)); sites with no date: 0"
+            foreach ($index in 1..3) {
+                $text | Should -Contain ('    {0:x8}-0000-4000-8000-{1:x12}  {2}' -f $index, $index, $script:Now.AddDays(-$index).ToString($format, [System.Globalization.CultureInfo]::InvariantCulture))
+            }
+
+            @($text | Where-Object { $_ -like '    *-0000-4000-8000-*' }) | Should -HaveCount 3
+            @($text | Where-Object { $_ -match '^  Digest of the site IDs: [0-9a-f]{16}$' }) | Should -HaveCount 1
+        }
+
+        It 'reports one check for each thing that it looks at, in this order' {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab
+
+            @($run.Report.Checks | ForEach-Object { "$($_.Status) $($_.Name)" }) | Should -Be @(
+                'PASS listing-ended', 'PASS source', 'INFO resume', 'PASS listing-warnings', 'PASS unique-site-ids', 'PASS records-are-complete',
+                'PASS no-onedrive-site', 'PASS sizes', 'PASS group-sites-have-a-group', 'PASS dates')
+            (Get-LabCheck -Report $run.Report -Name 'unique-site-ids').Detail | Should -BeExactly '5 different site IDs for 5 sites.'
+            (Get-LabCheck -Report $run.Report -Name 'records-are-complete').Detail | Should -BeExactly 'Every site has a site ID, an https address, a template and a lock state.'
+            $run.Text | Should -Contain '  9 PASS, 0 FAIL, 1 INFO.'
+        }
+
+        It 'takes up a checkpoint that holds every page, reads no page from the tenant, and still reports' {
+            $null = Set-LabPages
+            $folder = Join-Path -Path $TestDrive -ChildPath 'all-pages-read'
+            $stopped = Invoke-Lab -Parameter @{ OutputFolder = $folder; StopAfterPages = 2 }
+
+            $resumed = Invoke-Lab -Parameter @{ OutputFolder = $folder }
+
+            $stopped.Report.Completed | Should -BeFalse
+            $resumed.Report.Completed | Should -BeTrue
+            $resumed.Report.Summary.PagesRead | Should -Be 0
+            $resumed.Report.Summary.PagesFromCheckpoint | Should -Be 2
+            $resumed.Report.Statistics.Sites | Should -Be 5
+            $resumed.Text | Should -Contain '  Pages read from the tenant: 0, 0 sites; retries: 0'
+            ($resumed.Text -join "`n") | Should -Match '  Time: [0-9,]+\.[0-9] s in all; a page took 0\.00 s on average and 0\.00 s at most;'
+        }
+
+        It 'writes the report as UTF-8 with no byte order mark' {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab
+
+            $bytes = [System.IO.File]::ReadAllBytes((Join-Path -Path $run.Folder -ChildPath 'listing-lab-report.json'))
+            $bytes.Length | Should -BeGreaterThan 3
+            ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -BeFalse
+            $bytes[0] | Should -Be ([byte][char]'{')
+        }
+
+        It 'prints the progress of the listing for the first three pages and every tenth, with the numbers written the same way whatever the culture, and says which pages came from the checkpoint' {
+            $records = @(1..1200 | ForEach-Object { New-LabRecord -Index $_ })
+            & $script:Module {
+                param($r)
+                $pages = [System.Collections.Generic.List[System.Object]]::new()
+                for ($i = 0; $i -lt 12; $i++) {
+                    $pages.Add(@($r[($i * 100)..($i * 100 + 99)]))
+                }
+
+                $script:StubData.Pages = $pages.ToArray()
+            } $records
+            $folder = Join-Path -Path $TestDrive -ChildPath 'progress'
+            $saved = [System.Globalization.CultureInfo]::CurrentCulture
+            try {
+                [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('fr-FR')
+                $first = Invoke-Lab -Parameter @{ OutputFolder = $folder; StopAfterPages = 2 }
+                $second = Invoke-Lab -Parameter @{ OutputFolder = $folder }
+            }
+            finally {
+                [System.Globalization.CultureInfo]::CurrentCulture = $saved
+            }
+
+            @($first.Text | Where-Object { $_ -like '  page *' }) | Should -HaveCount 2
+            @($second.Text | Where-Object { $_ -like '  page *' }) | Should -HaveCount 4
+            $lines = @($second.Text | Where-Object { $_ -like '  page *' })
+            $lines[0] | Should -BeExactly '  page 1: 100 sites so far (from the checkpoint)'
+            $lines[1] | Should -BeExactly '  page 2: 200 sites so far (from the checkpoint)'
+            $lines[2] | Should -Match '^  page 3: 300 sites so far \([0-9]+\.[0-9]{2} s\)$'
+            $lines[3] | Should -Match '^  page 10: 1,000 sites so far \([0-9]+\.[0-9]{2} s\)$'
+            ($second.Text -join "`n") | Should -Not -BeLike '*  page 4:*'
+            ($second.Text -join "`n") | Should -Not -BeLike '*  page 11:*'
+            ($second.Text -join "`n") | Should -Not -BeLike '*  page 12:*'
+            ($second.Text -join "`n") | Should -BeLike '*Pages read from the tenant: 10, 1,000 sites; retries: 0*'
+            ($second.Text -join "`n") | Should -Match '  Time: [0-9,]+\.[0-9] s in all; a page took [0-9]+\.[0-9]{2} s on average and [0-9]+\.[0-9]{2} s at most; [0-9,]+ sites/s'
+            ($second.Text -join "`n") | Should -BeLike '*  Left out by the listing: 0 OneDrive sites, 0 sites that came twice*'
+            ($second.Text -join "`n") | Should -BeLike '*  Sites returned: 1,200*'
+        }
+
+        It 'starts with what it is, what it runs on and what it was asked, and says that a window opens: <Name>' -ForEach @(
+            @{ Name = 'nothing but the defaults'; Parameter = @{}; Asked = 'Asked: source Auto, lock states ReadOnly, Unlock.' }
+            @{ Name = 'a source and a lock state in lowercase'; Parameter = @{ Source = 'csom'; LockState = 'readonly' }; Asked = 'Asked: source Csom, lock states ReadOnly.' }
+            @{ Name = 'a stop after some pages'; Parameter = @{ StopAfterPages = 1 }; Asked = 'Asked: source Auto, lock states ReadOnly, Unlock, stop after 1 page(s).' }
+            @{ Name = 'a restart'; Parameter = @{ Restart = $true }; Asked = 'Asked: source Auto, lock states ReadOnly, Unlock, restart.' }
+            @{ Name = 'a comparison'; Parameter = @{ CompareWithCmdlet = $true }; Asked = 'Asked: source Auto, lock states ReadOnly, Unlock, compare with the cmdlet.' }
+            @{ Name = 'all of them'; Parameter = @{ Source = 'Csom'; LockState = @('Unlock', 'ReadOnly'); StopAfterPages = 1; Restart = $true; CompareWithCmdlet = $true }; Asked = 'Asked: source Csom, lock states Unlock, ReadOnly, stop after 1 page(s), restart, compare with the cmdlet.' }
+        ) {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab -Parameter $Parameter
+
+            $run.Text[0] | Should -BeExactly 'SPSSiteLifecycle listing lab: it only reads.'
+            $run.Text[1] | Should -BeLike 'PowerShell * on *; PnP.PowerShell *; module *.'
+            $run.Text[2] | Should -BeExactly $Asked
+            $run.Text[3] | Should -BeExactly 'Signing in (interactive): a window opens.'
+        }
+
+        It 'lists the sites a second time for the comparison, says so, prints no progress for it, and adds what it wrote to the counts' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.Noise = $true; $script:StubData.Warn = $true }
+
+            $run = Invoke-Lab -Parameter @{ CompareWithCmdlet = $true }
+
+            ($run.Text -join "`n") | Should -BeLike '*Listing the sites a second time with Get-PnPTenantSite (the sign-in is asked again).*'
+            @($run.Text | Where-Object { $_ -like '  page 1:*' }) | Should -HaveCount 1
+            $run.Report.Summary.WarningCount | Should -Be 3
+            $run.Report.Summary.OutputCount | Should -Be 12
+            $run.Report.Compare.PagedSites | Should -Be 5
+            $run.Report.Compare.CmdletSites | Should -Be 5
+        }
+
+        It 'counts the warnings even when the session does not show them' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.Warn = $true }
+            $before = $global:WarningPreference
+            try {
+                $global:WarningPreference = 'SilentlyContinue'
+                $run = Invoke-Lab
+            }
+            finally {
+                $global:WarningPreference = $before
+            }
+
+            $run.Report.Summary.WarningCount | Should -Be 2
+        }
+
+        It 'tells the warnings and the other lines of output apart in what it says: <Name>' -ForEach @(
+            @{ Name = 'a warning only'; Noise = $false; Warn = $true; Line = '  Warnings of the listing: 2; other lines of output: 0 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 2 warning(s), not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
+            @{ Name = 'other lines only'; Noise = $true; Warn = $false; Line = '  Warnings of the listing: 0; other lines of output: 8 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 8 other line(s) of output, not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
+            @{ Name = 'both'; Noise = $true; Warn = $true; Line = '  Warnings of the listing: 2; other lines of output: 8 (not shown: their text can name the tenant, a filter or a site)'; Detail = 'The listing gave 2 warning(s) and 8 other line(s) of output, not shown: their text can name the tenant, a filter or a site. Run the Scan to read them.' }
+        ) {
+            $null = Set-LabPages
+            & $script:Module { param($n, $w) $script:StubData.Noise = $n; $script:StubData.Warn = $w } $Noise $Warn
+
+            $run = Invoke-Lab
+
+            $run.Text | Should -Contain $Line
+            (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Detail | Should -BeExactly $Detail
+        }
+
+        It 'says nothing of warnings and output when the listing gave none' {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab
+
+            ($run.Text -join "`n") | Should -Not -BeLike '*Warnings of the listing*'
+            (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Detail | Should -BeExactly 'The listing gave no warning and wrote nothing but its sites.'
+        }
+
+        It 'writes the report in an output folder that did not exist, whatever the source' {
+            $null = Set-LabPages
+            $folder = Join-Path -Path $TestDrive -ChildPath 'not-yet/there'
+
+            $run = Invoke-Lab -Parameter @{ Source = 'Cmdlet'; OutputFolder = $folder }
+
+            Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'listing-lab-report.json') | Should -BeTrue
+            $run.Report.Completed | Should -BeTrue
+        }
+
+        It 'tells each error of the table in its own words, and keeps the text of the error in a file only when the words do not say it all: <Name>' -ForEach @(
+            @{ Name = 'PnP.PowerShell is not installed'; Text = 'PnP.PowerShell is not installed. Install version 3 or later with: Install-Module -Name PnP.PowerShell -Scope CurrentUser (it needs PowerShell 7.4 or later).'; Words = 'The lab stopped: PnP.PowerShell is not installed (version 3 or later is needed). Error types: *'; File = $false }
+            @{ Name = 'PnP.PowerShell is too old'; Text = 'PnP.PowerShell 2.12.0 is too old: the tool needs version 3.0.0 or later. Update it with: Update-Module -Name PnP.PowerShell'; Words = 'The lab stopped: PnP.PowerShell 2.12.0 is too old (version 3 or later is needed). Error types: *'; File = $false }
+            @{ Name = 'PnP.PowerShell is loaded and too old'; Text = 'PnP.PowerShell 2.12.0 is loaded, and the tool needs version 3.0.0 or later. Start a new PowerShell session after updating it with: Update-Module -Name PnP.PowerShell'; Words = 'The lab stopped: PnP.PowerShell 2.12.0 is loaded and is too old: start a new session after updating it. Error types: *'; File = $false }
+            @{ Name = 'the sign-in failed'; Text = 'The sign-in to the admin site of the tenant failed: Synthetic text that names SyntheticPrivateBoard.'; Words = 'The lab stopped: The sign-in to the admin site of the tenant failed. Error types: *'; File = $true }
+            @{ Name = 'the sign-in gave no connection'; Text = 'The sign-in to the admin site of the tenant gave no connection. The calls that follow would use another one.'; Words = 'The lab stopped: The sign-in to the admin site of the tenant gave no connection. Error types: *'; File = $false }
+            @{ Name = 'the listing did not end'; Text = 'The listing did not end after 500000 pages, which is the most that it may have: it is asked again and again without reaching its end.'; Words = 'The lab stopped: The listing did not end after 500000 pages. Error types: *'; File = $false }
+            @{ Name = 'the paged call cannot be used'; Text = 'The paged listing was asked for and cannot be used: The cmdlet was asked for (Source Cmdlet).'; Words = 'The lab stopped: The paged call was asked for and cannot be used: The cmdlet was asked for (Source Cmdlet). Error types: *'; File = $false }
+            @{ Name = 'a site that came twice'; Text = "The site '11111111-2222-3333-4444-555555555555' came twice in the listing with another value for a field that guards it (Template). Start again."; Words = "The lab stopped: The site '11111111-2222-3333-4444-555555555555' came twice in the listing with another value for a field that guards it, so the tenant changed while it was read: start the listing again from the first page (Restart). Error types: *"; File = $false }
+            @{ Name = 'a text that is not in the table'; Text = 'Synthetic failure that names SyntheticPrivateBoard.'; Words = 'The lab stopped: an error whose text is not shown. Error types: *'; File = $true }
+        ) {
+            $null = Set-LabPages
+            & $script:Module { param($t) $script:StubData.OpenError = $t } $Text
+            $folder = Join-Path -Path $TestDrive -ChildPath ([System.Guid]::NewGuid().ToString('N'))
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab -Parameter @{ OutputFolder = $folder }
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike $Words
+            $thrown.Exception.Message | Should -Not -BeLike '*SyntheticPrivateBoard*'
+            ($thrown.Exception.Message -like '*listing-lab-error.txt in the output folder*') | Should -Be $File
+            Test-Path -LiteralPath (Join-Path -Path $folder -ChildPath 'listing-lab-error.txt') | Should -Be $File
         }
 
         It 'says in its own words that the tenant is refused, and that nothing was written' {
@@ -735,7 +1009,12 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
         It 'names the type of an exception when it is the framework or the library, and not when it is any other: <Name>' -ForEach @(
             @{ Name = 'a type of the framework'; Make = { [System.IO.FileNotFoundException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by FileNotFoundException.*' }
             @{ Name = 'a type of PowerShell'; Make = { [System.Management.Automation.ItemNotFoundException]::new('x') }; Expected = '*caused by ItemNotFoundException.*' }
-            @{ Name = 'a type that is named like a site'; Make = { [SyntheticPrivateBoardException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
+            @{ Name = 'a type that is named like a site, in a namespace of Microsoft'; Make = { [Microsoft.OfflineLab.SyntheticPrivateBoardException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
+            @{ Name = 'a type that is named like a site, in a namespace of System'; Make = { [System.OfflineLab.SyntheticPrivateBoardException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
+            @{ Name = 'a type that is named like a site, in a namespace of PnP'; Make = { [PnP.OfflineLab.SyntheticPrivateBoardException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
+            @{ Name = 'a type that is named like a site, in a namespace of Newtonsoft'; Make = { [Newtonsoft.OfflineLab.SyntheticPrivateBoardException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
+            @{ Name = 'a type that is named like a site, in no namespace'; Make = { [SyntheticPrivateBoardException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
+            @{ Name = 'a type that derives from a known type, which is not the known type'; Make = { [SyntheticPrivateBoardDerivedException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
         ) {
             $null = Set-LabPages
             & $script:Module { param($e) $script:StubData.PageException = $e } (& $Make)
@@ -830,6 +1109,114 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
 
             $run.Report.Statistics.Templates.$Expected | Should -BeGreaterOrEqual 1
             Get-LabEverything -Run $run | Should -Not -BeLike '*contoso*'
+        }
+
+        It 'shows nothing that the listing writes outside its records, and counts it, while it keeps its own progress lines' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.Noise = $true; $script:StubData.Warn = $true }
+
+            $run = Invoke-Lab
+
+            Get-LabEverything -Run $run | Should -Not -BeLike '*SyntheticPrivateBoard*'
+            Get-LabEverything -Run $run | Should -Not -BeLike '*syntheticowner*'
+            ($run.Text -join "`n") | Should -BeLike '*page 1: 3 sites so far*'
+            ($run.Text -join "`n") | Should -BeLike '*page 2: 5 sites so far*'
+            $run.Report.Summary.WarningCount | Should -Be 2
+            $run.Report.Summary.OutputCount | Should -Be 8
+            (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Detail | Should -BeLike '*2 warning(s) and 8 other line(s) of output, not shown*'
+            (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Status | Should -BeExactly 'INFO'
+            $run.Warnings | Should -HaveCount 0
+            $run.Debug | Should -HaveCount 0
+            $run.Errors | Should -HaveCount 0
+        }
+
+        It 'counts no line of output when the listing writes none' {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab
+
+            $run.Report.Summary.OutputCount | Should -Be 0
+            (Get-LabCheck -Report $run.Report -Name 'listing-warnings').Status | Should -BeExactly 'PASS'
+        }
+
+        It 'shows the version of PowerShell by its numbers, and the system by a word and a number, whatever the label that they carry' {
+            $null = Set-LabPages
+            $saved = $PSVersionTable.PSVersion
+            try {
+                $PSVersionTable.PSVersion = [System.Management.Automation.SemanticVersion]::new(7, 6, 7, 'SyntheticPrivateBoard')
+                $run = Invoke-Lab
+            }
+            finally {
+                $PSVersionTable.PSVersion = $saved
+            }
+
+            Get-LabEverything -Run $run | Should -Not -BeLike '*SyntheticPrivateBoard*'
+            $run.Report.Environment.PowerShell | Should -BeExactly '7.6.7 (pre-release)'
+            $run.Report.Environment.OS | Should -Match '^(Windows|macOS|Linux|FreeBSD|another system) [0-9]+(\.[0-9]+){1,3}$'
+            $run.Report.Environment.Module | Should -Match '^[0-9]+(\.[0-9]+){1,3}$'
+            $run.Report.Environment.PnPPowerShell | Should -Match '^([0-9]+(\.[0-9]+){1,3}|not found)$'
+            ($run.Text -join "`n") | Should -BeLike "*PowerShell 7.6.7 (pre-release) on $($run.Report.Environment.OS);*"
+        }
+
+        It 'shows a version of PowerShell that has no label as its three numbers' {
+            $null = Set-LabPages
+            $saved = $PSVersionTable.PSVersion
+            try {
+                $PSVersionTable.PSVersion = [System.Management.Automation.SemanticVersion]::new(7, 4, 22)
+                $run = Invoke-Lab
+            }
+            finally {
+                $PSVersionTable.PSVersion = $saved
+            }
+
+            $run.Report.Environment.PowerShell | Should -BeExactly '7.4.22'
+        }
+
+        It 'says in its own words what is wrong with a parameter, and never gives the value back: <Name>' -ForEach @(
+            @{ Name = 'a source that is not one'; Parameter = @{ Source = 'SyntheticPrivateBoard' }; Rule = 'Source must be Auto, Csom or Cmdlet' }
+            @{ Name = 'a lock state that is not one'; Parameter = @{ LockState = @('ReadOnly', 'SyntheticPrivateBoard') }; Rule = 'LockState must be ReadOnly, Unlock, or both' }
+            @{ Name = 'no lock state'; Parameter = @{ LockState = @() }; Rule = 'LockState must be ReadOnly, Unlock, or both' }
+            @{ Name = 'a client ID that is an account'; Parameter = @{ ClientId = 'syntheticowner@fabrikam.example' }; Rule = 'ClientId must be the application (client) ID of the app registration: a GUID' }
+            @{ Name = 'a number of pages that is a word'; Parameter = @{ StopAfterPages = 'SyntheticPrivateBoard' }; Rule = 'StopAfterPages must be a whole number from 0 to 100000' }
+            @{ Name = 'a number of pages that is too large'; Parameter = @{ StopAfterPages = 100001 }; Rule = 'StopAfterPages must be a whole number from 0 to 100000' }
+            @{ Name = 'a number of pages below zero'; Parameter = @{ StopAfterPages = -1 }; Rule = 'StopAfterPages must be a whole number from 0 to 100000' }
+            @{ Name = 'a number of sites that is a word'; Parameter = @{ ExpectedSites = 'syntheticowner' }; Rule = 'ExpectedSites must be a whole number from 0 to 100000000' }
+            @{ Name = 'a number of sites that is too large'; Parameter = @{ ExpectedSites = 100000001 }; Rule = 'ExpectedSites must be a whole number from 0 to 100000000' }
+        ) {
+            $null = Set-LabPages
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab -Parameter $Parameter
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike "The lab stopped: $Rule. Error types: ArgumentException.*"
+            $thrown.Exception.Message | Should -Not -BeLike '*SyntheticPrivateBoard*'
+            $thrown.Exception.Message | Should -Not -BeLike '*syntheticowner*'
+            $thrown.Exception.Message | Should -Not -BeLike '*fabrikam*'
+            $thrown.Exception.Message | Should -Not -BeLike '*listing-lab-error*'
+            Get-StubLog | Should -HaveCount 0
+        }
+
+        It 'accepts the parameters in the forms that a person writes them, and shows them in the spelling of the lab: <Name>' -ForEach @(
+            @{ Name = 'a source in lowercase'; Parameter = @{ Source = 'csom' }; Check = { $r.Report.Asked.Source | Should -BeExactly 'Csom' } }
+            @{ Name = 'a source in capitals'; Parameter = @{ Source = 'CMDLET' }; Check = { $r.Report.Asked.Source | Should -BeExactly 'Cmdlet' } }
+            @{ Name = 'a lock state in lowercase, given twice'; Parameter = @{ LockState = @('readonly', 'READONLY') }; Check = { @($r.Report.Asked.LockState) | Should -Be @('ReadOnly') } }
+            @{ Name = 'a client ID with no hyphens'; Parameter = @{ ClientId = '11111111222233334444555555555555' }; Check = { $r.Report.Completed | Should -BeTrue } }
+            @{ Name = 'a client ID with braces'; Parameter = @{ ClientId = '{11111111-2222-3333-4444-555555555555}' }; Check = { $r.Report.Completed | Should -BeTrue } }
+            @{ Name = 'a number of pages as a text'; Parameter = @{ StopAfterPages = '1' }; Check = { $r.Report.Asked.StopAfterPages | Should -Be 1 } }
+            @{ Name = 'a number of sites'; Parameter = @{ ExpectedSites = 5 }; Check = { $r.Report.Asked.ExpectedSites | Should -Be 5 } }
+            @{ Name = 'the largest numbers'; Parameter = @{ StopAfterPages = 100000; ExpectedSites = 100000000 }; Check = { $r.Report.Asked.StopAfterPages | Should -Be 100000 } }
+        ) {
+            $null = Set-LabPages
+
+            $r = Invoke-Lab -Parameter $Parameter
+
+            & $Check
+            Get-LabEverything -Run $r | Should -Not -BeLike '*11111111-2222-3333-4444-555555555555*'
         }
 
         It 'counts a value that is not a name apart from a value that is missing, for the template, the lock state and the archive status' {

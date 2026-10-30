@@ -28,24 +28,30 @@
     know. What is shown comes from lists that are written in the script: the reason why a checkpoint was not taken up is told
     in one of a few fixed sentences (its code is StartCode in the report); the reason why the paged call cannot be used is shown
     when it is one of the sentences that the tool writes, and as a reason that the script does not know otherwise; the warnings
-    of the listing are counted and not shown, and its verbose lines are not shown. The values of a site are shown only when
-    they are words of a list: the words that SharePoint writes for a lock state and an archive status, the web templates that it
-    has (in its spelling, with the number), an ID only when it is one. The text of an error is never shown: the lab says the
-    sentence of this repository that the error is, if it is one of a few, the type of each exception when it is one of the
-    framework or of a library, the codes that its text holds (an HTTP status, an AADSTS code) and the properties of a site that
-    it names when they are ones that the tool reads, and keeps the text in listing-lab-error.txt in OutputFolder. The
-    checkpoint and that file, however, name the tenant and the sites: share the report, not that folder. PowerShell also keeps
-    the original errors in $Error: do not paste them either.
+    of the listing are counted and not shown, and so is anything else that the listing and the libraries write (information,
+    host, debug and error lines), which is counted too. The versions are shown by their numbers, and the system by its name.
+    The values of a site are shown only when they are words of a list: the words that SharePoint writes for a lock state and an
+    archive status, the web templates that it has (in its spelling, with the number), an ID only when it is one. The text of an
+    error is never shown: the lab says the sentence of this repository that the error is, if it is one of a few, the type of
+    each exception when it is on a list of the types of the framework and of the libraries that the tool uses (any other type is
+    not named), the codes that its text holds (an HTTP status, an AADSTS code) and the properties of a site that it names when
+    they are ones that the tool reads, and keeps the text in listing-lab-error.txt in OutputFolder. The checkpoint and that
+    file, however, name the tenant and the sites: share the report, not that folder. PowerShell also keeps the original errors
+    in $Error: do not paste them either.
+
+    What you type is checked by the script, and when a value is not right the lab says which parameter and what it takes, without
+    the value. PowerShell does not do that when it refuses a name of parameter that does not exist, or a value that goes with no
+    parameter: it gives back what was typed, so do not paste that line.
 
     .PARAMETER TenantName
     The name of the tenant, in lowercase, as in <name>.onmicrosoft.com. The Microsoft corporate tenants are refused.
 
     .PARAMETER ClientId
-    The application (client) ID of the Entra ID app registration for the interactive sign-in.
+    The application (client) ID of the Entra ID app registration for the interactive sign-in: a GUID.
 
     .PARAMETER LockState
-    The lock states that the Scan lists. With ReadOnly alone, the server filters the listing; with both, it gives the whole
-    tenant. Default: both.
+    The lock states that the Scan lists: ReadOnly, Unlock, or both. With ReadOnly alone, the server filters the listing; with
+    both, it gives the whole tenant. Default: both.
 
     .PARAMETER Source
     Auto (the paged call, and the cmdlet when the paged call is not there), Csom (the paged call only) or Cmdlet.
@@ -56,7 +62,8 @@
     holds its text: share the report, never this folder.
 
     .PARAMETER StopAfterPages
-    Stops after that many pages read from the tenant in this run, and leaves the checkpoint. 0 (the default) does not stop.
+    Stops after that many pages read from the tenant in this run, and leaves the checkpoint. A whole number from 0 to 100000;
+    0 (the default) does not stop.
 
     .PARAMETER Restart
     Ignores the checkpoint and starts again.
@@ -66,7 +73,8 @@
     first listing in memory: use it on a tenant of some thousand sites.
 
     .PARAMETER ExpectedSites
-    The number of sites that the tenant has, if you know it. 0 (the default) means that it is not given.
+    The number of sites that the tenant has, if you know it: a whole number from 0 to 100000000. 0 (the default) means that
+    it is not given.
 
     .PARAMETER PassThru
     Gives the report as an object.
@@ -87,16 +95,14 @@ param
     $TenantName,
 
     [Parameter(Mandatory = $true)]
-    [System.Guid]
+    [System.String]
     $ClientId,
 
     [Parameter()]
-    [ValidateSet('ReadOnly', 'Unlock')]
     [System.String[]]
     $LockState = @('ReadOnly', 'Unlock'),
 
     [Parameter()]
-    [ValidateSet('Auto', 'Csom', 'Cmdlet')]
     [System.String]
     $Source = 'Auto',
 
@@ -105,9 +111,8 @@ param
     $OutputFolder = (Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath 'SPSSiteLifecycle-lab'),
 
     [Parameter()]
-    [ValidateRange(0, 100000)]
-    [System.Int32]
-    $StopAfterPages = 0,
+    [System.String]
+    $StopAfterPages = '0',
 
     [Parameter()]
     [System.Management.Automation.SwitchParameter]
@@ -118,9 +123,8 @@ param
     $CompareWithCmdlet,
 
     [Parameter()]
-    [ValidateRange(0, 100000000)]
-    [System.Int32]
-    $ExpectedSites = 0,
+    [System.String]
+    $ExpectedSites = '0',
 
     [Parameter()]
     [System.Management.Automation.SwitchParameter]
@@ -203,12 +207,19 @@ $script:StartWords = @{
     'too-old'       = 'the checkpoint is too old'
 }
 
+# The code, in the spelling of the list: a hash table finds a key whatever the case, and the lab shows what the list says.
 function ConvertTo-LabCode {
     param($Code)
 
     $text = "$Code"
-    if ($text -eq '' -or $script:StartWords.ContainsKey($text)) {
-        return $text
+    if ($text.Length -eq 0) {
+        return ''
+    }
+
+    foreach ($known in $script:StartWords.Keys) {
+        if ([System.String]::Equals($text, $known, [System.StringComparison]::Ordinal)) {
+            return $known
+        }
     }
 
     'unknown'
@@ -428,16 +439,25 @@ function Format-LabValue {
 
 # What can be said of an error without its text. The text of an error, whoever wrote it, can name the tenant, a site, an account or
 # another tenant (the message of a sign-in carries the one of the library), and no cleaning can find what it does not know. So the
-# lab says only: the sentences of this repository that are made of fixed words and numbers (the table below, each by the form
-# that it has from its first letter), the type of each exception when it is one of the framework or of a library, the codes that the
-# text holds (an HTTP status, an AADSTS code: letters and digits of a code, never a name), and the names of the properties of a site
-# that it is about when they are ones that the tool reads. The text itself is kept in a file of the output folder, which holds the
-# checkpoint and is not to be shared either.
+# lab says only: the sentences of this repository that are made of fixed words and numbers (the table below, each by the form that
+# it has from its first letter), the type of each exception when it is on a list, the codes that the text holds (an HTTP status, an
+# AADSTS code: letters and digits of a code, never a name), and the names of the properties of a site that it is about when they
+# are ones that the tool reads. The text itself is kept in a file of the output folder, which holds the checkpoint and is not to be
+# shared either.
 $script:KnownProperties = @(
     'Url', 'SiteId', 'Title', 'Template', 'LockState', 'GroupId', 'IsHubSite', 'IsTeamsConnected', 'IsTeamsChannelConnected', 'ArchiveStatus',
     'StorageUsage', 'StorageUsageCurrent', 'LastContentModifiedDate', 'Filter', 'IncludeDetail', 'IncludePersonalSite', 'StartIndex', 'NextStartIndexFromSharePoint'
 )
+# What is said of a value that is not right for a parameter: the name of the parameter and what it takes, never the value.
+$script:ParameterRules = @{
+    ClientId       = 'ClientId must be the application (client) ID of the app registration: a GUID'
+    Source         = 'Source must be Auto, Csom or Cmdlet'
+    LockState      = 'LockState must be ReadOnly, Unlock, or both'
+    StopAfterPages = 'StopAfterPages must be a whole number from 0 to 100000'
+    ExpectedSites  = 'ExpectedSites must be a whole number from 0 to 100000000'
+}
 $script:KnownErrors = @(
+    @{ Pattern = '\ALabParameter: (?<name>ClientId|Source|LockState|StopAfterPages|ExpectedSites)\z'; Detail = $false; Say = { param($match) $script:ParameterRules[$match.Groups['name'].Value] } }
     @{ Pattern = "\ATenantName: the tenant '[^']*' is refused\."; Detail = $false; Say = { 'The tenant is refused: the tool never runs on the Microsoft corporate tenants or on a tenant that RefusedTenants lists' } }
     @{ Pattern = '\APnP\.PowerShell is not installed\.'; Detail = $false; Say = { 'PnP.PowerShell is not installed (version 3 or later is needed)' } }
     @{ Pattern = '\APnP\.PowerShell (?<version>[0-9][0-9.]*) is too old'; Detail = $false; Say = { param($match) "PnP.PowerShell $($match.Groups['version'].Value) is too old (version 3 or later is needed)" } }
@@ -470,14 +490,43 @@ function Get-LabExceptionChain {
     [PSCustomObject]@{ Items = $items.ToArray(); Truncated = $truncated }
 }
 
-# The name of the type of an exception, when the type is one of the framework or of a library that the tool uses: any other type
-# can be named like a site or a person.
+# The types of exception that the lab names, each by its full name: the ones of the framework, of PowerShell and of the libraries that
+# the tool uses. A type that is not on the list is not named, whatever its namespace: a library, or a module that is loaded, can
+# have a type that is named like a site or a person, in a namespace that begins like one of the framework.
+$script:KnownExceptionTypes = @(
+    'System.Exception', 'System.AggregateException', 'System.ArgumentException', 'System.ArgumentNullException', 'System.ArgumentOutOfRangeException',
+    'System.BadImageFormatException', 'System.FormatException', 'System.InvalidCastException', 'System.InvalidOperationException',
+    'System.NotImplementedException', 'System.NotSupportedException', 'System.NullReferenceException', 'System.ObjectDisposedException',
+    'System.OperationCanceledException', 'System.OutOfMemoryException', 'System.TimeoutException', 'System.TypeLoadException',
+    'System.UnauthorizedAccessException', 'System.Collections.Generic.KeyNotFoundException', 'System.IO.DirectoryNotFoundException',
+    'System.IO.FileLoadException', 'System.IO.FileNotFoundException', 'System.IO.IOException', 'System.Net.WebException',
+    'System.Net.Http.HttpRequestException', 'System.Net.Sockets.SocketException', 'System.Reflection.TargetInvocationException',
+    'System.Security.SecurityException', 'System.Security.Authentication.AuthenticationException', 'System.Text.Json.JsonException',
+    'System.Threading.Tasks.TaskCanceledException',
+    'System.Management.Automation.ActionPreferenceStopException', 'System.Management.Automation.CommandNotFoundException',
+    'System.Management.Automation.ItemNotFoundException', 'System.Management.Automation.MethodException',
+    'System.Management.Automation.MethodInvocationException', 'System.Management.Automation.ParameterBindingException',
+    'System.Management.Automation.ParameterBindingValidationException', 'System.Management.Automation.ParentContainsErrorRecordException',
+    'System.Management.Automation.PSArgumentException', 'System.Management.Automation.PSInvalidOperationException',
+    'System.Management.Automation.PSNotSupportedException', 'System.Management.Automation.RuntimeException',
+    'System.Management.Automation.ValidationMetadataException',
+    'Microsoft.Identity.Client.MsalClientException', 'Microsoft.Identity.Client.MsalException', 'Microsoft.Identity.Client.MsalServiceException',
+    'Microsoft.Identity.Client.MsalUiRequiredException',
+    'Microsoft.SharePoint.Client.ClientRequestException', 'Microsoft.SharePoint.Client.CollectionNotInitializedException',
+    'Microsoft.SharePoint.Client.PropertyOrFieldNotInitializedException', 'Microsoft.SharePoint.Client.ServerException',
+    'Microsoft.SharePoint.Client.ServerUnauthorizedAccessException',
+    'Newtonsoft.Json.JsonReaderException', 'Newtonsoft.Json.JsonSerializationException'
+)
+
+# The name of the type of an exception when the type is on the list, taken from the list, and (another type) otherwise.
 function Get-LabTypeName {
     param($Exception)
 
-    $type = $Exception.GetType()
-    if ([System.Text.RegularExpressions.Regex]::IsMatch("$($type.FullName)", '\A(?:System|Microsoft|PnP|Newtonsoft)\.', [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
-        return $type.Name
+    $fullName = $Exception.GetType().FullName
+    foreach ($known in $script:KnownExceptionTypes) {
+        if ([System.String]::Equals($fullName, $known, [System.StringComparison]::Ordinal)) {
+            return $known.Substring($known.LastIndexOf('.') + 1)
+        }
     }
 
     '(another type)'
@@ -526,7 +575,7 @@ function ConvertTo-LabErrorSummary {
 
         $types = if ($names.Count -gt 0) { $names -join ', caused by ' } else { '(none)' }
         if ($chain.Truncated) { $types += ', caused by more (the chain is cut)' }
-        $line = "$sentence. Error types: $types."
+        $line = "$($sentence.TrimEnd('.')). Error types: $types."
         if ($codes.Count -gt 0) { $line += " Codes in its text: $($codes -join ', ')." }
         if ($properties.Count -gt 0) { $line += " Properties named: $($properties -join ', ')." }
         [PSCustomObject]@{ Text = $line; Detail = $detail }
@@ -577,7 +626,7 @@ function Save-LabErrorDetail {
 # The summary of the listing as the report holds it: the fields that are counts and times, and the ones that are text, each a word or a
 # sentence of a list. The reason why a checkpoint was not taken up is its code, and the text of the module is left out.
 function ConvertTo-LabSummary {
-    param($Summary, [System.Int32]$Warning)
+    param($Summary, [System.Int32]$Warning, [System.Int32]$Output)
 
     [PSCustomObject][ordered]@{
         Source              = ConvertTo-LabWord -Text $Summary.Source -Known 'Csom', 'Cmdlet'
@@ -600,6 +649,7 @@ function ConvertTo-LabSummary {
         PageSecondsTotal    = $Summary.PageSecondsTotal
         PageSecondsMax      = $Summary.PageSecondsMax
         WarningCount        = $Warning
+        OutputCount         = $Output
     }
 }
 
@@ -737,19 +787,22 @@ function Invoke-LabListing {
     )
 
     $summary = & $Module { Initialize-SPSLifecycleListingSummary }
-    $state = [PSCustomObject]@{ Pages = 0; Stop = $PagesToRead; Print = $Print; Preference = $InformationPreference; Warnings = 0 }
+
+    # The lines that the lab writes while the listing runs carry a tag that the listing cannot know: any other information record is
+    # one of the listing or of a library, and is counted.
+    $tag = [System.Guid]::NewGuid().ToString('N')
+    $state = [PSCustomObject]@{ Pages = 0; Stop = $PagesToRead; Print = $Print; Warnings = 0; Other = 0; Tag = $tag }
 
     # A closure is cut off from the functions of this script: it holds only what it is given, and cmdlets.
     $onProgress = {
         param($Progress)
-        $InformationPreference = $state.Preference
         if (-not $Progress.FromCheckpoint) {
             $state.Pages++
         }
 
         if ($state.Print -and ($Progress.Pages -le 3 -or ($Progress.Pages % 10) -eq 0)) {
             $how = if ($Progress.FromCheckpoint) { 'from the checkpoint' } else { $Progress.PageSeconds.ToString('0.00', [System.Globalization.CultureInfo]::InvariantCulture) + ' s' }
-            Write-Information -MessageData ('  page {0}: {1} sites so far ({2})' -f $Progress.Pages, $Progress.SitesReturned.ToString('N0', [System.Globalization.CultureInfo]::InvariantCulture), $how)
+            Write-Information -MessageData ('  page {0}: {1} sites so far ({2})' -f $Progress.Pages, $Progress.SitesReturned.ToString('N0', [System.Globalization.CultureInfo]::InvariantCulture), $how) -Tags $state.Tag
         }
 
         if ($state.Stop -gt 0 -and $state.Pages -ge $state.Stop) {
@@ -764,16 +817,22 @@ function Invoke-LabListing {
 
     $completed = $false
     try {
-        # The warnings and the verbose lines of the listing can name the tenant, a filter or a site: the warnings are counted, and
-        # neither is shown.
+        # What the listing and the libraries write, other than the sites, can name the tenant, a filter or a site: the warnings, and the
+        # information, host, debug and error lines, are counted and not shown, and the verbose lines are not written.
         & $Module {
             param($p)
             $WarningPreference = 'Continue'
             $VerbosePreference = 'SilentlyContinue'
             Get-SPSLifecycleTenantSite @p
-        } $parameters 3>&1 | ForEach-Object {
+        } $parameters 2>&1 3>&1 5>&1 6>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.WarningRecord]) {
                 $state.Warnings++
+            }
+            elseif ($_ -is [System.Management.Automation.InformationRecord] -and $_.Tags -contains $state.Tag) {
+                Write-LabLine -Text "$($_.MessageData)"
+            }
+            elseif ($_ -is [System.Management.Automation.InformationRecord] -or $_ -is [System.Management.Automation.ErrorRecord] -or $_ -is [System.Management.Automation.DebugRecord] -or $_ -is [System.Management.Automation.VerboseRecord]) {
+                $state.Other++
             }
             else {
                 & $OnRecord $_
@@ -788,7 +847,7 @@ function Invoke-LabListing {
         }
     }
 
-    [PSCustomObject]@{ Summary = $summary; Completed = $completed; Pages = $state.Pages; Warnings = $state.Warnings }
+    [PSCustomObject]@{ Summary = $summary; Completed = $completed; Pages = $state.Pages; Warnings = $state.Warnings; Output = $state.Other }
 }
 
 function Compare-LabListing {
@@ -876,6 +935,84 @@ function Compare-LabListing {
     }
 }
 
+# What was typed for a parameter is checked here, and not by the parameter itself: when its own check fails, PowerShell gives the
+# value back as it was typed, in a message that is not the lab's. The error that is thrown here names the parameter and nothing of the
+# value (see ParameterRules), and the words that go on in the report are the ones of the lab, not the ones that were typed.
+function Get-LabParameterError {
+    param([ValidateSet('ClientId', 'Source', 'LockState', 'StopAfterPages', 'ExpectedSites')][System.String]$Name)
+
+    [System.ArgumentException]::new("LabParameter: $Name")
+}
+
+# The name of the system, from a list: the description that .NET gives is the text of the kernel.
+function Get-LabPlatformName {
+    foreach ($candidate in @(
+            @{ Name = 'Windows'; Platform = [System.Runtime.InteropServices.OSPlatform]::Windows }
+            @{ Name = 'macOS'; Platform = [System.Runtime.InteropServices.OSPlatform]::OSX }
+            @{ Name = 'Linux'; Platform = [System.Runtime.InteropServices.OSPlatform]::Linux }
+            @{ Name = 'FreeBSD'; Platform = [System.Runtime.InteropServices.OSPlatform]::FreeBSD }
+        )) {
+        if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($candidate.Platform)) {
+            return $candidate.Name
+        }
+    }
+
+    'another system'
+}
+
+# The word of a list that was typed, in the spelling of the list, whatever the case that was typed; nothing when it is none of them.
+function Get-LabParameterWord {
+    param([System.String]$Text, [System.String[]]$Known)
+
+    foreach ($word in $Known) {
+        if ([System.String]::Equals($Text, $word, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $word
+        }
+    }
+
+    $null
+}
+
+function ConvertTo-LabWholeNumber {
+    param($Text, [System.Int64]$Maximum, [System.String]$Name)
+
+    $number = [System.Int64]0
+    if (-not [System.Int64]::TryParse("$Text", [System.Globalization.NumberStyles]::None, $invariant, [ref]$number) -or $number -gt $Maximum) {
+        throw (Get-LabParameterError -Name $Name)
+    }
+
+    [System.Int32]$number
+}
+
+$clientGuid = [System.Guid]::Empty
+if (-not [System.Guid]::TryParse($ClientId, [ref]$clientGuid)) {
+    throw (Get-LabParameterError -Name ClientId)
+}
+
+$sourceName = Get-LabParameterWord -Text $Source -Known 'Auto', 'Csom', 'Cmdlet'
+if ($null -eq $sourceName) {
+    throw (Get-LabParameterError -Name Source)
+}
+
+$lockStates = [System.Collections.Generic.List[System.String]]::new()
+foreach ($typed in @($LockState)) {
+    $lockStateName = Get-LabParameterWord -Text "$typed" -Known 'ReadOnly', 'Unlock'
+    if ($null -eq $lockStateName) {
+        throw (Get-LabParameterError -Name LockState)
+    }
+
+    if (-not $lockStates.Contains($lockStateName)) {
+        $lockStates.Add($lockStateName)
+    }
+}
+
+if ($lockStates.Count -eq 0) {
+    throw (Get-LabParameterError -Name LockState)
+}
+
+$pagesLimit = ConvertTo-LabWholeNumber -Text $StopAfterPages -Maximum 100000 -Name StopAfterPages
+$sitesExpected = ConvertTo-LabWholeNumber -Text $ExpectedSites -Maximum 100000000 -Name ExpectedSites
+
 # The module of the repository. A copy that is already loaded from this very folder is used as it is.
 $manifest = (Resolve-Path -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '../../src/Modules/SPSSiteLifecycle.Common/SPSSiteLifecycle.Common.psd1')).ProviderPath
 $moduleFolder = [System.IO.Path]::GetDirectoryName($manifest)
@@ -895,19 +1032,28 @@ $setting = & $module {
         OutputFolder   = $path
         Scan           = [PSCustomObject]@{ LockStates = @($states) }
     }
-} $TenantName $ClientId $folder $LockState
+} $TenantName $clientGuid $folder $lockStates.ToArray()
 & $module { param($s) Assert-SPSLifecycleTenantAllowed -Setting $s } $setting
 
 $installed = @(Get-Module -Name 'PnP.PowerShell' -ListAvailable | Sort-Object -Property Version -Descending) | Select-Object -First 1
+
+# The versions by their numbers and the system by its name and a number: a version of PowerShell can carry a label of a pre-release,
+# and the description of the system that .NET gives is the text of its kernel, and neither is a text that the lab can vouch for.
+$psVersion = $PSVersionTable.PSVersion
+$powerShellText = '{0}.{1}.{2}' -f $psVersion.Major.ToString($invariant), $psVersion.Minor.ToString($invariant), $psVersion.Patch.ToString($invariant)
+if (-not [System.String]::IsNullOrEmpty($psVersion.PreReleaseLabel)) {
+    $powerShellText += ' (pre-release)'
+}
+
 $environment = [PSCustomObject][ordered]@{
-    PowerShell    = $PSVersionTable.PSVersion.ToString()
-    OS            = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+    PowerShell    = $powerShellText
+    OS            = "$(Get-LabPlatformName) $([System.Environment]::OSVersion.Version.ToString())"
     Module        = $module.Version.ToString()
     PnPPowerShell = if ($null -ne $installed) { $installed.Version.ToString() } else { 'not found' }
 }
 
-$asked = "source $Source, lock states $($LockState -join ', ')"
-if ($StopAfterPages -gt 0) { $asked += ", stop after $StopAfterPages page(s)" }
+$asked = "source $sourceName, lock states $($lockStates -join ', ')"
+if ($pagesLimit -gt 0) { $asked += ", stop after $pagesLimit page(s)" }
 if ($Restart) { $asked += ', restart' }
 if ($CompareWithCmdlet) { $asked += ', compare with the cmdlet' }
 Write-LabLine 'SPSSiteLifecycle listing lab: it only reads.'
@@ -918,7 +1064,7 @@ Write-LabLine 'Signing in (interactive): a window opens.'
 # The first listing: the one that is checked.
 $statistic = Initialize-LabStatistic
 $paged = if ($CompareWithCmdlet) { @{} } else { $null }
-$main = Invoke-LabListing -Module $module -Setting $setting -ListingSource $Source -RestartListing ([System.Boolean]$Restart) -PagesToRead $StopAfterPages -Print $true -OnRecord {
+$main = Invoke-LabListing -Module $module -Setting $setting -ListingSource $sourceName -RestartListing ([System.Boolean]$Restart) -PagesToRead $pagesLimit -Print $true -OnRecord {
     param($record)
     Add-LabRecord -Statistic $statistic -Record $record
     if ($null -ne $paged) {
@@ -927,6 +1073,7 @@ $main = Invoke-LabListing -Module $module -Setting $setting -ListingSource $Sour
 }
 $summary = $main.Summary
 $warningCount = $main.Warnings
+$outputCount = $main.Output
 
 # The comparison: the same sites with Get-PnPTenantSite.
 $compare = $null
@@ -948,6 +1095,7 @@ if ($CompareWithCmdlet) {
             $other["$($record.SiteId)"] = $record
         }
         $warningCount += $second.Warnings
+        $outputCount += $second.Output
         $compare = Compare-LabListing -Paged $paged -Cmdlet $other
     }
 }
@@ -980,7 +1128,7 @@ $statistics = [PSCustomObject][ordered]@{
 
 # The summary that the report holds, and the only one that is printed: its text is from lists, and the reason why a checkpoint was
 # not taken up is a code, told with the words of this script.
-$safeSummary = ConvertTo-LabSummary -Summary $summary -Warning $warningCount
+$safeSummary = ConvertTo-LabSummary -Summary $summary -Warning $warningCount -Output $outputCount
 $sourceText = $safeSummary.Source
 if ($safeSummary.FallbackReason) { $sourceText += " ($($safeSummary.FallbackReason))" }
 $filterText = if ($safeSummary.Filter) { $safeSummary.Filter } else { '(none)' }
@@ -1005,8 +1153,8 @@ Write-LabLine "  Checkpoint: $checkpointText"
 Write-LabLine "  Pages read from the tenant: $(Format-LabNumber $pagesInThisRun), $(Format-LabNumber $summary.SitesRead) sites; retries: $($summary.Retries)"
 Write-LabLine "  Time: $(Format-LabNumber $summary.ElapsedSeconds 1) s in all; a page took $(Format-LabNumber $averagePage 2) s on average and $(Format-LabNumber $summary.PageSecondsMax 2) s at most; $(Format-LabNumber $rate) sites/s"
 Write-LabLine "  Left out by the listing: $(Format-LabNumber $summary.OneDriveDropped) OneDrive sites, $(Format-LabNumber $summary.DuplicatesDropped) sites that came twice"
-if ($warningCount -gt 0) {
-    Write-LabLine "  Warnings of the listing: $(Format-LabNumber $warningCount) (not shown: their text can name the tenant, a filter or a site)"
+if ($warningCount -gt 0 -or $outputCount -gt 0) {
+    Write-LabLine "  Warnings of the listing: $(Format-LabNumber $warningCount); other lines of output: $(Format-LabNumber $outputCount) (not shown: their text can name the tenant, a filter or a site)"
 }
 Write-LabLine "  Sites returned: $returned"
 Write-LabLine
@@ -1047,19 +1195,22 @@ else {
     Add-LabCheck -Name 'resume' -Status INFO -Detail "The listing started from the first page.$why"
 }
 
-if ($warningCount -eq 0) {
-    Add-LabCheck -Name 'listing-warnings' -Status PASS -Detail 'The listing gave no warning.'
+if ($warningCount -eq 0 -and $outputCount -eq 0) {
+    Add-LabCheck -Name 'listing-warnings' -Status PASS -Detail 'The listing gave no warning and wrote nothing but its sites.'
 }
 else {
-    Add-LabCheck -Name 'listing-warnings' -Status INFO -Detail "The listing gave $(Format-LabNumber $warningCount) warning(s), not shown: their text can name the tenant, a filter or a site. Run the Scan to read them."
+    $given = [System.Collections.Generic.List[System.String]]::new()
+    if ($warningCount -gt 0) { $given.Add("$(Format-LabNumber $warningCount) warning(s)") }
+    if ($outputCount -gt 0) { $given.Add("$(Format-LabNumber $outputCount) other line(s) of output") }
+    Add-LabCheck -Name 'listing-warnings' -Status INFO -Detail "The listing gave $($given -join ' and '), not shown: their text can name the tenant, a filter or a site. Run the Scan to read them."
 }
 
-if ($main.Completed -and $ExpectedSites -gt 0) {
-    if ($statistic.Sites -eq $ExpectedSites) {
+if ($main.Completed -and $sitesExpected -gt 0) {
+    if ($statistic.Sites -eq $sitesExpected) {
         Add-LabCheck -Name 'expected-sites' -Status PASS -Detail "$(Format-LabNumber $statistic.Sites) sites, as expected."
     }
     else {
-        Add-LabCheck -Name 'expected-sites' -Status FAIL -Detail "$(Format-LabNumber $statistic.Sites) sites were listed, and $(Format-LabNumber $ExpectedSites) were expected."
+        Add-LabCheck -Name 'expected-sites' -Status FAIL -Detail "$(Format-LabNumber $statistic.Sites) sites were listed, and $(Format-LabNumber $sitesExpected) were expected."
     }
 }
 
@@ -1128,12 +1279,12 @@ $report = [PSCustomObject][ordered]@{
     GeneratedOn = Format-LabDate -Value ([System.DateTime]::UtcNow)
     Environment = $environment
     Asked       = [PSCustomObject][ordered]@{
-        Source            = $Source
-        LockState         = @($LockState)
-        StopAfterPages    = $StopAfterPages
+        Source            = $sourceName
+        LockState         = @($lockStates)
+        StopAfterPages    = $pagesLimit
         Restart           = [System.Boolean]$Restart
         CompareWithCmdlet = [System.Boolean]$CompareWithCmdlet
-        ExpectedSites     = $ExpectedSites
+        ExpectedSites     = $sitesExpected
     }
     Completed   = $main.Completed
     Summary     = $safeSummary
