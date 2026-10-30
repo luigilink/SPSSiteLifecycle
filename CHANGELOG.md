@@ -153,3 +153,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes is passed on, by whatever stream it comes, and the text of an error is never shown: it goes to a file of
   the output folder; the versions are numbers, and a value that is typed wrong is named by its parameter and never
   given back), and its logic is tested offline. The call has not run against a tenant yet: the first run is the lab.
+- Act: the reviewed Scan report is read and checked as a whole before any action (#10), by
+  `Import-SPSLifecycleReviewedReport`. It reads `Url`, `SiteId`, `GeneratedOn` and `Decision`, with the strict structure and the
+  tolerant encoding of the lists (Excel's semicolons, UTF-16 and Windows-1252 are read, a quote that is never closed or a row
+  that is cut short stops the tool), and stops on the first problem in the order of the file, naming the line and the value:
+  a missing column, an address that is not one of the tenant (another tenant, the admin site, a OneDrive address, http, a
+  port, a host that DNS does not read as it is written) or that is one of a refused tenant, a site ID that is not a GUID (the
+  zeros of a concealed report included), a site that appears twice by its canonical address or by its site ID (a row without a
+  decision counts), a decision that is not `Delete`, `Archive` or `Lock` (a hidden character or a lookalike letter is not accepted;
+  the case and the spaces are), and a `GeneratedOn` that cannot be read (the message names `CsvDateFormats`, for a date that Excel
+  rewrote), that is in the future (5 minutes of margin for two clocks) or older than `MaxCsvAgeDays`. An empty list of decisions
+  is not an error: it says that there is nothing to do. It gives the rows that have a decision with their line, the count of each
+  action, and the date and the age of the file (the oldest of its rows), for the banner. It reads the file and nothing else.
