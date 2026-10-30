@@ -165,6 +165,8 @@ Describe 'The tests of the adapters cannot reach a tenant' {
         @{ Name = 'Get-PnPHomeSite' }
         @{ Name = 'Get-PnPMicrosoft365Group' }
         @{ Name = 'Get-PnPDeletedMicrosoft365Group' }
+        @{ Name = 'Get-PnPTenant' }
+        @{ Name = 'Get-PnPAccessToken' }
         @{ Name = 'Disconnect-PnPOnline' }
         @{ Name = 'Set-PnPTenantSite' }
         @{ Name = 'Remove-PnPTenantSite' }
@@ -528,6 +530,12 @@ if ($script:StubData.ConnectGivesNothing) { return }
         $session.Connection | Should -BeExactly 'a connection'
         $session.TenantName | Should -BeExactly 'contoso'
         $session.AdminUrl | Should -BeExactly 'https://contoso-admin.sharepoint.com'
+    }
+
+    It 'keeps the refused tenants of the settings in the session, for the adapters that change the tenant to check their target against' {
+        $session = Open-TestSession -Setting (New-TestSetting -Override @{ RefusedTenants = @('fabrikam', 'northwind') })
+
+        @($session.RefusedTenants) | Should -Be @('fabrikam', 'northwind')
     }
 
     It 'writes the tenant of the sign-in in lowercase, as the initial domain of a tenant is' {

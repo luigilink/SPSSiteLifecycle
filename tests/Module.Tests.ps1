@@ -60,6 +60,29 @@
 }
 
 Describe 'The SPSSiteLifecycle.Common module' {
+    BeforeAll {
+        # The commands of PnP.PowerShell that an adapter calls and that change the tenant: every one except the verbs that read (Get),
+        # the sign-in and the sign-out, and Invoke-PnPQuery, which sends a query that the listing loaded (a read). The adapter checks its
+        # target (Assert-SPSLifecycleWriteTarget) before the first of them, in the same function.
+        function script:Find-UnguardedWrite {
+            param([string]$Text)
+
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$errors)
+            foreach ($function in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+                $commands = @($function.Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))
+                $guard = @($commands | Where-Object { (Get-CommandBaseName -Command $_) -eq 'Assert-SPSLifecycleWriteTarget' } | ForEach-Object { $_.Extent.StartOffset })
+                $guardOffset = if ($guard.Count -gt 0) { ($guard | Measure-Object -Minimum).Minimum } else { [System.Int32]::MaxValue }
+                foreach ($command in $commands) {
+                    $name = Get-CommandBaseName -Command $command
+                    if ($name -match '^[A-Za-z]+-PnP[A-Za-z]+$' -and $name -notmatch '^(Get|Connect|Disconnect)-' -and $name -ne 'Invoke-PnPQuery' -and $command.Extent.StartOffset -lt $guardOffset) {
+                        $name
+                    }
+                }
+            }
+        }
+    }
+
     Context 'Manifest' {
         It 'is a valid manifest' {
             { Test-ModuleManifest -Path $script:ManifestPath -ErrorAction Stop } | Should -Not -Throw
@@ -126,6 +149,37 @@ Describe 'The SPSSiteLifecycle.Common module' {
             }
 
             @($offenders) | Should -HaveCount 0
+        }
+
+        It 'checks its target before an adapter changes the tenant' {
+            $offenders = foreach ($file in $script:Files) {
+                if ($file.FullName -notmatch '[\\/]Private[\\/]Adapters[\\/]') {
+                    continue
+                }
+
+                foreach ($use in Find-UnguardedWrite -Text ([System.IO.File]::ReadAllText($file.FullName))) {
+                    "$($file.Name): $use"
+                }
+            }
+
+            @($offenders) | Should -HaveCount 0
+        }
+
+        It 'sees a command that changes the tenant without the check of its target: <Name>' -ForEach @(
+            @{ Name = 'a deletion that is not checked'; Text = 'function F { param($s, $u) Remove-PnPTenantSite -Url $u }'; Expected = 1 }
+            @{ Name = 'a deletion that is checked first'; Text = 'function F { param($s, $u) Assert-SPSLifecycleWriteTarget -Session $s -Url $u; Remove-PnPTenantSite -Url $u }'; Expected = 0 }
+            @{ Name = 'a deletion that is checked after it'; Text = 'function F { param($s, $u) Remove-PnPTenantSite -Url $u; Assert-SPSLifecycleWriteTarget -Session $s -Url $u }'; Expected = 1 }
+            @{ Name = 'a deletion that another function checks'; Text = 'function A { Assert-SPSLifecycleWriteTarget -Session $s -Url $u } function B { Remove-PnPTenantSite -Url $u }'; Expected = 1 }
+            @{ Name = 'a change that is named with its module'; Text = 'function F { PnP.PowerShell\Set-PnPTenantSite -Identity $u }'; Expected = 1 }
+            @{ Name = 'a change that is named between quotes'; Text = "function F { & 'PnP.PowerShell\Set-PnPTenantSite' -Identity `$u }"; Expected = 1 }
+            @{ Name = 'a change of a verb that is not Set or Remove'; Text = 'function F { Add-PnPSiteCollectionAdmin -Owners $a }'; Expected = 1 }
+            @{ Name = 'two changes, one checked'; Text = 'function F { Remove-PnPTenantSite -Url $u; Assert-SPSLifecycleWriteTarget -Session $s -Url $u; Set-PnPTenantSite -Identity $u }'; Expected = 1 }
+            @{ Name = 'a read'; Text = 'function F { Get-PnPTenantSite -Identity $u }'; Expected = 0 }
+            @{ Name = 'the sign-in and the sign-out'; Text = 'function F { Connect-PnPOnline -Url $u; Disconnect-PnPOnline }'; Expected = 0 }
+            @{ Name = 'the query that the listing sends'; Text = 'function F { Invoke-PnPQuery -Connection $c }'; Expected = 0 }
+            @{ Name = 'the name of a command in a text'; Text = "function F { 'Remove-PnPTenantSite' }"; Expected = 0 }
+        ) {
+            @(Find-UnguardedWrite -Text $Text) | Should -HaveCount $Expected
         }
 
         It 'sees a command that reaches the tenant, whatever the way it is named: <Name>' -ForEach @(

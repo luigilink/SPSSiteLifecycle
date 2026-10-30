@@ -10,7 +10,8 @@
         certificate sign-in comes with #9). The connection is kept in the session and not made the current one of the
         PowerShell session, so that a connection that the user already has is left as it is.
 
-        Returns the session: the connection and the tenant it is for.
+        Returns the session: the connection, the tenant it is for, its admin address and the tenants that are refused (the adapters
+        that change the tenant check their target against them, see Assert-SPSLifecycleWriteTarget).
 
         .PARAMETER Setting
         The settings (TenantName, AdminUrl, ClientId, RefusedTenants), as Get-SPSLifecycleSetting gives them.
@@ -49,8 +50,9 @@
     }
 
     [PSCustomObject][ordered]@{
-        Connection = $connection
-        TenantName = $tenantName
-        AdminUrl   = "$($Setting.AdminUrl)"
+        Connection     = $connection
+        TenantName     = $tenantName
+        AdminUrl       = "$($Setting.AdminUrl)"
+        RefusedTenants = @($Setting.RefusedTenants)
     }
 }
