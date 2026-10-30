@@ -11,11 +11,22 @@
         dot above that turns a capital I into a dotted one) is drawn on the letter before it, so it is written
         out as well.
 
+        With -AsciiOnly, every character that is not a printable character of ASCII is written as \uXXXX, a letter included:
+        that is for a text that must be ASCII (a tenant name, a setting), where the Kelvin sign looks like a K, a capital I with a
+        dot above like an I, and a full-width letter like a letter of the alphabet. A character outside the Basic Multilingual Plane
+        is written as its two halves.
+
         .PARAMETER Text
         The text to show.
 
+        .PARAMETER AsciiOnly
+        Writes every character that is not a printable character of ASCII (U+0020 to U+007E) as \uXXXX.
+
         .EXAMPLE
         ConvertTo-SPSLifecycleVisibleText -Text "Site$([char]0xAD)Id"
+
+        .EXAMPLE
+        ConvertTo-SPSLifecycleVisibleText -Text "cont$([char]0x212A)so" -AsciiOnly
     #>
     [CmdletBinding()]
     [OutputType([System.String])]
@@ -25,12 +36,17 @@
         [AllowNull()]
         [AllowEmptyString()]
         [System.String]
-        $Text
+        $Text,
+
+        [Parameter()]
+        [System.Management.Automation.SwitchParameter]
+        $AsciiOnly
     )
 
     if ([System.String]::IsNullOrEmpty($Text)) {
         return ''
     }
 
-    [System.Text.RegularExpressions.Regex]::Replace($Text, '[\p{Cc}\p{Cf}\p{M}\p{Zl}\p{Zp}\p{Zs}-[ ]]', { param($match) '\u{0:X4}' -f [System.Int32][System.Char]$match.Value })
+    $pattern = if ($AsciiOnly) { '[^\u0020-\u007E]' } else { '[\p{Cc}\p{Cf}\p{M}\p{Zl}\p{Zp}\p{Zs}-[ ]]' }
+    [System.Text.RegularExpressions.Regex]::Replace($Text, $pattern, { param($match) '\u{0:X4}' -f [System.Int32][System.Char]$match.Value })
 }
