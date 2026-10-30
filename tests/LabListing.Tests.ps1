@@ -93,6 +93,23 @@
         @($Report.Checks | Where-Object { $_.Name -eq $Name }) | Select-Object -First 1
     }
 
+    # An exception type that is not the framework's and is named like what must never be shown, and one whose inner exception is
+    # itself (a type of the library can do that, and the lab walks the chain).
+    if (-not ('SyntheticPrivateBoardException' -as [System.Type])) {
+        Add-Type -TypeDefinition @'
+public class SyntheticPrivateBoardException : System.Exception
+{
+    public SyntheticPrivateBoardException(string message) : base(message) { }
+}
+
+public class SyntheticCyclicException : System.Exception
+{
+    public SyntheticCyclicException(string message) : base(message) { }
+    public new System.Exception InnerException { get { return this; } }
+}
+'@
+    }
+
     Install-Tripwire
 }
 
@@ -123,6 +140,7 @@ param([double]$Seconds)
             'Get-SPSLifecycleTenantSitePage'  = @'
 param($Session, $Source, [string]$StartIndex, [string]$Filter)
 $script:StubLog.Add("page source=$Source start=[$StartIndex]")
+if ($script:StubData.PageException) { throw $script:StubData.PageException }
 if ($script:StubData.PageError -and $script:StubData.PageErrorLeft -ne 0) { $script:StubData.PageErrorLeft--; throw $script:StubData.PageError }
 if ($Source -eq 'Cmdlet') {
     $all = if ($null -ne $script:StubData.CmdletSites) { $script:StubData.CmdletSites } else { @($script:StubData.Pages | ForEach-Object { $_ }) }
@@ -134,7 +152,7 @@ $index = if ($StartIndex -eq '') { 0 } else { [int]$StartIndex.Substring(1) }
 $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
 [PSCustomObject]@{ Items = @($pages[$index]); NextStartIndex = $next }
 '@
-        } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = '' }
+        } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; PageException = $null }
     }
 
     AfterEach {
@@ -313,18 +331,18 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
         It 'says that the paged call was used, and says why when the cmdlet was used instead' {
             $null = Set-LabPages
             $paged = Invoke-Lab
-            & $script:Module { $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = 'The types of the admin API are not in this PnP.PowerShell.' }
+            & $script:Module { $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = 'The types of the SharePoint admin API (Tenant, SPOSitePropertiesEnumerableFilter, PersonalSiteFilter) are not in this PnP.PowerShell.' }
             $fallback = Invoke-Lab
 
             (Get-LabCheck -Report $paged.Report -Name 'source').Status | Should -BeExactly 'PASS'
             (Get-LabCheck -Report $fallback.Report -Name 'source').Status | Should -BeExactly 'INFO'
-            (Get-LabCheck -Report $fallback.Report -Name 'source').Detail | Should -BeLike '*not in this PnP.PowerShell*'
+            (Get-LabCheck -Report $fallback.Report -Name 'source').Detail | Should -BeLike '*(Tenant, SPOSitePropertiesEnumerableFilter, PersonalSiteFilter) are not in this PnP.PowerShell.*'
             $fallback.Report.Summary.Source | Should -BeExactly 'Cmdlet'
         }
 
         It 'stops, and says why, when the paged call is asked for and is not there' {
             $null = Set-LabPages
-            & $script:Module { $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = 'No StartIndex.' }
+            & $script:Module { $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = "The filter of the admin API has no property 'StartIndex' in this PnP.PowerShell." }
 
             { Invoke-Lab -Parameter @{ Source = 'Csom' } } | Should -Throw -ExpectedMessage '*StartIndex*'
         }
@@ -421,7 +439,7 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
                 'Read-SPSLifecycleListingCheckpoint' = @'
 [PSCustomObject]@{ Exists = $true; Usable = $false; Finished = $false; Reason = "The checkpoint was made for fabrikam ($($script:StubData.ReaderCode))."; Code = $script:StubData.ReaderCode; Manifest = $null }
 '@
-            } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; ReaderCode = $Code }
+            } -Data @{ ApiAvailable = $true; ApiReason = ''; Pages = @(); CmdletSites = $null; PageError = ''; PageErrorLeft = -1; OpenError = ''; PageException = $null; ReaderCode = $Code }
             $null = Set-LabPages
 
             $run = Invoke-Lab
@@ -610,29 +628,24 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             Get-LabEverything -Run $run | Should -Not -BeLike '*contoso*'
         }
 
-        It 'makes the reason why the cmdlet was used one line of a length that a report can hold, and finds the name in capitals, in Turkish too, and the ID without hyphens' -ForEach @('en-US', 'tr-TR') {
+        It 'recognizes the reason why the cmdlet was used as it is written, whatever the culture of the machine: <Culture>' -ForEach @(
+            @{ Culture = 'en-US' }
+            @{ Culture = 'tr-TR' }
+            @{ Culture = 'fr-FR' }
+        ) {
             $null = Set-LabPages
-            $emoji = [System.Char]::ConvertFromUtf32(0x1F600)
-            $before = 'first line second line (tenant) (client) '
-            $text = "first line`nsecond`tline FABRIKAM 11111111222233334444555555555555 " + ('x' * (299 - $before.Length)) + $emoji + ('y' * 200)
-            & $script:Module { param($t) $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = $t } $text
+            $reason = "The property 'IncludeDetail' of the filter of the admin API is not a writable Boolean in this PnP.PowerShell."
+            & $script:Module { param($t) $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = $t } $reason
             $before = [System.Threading.Thread]::CurrentThread.CurrentCulture
             try {
-                [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($_)
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
                 $run = Invoke-Lab -Parameter @{ TenantName = 'fabrikam' }
             }
             finally {
                 [System.Threading.Thread]::CurrentThread.CurrentCulture = $before
             }
 
-            $reason = $run.Report.Summary.FallbackReason
-            $reason | Should -BeLike 'first line second line (tenant) (client) xxx*'
-            $reason | Should -Not -Match '[\r\n\t]'
-            $reason | Should -BeLike '*x...'
-            $reason | Should -Not -BeLike "*$emoji*"
-            $reason | Should -Not -Match '[\uD800-\uDBFF](?![\uDC00-\uDFFF])'
-            $reason.Length | Should -Be (299 + 3)
-            Get-LabEverything -Run $run | Should -Not -BeLike '*fabrikam*'
+            $run.Report.Summary.FallbackReason | Should -BeExactly $reason
         }
 
         It 'does not print where the report is, because the folder can be named after the tenant, a site or a person' {
@@ -702,6 +715,123 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             Get-LabEverything -Run $run | Should -Not -BeLike '*contoso*'
         }
 
+        It 'names only the properties of a site that the tool reads, and not a word that an error puts after the word property' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.PageError = "The property 'contoso' is not available; property 'SyntheticPrivateBoard' is not loaded. The property 'storageusage' is below zero, and Property 'LastContentModifiedDate' too." }
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike '*Properties named: StorageUsage, LastContentModifiedDate.*'
+            $thrown.Exception.Message | Should -Not -BeLike '*contoso*'
+            $thrown.Exception.Message | Should -Not -BeLike '*SyntheticPrivateBoard*'
+        }
+
+        It 'names the type of an exception when it is the framework or the library, and not when it is any other: <Name>' -ForEach @(
+            @{ Name = 'a type of the framework'; Make = { [System.IO.FileNotFoundException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by FileNotFoundException.*' }
+            @{ Name = 'a type of PowerShell'; Make = { [System.Management.Automation.ItemNotFoundException]::new('x') }; Expected = '*caused by ItemNotFoundException.*' }
+            @{ Name = 'a type that is named like a site'; Make = { [SyntheticPrivateBoardException]::new('x') }; Expected = '*Error types: InvalidOperationException, caused by (another type).*' }
+        ) {
+            $null = Set-LabPages
+            & $script:Module { param($e) $script:StubData.PageException = $e } (& $Make)
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike $Expected
+            $thrown.Exception.Message | Should -Not -BeLike '*SyntheticPrivateBoard*'
+        }
+
+        It 'stops walking the exceptions of an error whose inner exception is itself, and says that the chain was cut' {
+            $null = Set-LabPages
+            $folder = Join-Path -Path $TestDrive -ChildPath 'cyclic'
+            & $script:Module { param($e) $script:StubData.PageException = $e } ([SyntheticCyclicException]::new('Synthetic failure that comes back on itself.'))
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab -Parameter @{ OutputFolder = $folder }
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike '*Error types: InvalidOperationException, caused by (another type), caused by more (the chain is cut).*'
+            $saved = Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'listing-lab-error.txt') -Raw
+            $saved | Should -BeLike '*Synthetic failure that comes back on itself.*'
+            $saved | Should -BeLike '*the chain goes on or comes back on itself*'
+        }
+
+        It 'keeps the types of a very long chain of exceptions to a few, and the message to a length that a person can read' {
+            $null = Set-LabPages
+            $deep = [System.Exception]::new('level 0')
+            for ($i = 1; $i -le 60; $i++) {
+                $deep = [System.InvalidOperationException]::new("level $i", $deep)
+            }
+
+            & $script:Module { param($e) $script:StubData.PageException = $e } $deep
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike '*caused by more (the chain is cut).*'
+            @([regex]::Matches($thrown.Exception.Message, 'InvalidOperationException')).Count | Should -BeLessOrEqual 10
+            $thrown.Exception.Message.Length | Should -BeLessThan 800
+        }
+
+        It 'says nothing of the text of an error that has no exception, or an exception with no text' {
+            $null = Set-LabPages
+            & $script:Module { param($e) $script:StubData.PageException = $e } ([System.InvalidOperationException]::new(''))
+
+            $thrown = $null
+            try {
+                $null = Invoke-Lab
+            }
+            catch {
+                $thrown = $_
+            }
+
+            $thrown.Exception.Message | Should -BeLike 'The lab stopped: Page 1 of the listing could not be read after 3 attempts.*'
+        }
+
+        It 'shows a template only when it is one that SharePoint has, in the spelling of SharePoint, and never a word of the tenant: <Template>' -ForEach @(
+            @{ Template = 'contoso#0'; Expected = '(not a name)' }
+            @{ Template = 'contoso'; Expected = '(not a name)' }
+            @{ Template = 'STS#3'; Expected = 'STS#3' }
+            @{ Template = 'sts#-1'; Expected = 'STS#-1' }
+            @{ Template = 'GROUP#0'; Expected = 'GROUP#0' }
+            @{ Template = 'group#0'; Expected = 'GROUP#0' }
+            @{ Template = 'TEAMCHANNEL#1'; Expected = 'TEAMCHANNEL#1' }
+            @{ Template = 'redirectsite#0'; Expected = 'RedirectSite#0' }
+            @{ Template = 'SITEPAGEPUBLISHING#0'; Expected = 'SITEPAGEPUBLISHING#0' }
+            @{ Template = 'STS#99999'; Expected = '(not a name)' }
+            @{ Template = 'STS#x'; Expected = '(not a name)' }
+            @{ Template = 'STS# 3'; Expected = '(not a name)' }
+            @{ Template = "STS#3`n"; Expected = '(not a name)' }
+        ) {
+            $null = Set-LabPages
+            & $script:Module { param($t) $script:StubData.Pages[0][0].Template = $t } $Template
+
+            $run = Invoke-Lab
+
+            $run.Report.Statistics.Templates.$Expected | Should -BeGreaterOrEqual 1
+            Get-LabEverything -Run $run | Should -Not -BeLike '*contoso*'
+        }
+
         It 'counts a value that is not a name apart from a value that is missing, for the template, the lock state and the archive status' {
             $null = Set-LabPages
             & $script:Module {
@@ -748,25 +878,45 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             Get-LabEverything -Run $run | Should -Not -BeLike '*secret title*'
         }
 
-        It 'cleans the reason why the cmdlet was used, and the reason why the paged call is refused' {
+        It 'shows a reason why the paged call cannot be used as it is when the tool gives it, and never another: <Name>' -ForEach @(
+            @{ Name = 'the types are not there'; Reason = 'The types of the SharePoint admin API (Tenant, SPOSitePropertiesEnumerableFilter, PersonalSiteFilter) are not in this PnP.PowerShell.'; Known = $true }
+            @{ Name = 'a property of the filter is missing'; Reason = "The filter of the admin API has no property 'IncludePersonalSite' in this PnP.PowerShell."; Known = $true }
+            @{ Name = 'a property of the filter is not writable'; Reason = "The property 'Filter' of the filter of the admin API is not a writable String in this PnP.PowerShell."; Known = $true }
+            @{ Name = 'a property of the filter has another type'; Reason = "The property 'IncludePersonalSite' of the filter of the admin API is not a writable PersonalSiteFilter in this PnP.PowerShell."; Known = $true }
+            @{ Name = 'the enumeration has no value'; Reason = "The enumeration of the OneDrive sites has no value 'Exclude' in this PnP.PowerShell."; Known = $true }
+            @{ Name = 'the method is missing'; Reason = 'The tenant of the admin API has no method GetSitePropertiesFromSharePointByFilters that takes the filter in this PnP.PowerShell.'; Known = $true }
+            @{ Name = 'the page has no token'; Reason = "The page that the admin API gives has no text property 'NextStartIndexFromSharePoint' in this PnP.PowerShell."; Known = $true }
+            @{ Name = 'words of the tenant'; Reason = 'SyntheticPrivateBoard in tenant fabrikam.'; Known = $false }
+            @{ Name = 'a known form with a property that is not one of the filter'; Reason = "The filter of the admin API has no property 'fabrikam' in this PnP.PowerShell."; Known = $false }
+            @{ Name = 'a known form with a type that is not one that the check writes'; Reason = "The property 'Filter' of the filter of the admin API is not a writable SyntheticPrivateBoard in this PnP.PowerShell."; Known = $false }
+            @{ Name = 'a known form with more after it'; Reason = "The enumeration of the OneDrive sites has no value 'Exclude' in this PnP.PowerShell. fabrikam"; Known = $false }
+            @{ Name = 'a known form with a line break and more after it'; Reason = "The enumeration of the OneDrive sites has no value 'Exclude' in this PnP.PowerShell.`nfabrikam"; Known = $false }
+            @{ Name = 'a known form in lowercase'; Reason = "the enumeration of the onedrive sites has no value 'exclude' in this pnp.powershell."; Known = $false }
+            @{ Name = 'an address'; Reason = 'No paged call for https://fabrikam-admin.sharepoint.com (jc@fabrikam.com).'; Known = $false }
+        ) {
             $null = Set-LabPages
-            & $script:Module { $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = 'No paged call for https://contoso-admin.sharepoint.com (contoso.onmicrosoft.com, jc@contoso.com).' }
+            & $script:Module { param($t) $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = $t } $Reason
+            $unknown = 'a reason that this script does not know'
 
-            $fallback = Invoke-Lab
+            $fallback = Invoke-Lab -Parameter @{ TenantName = 'fabrikam' }
             $thrown = $null
             try {
-                $null = Invoke-Lab -Parameter @{ Source = 'Csom' }
+                $null = Invoke-Lab -Parameter @{ TenantName = 'fabrikam'; Source = 'Csom' }
             }
             catch {
                 $thrown = $_
             }
 
-            (Get-LabEverything -Run $fallback) | Should -Not -BeLike '*contoso*'
-            (Get-LabEverything -Run $fallback) | Should -Not -BeLike '*sharepoint.com*'
-            (Get-LabCheck -Report $fallback.Report -Name 'source').Detail | Should -BeLike '*No paged call for (address) ((address), (account)).*'
-            $fallback.Report.Summary.FallbackReason | Should -BeLike 'No paged call for (address)*'
-            $thrown.Exception.Message | Should -BeLike '*No paged call for (address) ((address), (account)).*'
-            $thrown.Exception.Message | Should -Not -BeLike '*contoso*'
+            $shown = if ($Known) { $Reason } else { $unknown }
+            $fallback.Report.Summary.FallbackReason | Should -BeExactly $shown
+            (Get-LabCheck -Report $fallback.Report -Name 'source').Detail | Should -BeLike "*$($shown.Replace('[', '`[').Replace(']', '`]'))*"
+            $thrown.Exception.Message | Should -BeLike "*The paged call was asked for and cannot be used: $($shown.Replace('[', '`[').Replace(']', '`]'))*"
+            foreach ($run in $fallback.Text + $fallback.Warnings + @($thrown.Exception.Message)) {
+                $run | Should -Not -BeLike '*fabrikam*'
+                $run | Should -Not -BeLike '*SyntheticPrivateBoard*'
+            }
+
+            (Get-LabEverything -Run $fallback) | Should -Not -BeLike '*fabrikam*'
         }
 
         It 'does not print a record that is not what it should be, whatever text it holds' {
