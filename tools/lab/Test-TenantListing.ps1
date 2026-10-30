@@ -40,8 +40,9 @@
     in $Error: do not paste them either.
 
     What you type is checked by the script, and when a value is not right the lab says which parameter and what it takes, without
-    the value. PowerShell does not do that when it refuses a name of parameter that does not exist, or a value that goes with no
-    parameter: it gives back what was typed, so do not paste that line.
+    the value. PowerShell does not do that when it refuses a name of parameter that does not exist, a value that goes with no
+    parameter, or the value of a common parameter (-ErrorAction and the like): it gives back what was typed, so do not paste
+    that line.
 
     .PARAMETER TenantName
     The name of the tenant, in lowercase, as in <name>.onmicrosoft.com. The Microsoft corporate tenants are refused.
