@@ -67,6 +67,229 @@
 
         [System.IO.File]::WriteAllText($Path, $changed, [System.Text.UTF8Encoding]::new($false))
     }
+
+    # Rewrites one cell of a page file that Save-SPSLifecycleListingPage wrote (every cell is quoted, and the test records hold
+    # no quote and no comma). Row 1 is the first site, as the header is row 0.
+    function script:Edit-TestPageCell {
+        param([string]$Path, [int]$Row, [string]$Column, [string]$Value)
+
+        $columns = @(& $script:Module { Get-SPSLifecycleListingColumn })
+        $lines = [System.IO.File]::ReadAllText($Path).TrimEnd("`r", "`n") -split "`r`n"
+        $cells = $lines[$Row].Substring(1, $lines[$Row].Length - 2) -split '","'
+        $cells[[System.Array]::IndexOf($columns, $Column)] = $Value
+        $lines[$Row] = '"' + ($cells -join '","') + '"'
+        [System.IO.File]::WriteAllText($Path, (($lines -join "`r`n") + "`r`n"), [System.Text.UTF8Encoding]::new($false))
+    }
+
+    function script:Invoke-UnderCulture {
+        param([string]$Culture, [scriptblock]$Action)
+
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+            & $Action
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+    }
+
+    # Makes Move-Item fail inside the module for the length of the action, as a full disk would, and puts the cmdlet back.
+    function script:Invoke-WithFailingMove {
+        param([scriptblock]$Action)
+
+        & $script:Module { Invoke-Expression 'function script:Move-Item { throw ''The disk is full.'' }' }
+        try {
+            & $Action
+        }
+        finally {
+            & $script:Module { Remove-Item -Path 'Function:\Move-Item' -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
+Describe 'Initialize-SPSLifecycleListingManifest' {
+    It 'starts as a listing that has not begun: running, with no page, no token, and not complete' {
+        $manifest = New-TestManifest
+
+        $manifest.Version | Should -Be 1
+        $manifest.State | Should -BeExactly 'Running'
+        $manifest.Tenant | Should -BeExactly 'contoso'
+        $manifest.Filter | Should -BeExactly $script:Filter
+        $manifest.Options | Should -BeExactly $script:Options
+        $manifest.ListingComplete | Should -BeFalse
+        $manifest.NextToken | Should -BeExactly ''
+        $manifest.FinishedOn | Should -BeExactly ''
+        @($manifest.Pages) | Should -HaveCount 0
+        $manifest.StartedOn | Should -BeExactly '20261030T090000.0000000Z'
+        $manifest.UpdatedOn | Should -BeExactly $manifest.StartedOn
+    }
+}
+
+Describe 'The dates of a checkpoint' {
+    It 'is checked that the cultures below really write another year than the Gregorian one, so that the next test can fail' {
+        $date = [System.DateTime]::new(2026, 10, 30, 9, 7, 0, [System.DateTimeKind]::Utc)
+
+        $date.ToString('yyyy', [System.Globalization.CultureInfo]::GetCultureInfo('th-TH')) | Should -BeExactly '2569'
+        $date.ToString('yyyy', [System.Globalization.CultureInfo]::GetCultureInfo('ar-SA')) | Should -Not -BeExactly '2026'
+    }
+
+    It 'writes and reads the same text whatever the culture and the calendar of the machine: <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }
+        @{ Culture = 'fr-FR' }
+        @{ Culture = 'de-DE' }
+        @{ Culture = 'tr-TR' }
+        @{ Culture = 'th-TH' }
+        @{ Culture = 'ar-SA' }
+        @{ Culture = 'fa-IR' }
+    ) {
+        $date = [System.DateTime]::new(2026, 10, 30, 9, 7, 0, [System.DateTimeKind]::Utc).AddTicks(1234567)
+
+        Invoke-UnderCulture -Culture $Culture -Action {
+            $text = & $script:Module { param($d) ConvertTo-SPSLifecycleCheckpointDate -Value $d } $date
+            $back = & $script:Module { param($t) ConvertFrom-SPSLifecycleCheckpointDate -Text $t } '20261030T090700.1234567Z'
+
+            $text | Should -BeExactly '20261030T090700.1234567Z'
+            $back.Ticks | Should -Be $date.Ticks
+            $back.Kind | Should -Be ([System.DateTimeKind]::Utc)
+        }
+    }
+
+    It 'writes the UTC time of a local date' {
+        $local = [System.DateTime]::new(2026, 10, 30, 9, 7, 0, [System.DateTimeKind]::Utc).ToLocalTime()
+
+        (& $script:Module { param($d) ConvertTo-SPSLifecycleCheckpointDate -Value $d } $local) | Should -BeExactly '20261030T090700.0000000Z'
+    }
+
+    It 'reads no date from a text that is not the one that the checkpoint writes: <Name>' -ForEach @(
+        @{ Name = 'an empty text'; Text = '' }
+        @{ Name = 'null'; Text = $null }
+        @{ Name = 'ISO 8601 with separators'; Text = '2026-10-30T09:07:00.0000000Z' }
+        @{ Name = 'no fraction'; Text = '20261030T090700Z' }
+        @{ Name = 'no Z'; Text = '20261030T090700.0000000' }
+        @{ Name = 'a month that does not exist'; Text = '20261330T090700.0000000Z' }
+    ) {
+        $null -eq (& $script:Module { param($t) ConvertFrom-SPSLifecycleCheckpointDate -Text $t } $Text) | Should -BeTrue
+    }
+}
+
+Describe 'Get-SPSLifecycleListingManifestProblem' {
+    BeforeAll {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+        $null = Save-TestPage -Folder $folder -Manifest $manifest -From 1 -NextToken 'next-1'
+        $null = Save-TestPage -Folder $folder -Manifest $manifest -From 4 -Token 'next-1' -NextToken 'next-2'
+        $script:BaseJson = Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'manifest.json') -Raw
+
+        function script:Get-TestProblem {
+            param([scriptblock]$Edit = $null)
+
+            $json = $script:BaseJson | ConvertFrom-Json
+            if ($null -ne $Edit) {
+                & $Edit $json
+            }
+
+            & $script:Module { param($m) Get-SPSLifecycleListingManifestProblem -Manifest $m } $json
+        }
+    }
+
+    It 'finds nothing to say about a manifest that the tool wrote' {
+        Get-TestProblem | Should -BeExactly ''
+    }
+
+    It 'refuses what is not a JSON object: <Name>' -ForEach @(
+        @{ Name = 'a text'; Value = 'text' }
+        @{ Name = 'a number'; Value = 42 }
+        @{ Name = 'an array'; Value = @(1, 2) }
+    ) {
+        (& $script:Module { param($m) Get-SPSLifecycleListingManifestProblem -Manifest $m } $Value) | Should -BeExactly 'the manifest is not a JSON object.'
+    }
+
+    It 'says which check refused the manifest: <Name>' -ForEach @(
+        @{ Name = 'a property is missing'; Edit = { param($m) $m.PSObject.Properties.Remove('Tenant') }; Reason = "the property 'Tenant' is missing." }
+        @{ Name = 'a property that the tool does not write'; Edit = { param($m) $m | Add-Member -NotePropertyName 'Extra' -NotePropertyValue 'x' }; Reason = "the property 'Extra' is not one that the tool writes." }
+        @{ Name = 'a tenant that is a number'; Edit = { param($m) $m.Tenant = 5 }; Reason = "the value of 'Tenant' is not a text." }
+        @{ Name = 'a next token that is a number'; Edit = { param($m) $m.NextToken = 5 }; Reason = "the value of 'NextToken' is not a text." }
+        @{ Name = 'a state that is not known'; Edit = { param($m) $m.State = 'Paused' }; Reason = "the state 'Paused' is not one that the tool writes (Running or Completed)." }
+        @{ Name = 'a state in lowercase'; Edit = { param($m) $m.State = 'running' }; Reason = "the state 'running' is not one that the tool writes*" }
+        @{ Name = 'a state in capitals'; Edit = { param($m) $m.State = 'COMPLETED' }; Reason = "the state 'COMPLETED' is not one that the tool writes*" }
+        @{ Name = 'a start that is not a date'; Edit = { param($m) $m.StartedOn = 'yesterday' }; Reason = "the value of 'StartedOn' is not a date that the tool writes." }
+        @{ Name = 'an update that is not a date'; Edit = { param($m) $m.UpdatedOn = '2026-10-30T09:00:00Z' }; Reason = "the value of 'UpdatedOn' is not a date that the tool writes." }
+        @{ Name = 'an end that is not a date'; Edit = { param($m) $m.FinishedOn = 'tomorrow' }; Reason = "the value of 'FinishedOn' is not a date that the tool writes." }
+        @{ Name = 'a flag that is a text'; Edit = { param($m) $m.ListingComplete = 'no' }; Reason = "the value of 'ListingComplete' is not true or false." }
+        @{ Name = 'pages that are not a list'; Edit = { param($m) $m.Pages = $m.Pages[0] }; Reason = "the value of 'Pages' is not a list." }
+        @{ Name = 'a page that is not an object'; Edit = { param($m) $m.Pages[0] = 'page' }; Reason = 'the entry of page 1 is not an object.' }
+        @{ Name = 'a page that lacks a property'; Edit = { param($m) $m.Pages[0].PSObject.Properties.Remove('Token') }; Reason = "the entry of page 1 lacks 'Token'." }
+        @{ Name = 'a page with a property that the tool does not write'; Edit = { param($m) $m.Pages[1] | Add-Member -NotePropertyName 'Extra' -NotePropertyValue 1 }; Reason = "the entry of page 2 has a property that the tool does not write ('Extra')." }
+        @{ Name = 'a page that read fewer sites than it kept'; Edit = { param($m) $m.Pages[0].Read = 1 }; Reason = 'page 1 kept more sites than it read.' }
+        @{ Name = 'a number of sites below zero'; Edit = { param($m) $m.Pages[0].Sites = -1 }; Reason = "the value of 'Sites' in page 1 is not a whole number that is zero or more." }
+        @{ Name = 'a number of sites read below zero'; Edit = { param($m) $m.Pages[0].Read = -1 }; Reason = "the value of 'Read' in page 1 is not a whole number that is zero or more." }
+        @{ Name = 'a number of sites that is a text'; Edit = { param($m) $m.Pages[0].Sites = 'three' }; Reason = "the value of 'Sites' in page 1 is not a whole number that is zero or more." }
+        @{ Name = 'a number of sites that has a fraction'; Edit = { param($m) $m.Pages[0].Sites = 1.5 }; Reason = "the value of 'Sites' in page 1 is not a whole number that is zero or more." }
+        @{ Name = 'a page number that is a fraction'; Edit = { param($m) $m.Pages[0].Number = 1.5 }; Reason = "the value of 'Number' in page 1 is not a whole number that is zero or more." }
+        @{ Name = 'pages that are not numbered without a gap'; Edit = { param($m) $m.Pages[1].Number = 3 }; Reason = 'the pages are not numbered from 1 without a gap (page 2 is numbered 3).' }
+        @{ Name = 'a file named after another number'; Edit = { param($m) $m.Pages[0].File = 'page-000002.csv' }; Reason = 'the file of page 1 is not the one that the tool names after its number.' }
+        @{ Name = 'a file name in another case'; Edit = { param($m) $m.Pages[0].File = 'Page-000001.csv' }; Reason = 'the file of page 1 is not the one that the tool names after its number.' }
+        @{ Name = 'a file that is a number'; Edit = { param($m) $m.Pages[0].File = 1 }; Reason = 'the file of page 1 is not the one that the tool names after its number.' }
+        @{ Name = 'a token that is a number'; Edit = { param($m) $m.Pages[1].Token = 5 }; Reason = 'the token of page 2 is not a text.' }
+        @{ Name = 'a hash that is too short'; Edit = { param($m) $m.Pages[0].Sha256 = 'abc' }; Reason = 'the hash of page 1 is not a SHA-256 in lowercase hexadecimal.' }
+        @{ Name = 'a hash in capitals'; Edit = { param($m) $m.Pages[0].Sha256 = $m.Pages[0].Sha256.ToUpperInvariant() }; Reason = 'the hash of page 1 is not a SHA-256 in lowercase hexadecimal.' }
+        @{ Name = 'a hash that is a number'; Edit = { param($m) $m.Pages[0].Sha256 = 5 }; Reason = 'the hash of page 1 is not a SHA-256 in lowercase hexadecimal.' }
+        @{ Name = 'a time below zero'; Edit = { param($m) $m.Pages[0].Seconds = -1 }; Reason = 'the time of page 1 is not a number of seconds.' }
+        @{ Name = 'a time that is a text'; Edit = { param($m) $m.Pages[0].Seconds = 'fast' }; Reason = 'the time of page 1 is not a number of seconds.' }
+        @{ Name = 'a listing that is complete and has a token'; Edit = { param($m) $m.ListingComplete = $true }; Reason = 'the listing is complete and still has a token to go on with.' }
+        @{ Name = 'a listing that has pages, is not complete and has no token'; Edit = { param($m) $m.NextToken = '' }; Reason = 'the listing is not complete and has no token to go on with.' }
+        @{ Name = 'a listing that is marked finished and is not complete'; Edit = { param($m) $m.State = 'Completed' }; Reason = 'the listing is marked finished and is not complete.' }
+    ) {
+        Get-TestProblem -Edit $Edit | Should -BeLike $Reason
+    }
+
+    It 'accepts what a run can write, at the edges of the checks: <Name>' -ForEach @(
+        @{ Name = 'a page of no site, that read none'; Edit = { param($m) $m.Pages[0].Sites = 0; $m.Pages[0].Read = 0 } }
+        @{ Name = 'a page that kept as many sites as it read'; Edit = { param($m) $m.Pages[0].Read = 3 } }
+        @{ Name = 'a page that read more sites than it kept'; Edit = { param($m) $m.Pages[0].Read = 1500 } }
+        @{ Name = 'counts that JSON gives as long integers'; Edit = { param($m) $m.Pages[0].Read = [long]3; $m.Pages[0].Sites = [long]3 } }
+        @{ Name = 'a time of zero'; Edit = { param($m) $m.Pages[0].Seconds = 0 } }
+        @{ Name = 'a time that is a whole number'; Edit = { param($m) $m.Pages[0].Seconds = 2 } }
+        @{ Name = 'a time that is a long integer'; Edit = { param($m) $m.Pages[0].Seconds = [long]2 } }
+        @{ Name = 'a time with a fraction'; Edit = { param($m) $m.Pages[0].Seconds = 2.35 } }
+        @{ Name = 'an end that is a date'; Edit = { param($m) $m.FinishedOn = '20261030T091500.0000000Z' } }
+        @{ Name = 'a finished listing: complete, with no page and no token'; Edit = { param($m) $m.State = 'Completed'; $m.ListingComplete = $true; $m.NextToken = ''; $m.Pages = @() } }
+    ) {
+        Get-TestProblem -Edit $Edit | Should -BeExactly ''
+    }
+}
+
+Describe 'Write-SPSLifecycleListingManifest' {
+    It 'writes manifest.json in the folder, and nothing else, also when the folder is relative to the location of the session' {
+        $root = New-TestFolder
+        $null = New-Item -Path (Join-Path -Path $root -ChildPath 'checkpoint') -ItemType Directory
+        $manifest = New-TestManifest
+        Push-Location -LiteralPath $root
+        try {
+            & $script:Module { param($m) Write-SPSLifecycleListingManifest -Folder 'checkpoint' -Manifest $m } $manifest
+        }
+        finally {
+            Pop-Location
+        }
+
+        $folder = Join-Path -Path $root -ChildPath 'checkpoint'
+        @(Get-ChildItem -LiteralPath $folder -Name) | Should -Be @('manifest.json')
+        (Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'manifest.json') -Raw | ConvertFrom-Json).Tenant | Should -BeExactly 'contoso'
+    }
+
+    It 'leaves the manifest as it was, and no partial file, when the disk refuses the new one' {
+        $folder = New-TestFolder
+        $first = New-TestManifest -Tenant 'first'
+        & $script:Module { param($f, $m) Write-SPSLifecycleListingManifest -Folder $f -Manifest $m } $folder $first
+        $second = New-TestManifest -Tenant 'second'
+
+        { Invoke-WithFailingMove -Action { & $script:Module { param($f, $m) Write-SPSLifecycleListingManifest -Folder $f -Manifest $m } $folder $second } } | Should -Throw -ExpectedMessage '*disk is full*'
+
+        (Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'manifest.json') -Raw | ConvertFrom-Json).Tenant | Should -BeExactly 'first'
+        @(Get-ChildItem -LiteralPath $folder -Filter '*.partial') | Should -HaveCount 0
+        (& $script:Module { (Get-Command -Name Move-Item).CommandType }) | Should -Be 'Cmdlet'
+    }
 }
 
 Describe 'Open-SPSLifecycleListingLock' {
@@ -210,24 +433,88 @@ Describe 'The pages of a checkpoint' {
         @{ Culture = 'fr-FR' }
         @{ Culture = 'de-DE' }
         @{ Culture = 'tr-TR' }
+        @{ Culture = 'th-TH' }
+        @{ Culture = 'ar-SA' }
+        @{ Culture = 'sv-SE' }
     ) {
-        $previous = [System.Globalization.CultureInfo]::CurrentCulture
-        try {
-            [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+        Invoke-UnderCulture -Culture $Culture -Action {
             $folder = New-TestFolder
             $manifest = New-TestManifest
             $record = New-TestRecord -Index 1 -Override @{ StorageUsedMB = [long]1234567; Title = 'Ilık İşler 1.5' }
-            $entry = Save-TestPage -Folder $folder -Manifest $manifest -Records @($record)
+            $negative = New-TestRecord -Index 2 -Override @{ StorageUsedMB = [long]-5 }
+            $entry = Save-TestPage -Folder $folder -Manifest $manifest -Records @($record, $negative)
 
             $back = @(& $script:Module { param($f, $e) Read-SPSLifecycleListingPage -Folder $f -Entry $e } $folder $entry)
 
+            $back | Should -HaveCount 2
             $back[0].StorageUsedMB | Should -Be 1234567
             $back[0].Title | Should -BeExactly 'Ilık İşler 1.5'
             $back[0].LastContentModified.Ticks | Should -Be $record.LastContentModified.Ticks
+            $back[1].StorageUsedMB | Should -Be ([long]-5)
+            $back[1].LastContentModified.Ticks | Should -Be $negative.LastContentModified.Ticks
+            $entry.File | Should -BeExactly 'page-000001.csv'
         }
-        finally {
-            [System.Globalization.CultureInfo]::CurrentCulture = $previous
-        }
+    }
+
+    It 'gives each site its own size and date: a site that has none does not take the one of the site before' {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+        $records = @(
+            New-TestRecord -Index 1
+            New-TestRecord -Index 2 -Override @{ StorageUsedMB = $null; LastContentModified = $null }
+            New-TestRecord -Index 3
+        )
+        $entry = Save-TestPage -Folder $folder -Manifest $manifest -Records $records
+
+        $back = @(& $script:Module { param($f, $e) Read-SPSLifecycleListingPage -Folder $f -Entry $e } $folder $entry)
+
+        $back | Should -HaveCount 3
+        $null -eq $back[1].StorageUsedMB | Should -BeTrue
+        $null -eq $back[1].LastContentModified | Should -BeTrue
+        $back[2].StorageUsedMB | Should -Be 13
+        $back[2].LastContentModified.Ticks | Should -Be $records[2].LastContentModified.Ticks
+    }
+
+    It 'refuses a flag that is not True or False, and names the page, the line and the column: <Name>' -ForEach @(
+        @{ Name = 'a word'; Column = 'IsHubSite'; Value = 'Yes' }
+        @{ Name = 'lowercase'; Column = 'IsTeamsConnected'; Value = 'true' }
+        @{ Name = 'a number'; Column = 'IsTeamsChannelConnected'; Value = '1' }
+        @{ Name = 'an empty cell'; Column = 'IsHubSite'; Value = '' }
+    ) {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+        $entry = Save-TestPage -Folder $folder -Manifest $manifest -Count 3
+        Edit-TestPageCell -Path (Join-Path -Path $folder -ChildPath $entry.File) -Row 2 -Column $Column -Value $Value
+
+        { & $script:Module { param($f, $e) Read-SPSLifecycleListingPage -Folder $f -Entry $e } $folder $entry } | Should -Throw -ExpectedMessage "*page 1 of the checkpoint, line 3: '$Column' is neither True nor False.*"
+    }
+
+    It 'refuses a size that is not a whole number, and names the page, the line and the column: <Name>' -ForEach @(
+        @{ Name = 'a word'; Value = 'many' }
+        @{ Name = 'a fraction'; Value = '1.5' }
+        @{ Name = 'an exponent'; Value = '1e3' }
+        @{ Name = 'a thousands separator'; Value = '1,000' }
+    ) {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+        $entry = Save-TestPage -Folder $folder -Manifest $manifest -Count 3
+        Edit-TestPageCell -Path (Join-Path -Path $folder -ChildPath $entry.File) -Row 3 -Column 'StorageUsedMB' -Value $Value
+
+        { & $script:Module { param($f, $e) Read-SPSLifecycleListingPage -Folder $f -Entry $e } $folder $entry } | Should -Throw -ExpectedMessage "*page 1 of the checkpoint, line 4: 'StorageUsedMB' is not a whole number.*"
+    }
+
+    It 'refuses a date that is not the one that the checkpoint writes, and names the page, the line and the column: <Name>' -ForEach @(
+        @{ Name = 'a word'; Value = 'yesterday' }
+        @{ Name = 'ISO 8601 with separators'; Value = '2026-10-14T10:05:58.0000001Z' }
+        @{ Name = 'no fraction'; Value = '20261014T100558Z' }
+        @{ Name = 'a month that does not exist'; Value = '20261414T100558.0000001Z' }
+    ) {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+        $entry = Save-TestPage -Folder $folder -Manifest $manifest -Count 3
+        Edit-TestPageCell -Path (Join-Path -Path $folder -ChildPath $entry.File) -Row 1 -Column 'LastContentModified' -Value $Value
+
+        { & $script:Module { param($f, $e) Read-SPSLifecycleListingPage -Folder $f -Entry $e } $folder $entry } | Should -Throw -ExpectedMessage "*page 1 of the checkpoint, line 2: 'LastContentModified' is not a date that the checkpoint writes.*"
     }
 
     It 'numbers the pages from 1 and writes each one with a six-digit name, next to the manifest' {
@@ -280,6 +567,50 @@ Describe 'The pages of a checkpoint' {
         $null = Save-TestPage -Folder $folder -Manifest $manifest
 
         @(Get-ChildItem -LiteralPath $folder -Filter '*.partial') | Should -HaveCount 0
+    }
+
+    It 'creates the folder of the checkpoint when it is not there' {
+        $folder = Join-Path -Path (New-TestFolder) -ChildPath 'listing-checkpoint'
+        $manifest = New-TestManifest
+
+        $null = Save-TestPage -Folder $folder -Manifest $manifest
+
+        @(Get-ChildItem -LiteralPath $folder -Name | Sort-Object) | Should -Be @('manifest.json', 'page-000001.csv')
+    }
+
+    It 'records in the manifest when the last page was saved' {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+        $later = $script:Now.AddMinutes(7)
+
+        $null = & $script:Module {
+            param($f, $m, $r, $n)
+            Save-SPSLifecycleListingPage -Folder $f -Manifest $m -Record $r -Token '' -NextToken 'next-1' -Read 1 -Seconds 1 -Now $n
+        } $folder $manifest @((New-TestRecord -Index 1)) $later
+
+        $manifest.StartedOn | Should -BeExactly '20261030T090000.0000000Z'
+        $manifest.UpdatedOn | Should -BeExactly '20261030T090700.0000000Z'
+        (Get-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'manifest.json') -Raw | ConvertFrom-Json).UpdatedOn | Should -BeExactly '20261030T090700.0000000Z'
+    }
+
+    It 'lists no page, leaves no partial file and gives the error, when the disk refuses the page' {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+
+        { Invoke-WithFailingMove -Action { Save-TestPage -Folder $folder -Manifest $manifest } } | Should -Throw -ExpectedMessage '*disk is full*'
+
+        @($manifest.Pages) | Should -HaveCount 0
+        @(Get-ChildItem -LiteralPath $folder -Name) | Should -HaveCount 0
+        (& $script:Module { (Get-Command -Name Move-Item).CommandType }) | Should -Be 'Cmdlet'
+    }
+
+    It 'refuses a page that holds another number of sites than the manifest says, although the file is the one that was saved' {
+        $folder = New-TestFolder
+        $manifest = New-TestManifest
+        $entry = Save-TestPage -Folder $folder -Manifest $manifest -Count 3
+        $entry.Sites = 4
+
+        { & $script:Module { param($f, $e) Read-SPSLifecycleListingPage -Folder $f -Entry $e } $folder $entry } | Should -Throw -ExpectedMessage '*page 1*holds 3 sites*manifest says 4*'
     }
 }
 
@@ -502,6 +833,32 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
             Edit-TestFile -Path $script:ManifestPath -Pattern '"ListingComplete":\s*false' -Replacement '"ListingComplete": true'
 
             (Read-TestCheckpoint -Folder $script:Folder).Reason | Should -BeLike '*damaged*'
+        }
+
+        It 'is refused when the manifest of a listing that is running says that it is complete and lists no page: nothing was listed, and nothing would be read' {
+            $folder = New-TestFolder
+            $manifest = New-TestManifest
+            $manifest.ListingComplete = $true
+            & $script:Module { param($f, $m) Write-SPSLifecycleListingManifest -Folder $f -Manifest $m } $folder $manifest
+
+            $state = Read-TestCheckpoint -Folder $folder
+
+            $state.Usable | Should -BeFalse
+            $state.Reason | Should -BeLike '*damaged*running, complete, and lists no page*'
+        }
+
+        It 'does not take a finished listing for a damaged one, although it is complete and lists no page' {
+            $folder = New-TestFolder
+            $manifest = New-TestManifest
+            $null = Save-TestPage -Folder $folder -Manifest $manifest -NextToken ''
+            & $script:Module { param($f, $m, $n) Complete-SPSLifecycleListingCheckpoint -Folder $f -Manifest $m -Now $n } $folder $manifest $script:Now
+
+            $state = Read-TestCheckpoint -Folder $folder
+
+            $state.Finished | Should -BeTrue
+            $state.Usable | Should -BeFalse
+            $state.Reason | Should -BeLike '*finished*'
+            $state.Reason | Should -Not -BeLike '*damaged*'
         }
 
         It 'is refused when the manifest has pages and no token to go on with, and the listing is not complete' {

@@ -130,6 +130,10 @@
         return 'the listing is complete and still has a token to go on with.'
     }
 
+    if ($Manifest.State -ceq 'Running' -and $Manifest.ListingComplete -and $pages.Count -eq 0) {
+        return 'the listing is running, complete, and lists no page (a listing that is not finished always has read at least one, even for a tenant of no site).'
+    }
+
     if (-not $Manifest.ListingComplete -and $pages.Count -gt 0 -and $Manifest.NextToken -eq '') {
         return 'the listing is not complete and has no token to go on with.'
     }

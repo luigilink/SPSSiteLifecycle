@@ -36,6 +36,11 @@ Describe 'Get-SPSLifecycleListingFilter' {
         { Get-TestFilter -LockState @($Value) } | Should -Throw -ExpectedMessage '*lock state*'
     }
 
+    It 'refuses an unknown state that comes after a known one: the known one does not stand for it' {
+        { Get-TestFilter -LockState @('ReadOnly', 'Locked') } | Should -Throw -ExpectedMessage "*'Locked'*not a lock state*"
+        { Get-TestFilter -LockState @('Unlock', 'Read Only') } | Should -Throw -ExpectedMessage '*not a lock state*'
+    }
+
     It 'refuses an empty list: a Scan that asks for no state lists nothing' {
         { Get-TestFilter -LockState @() } | Should -Throw -ExpectedMessage '*at least one*'
     }
