@@ -9,6 +9,7 @@
     $script:Modified = [System.DateTime]::new(2025, 1, 5, 10, 0, 0, [System.DateTimeKind]::Utc)
 
     . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/ModuleStub.ps1')
+    . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/Signal.ps1')
 
     # The site as it is read: what the verdict was given from, and what each read after it gives, with the state that it reports.
     function script:New-LiveSite {
@@ -1006,6 +1007,11 @@ $module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
     }
 
     It 'puts the lock back, and says so, when the process receives the signal that Ctrl+C sends, during the deletion' -Skip:($IsWindows) {
+        if (-not (Test-ChildHonorsSigint -Pwsh $script:Pwsh)) {
+            Set-ItResult -Skipped -Because 'the signal of Ctrl+C does not reach a child process here: the tests were started in the background of a shell'
+            return
+        }
+
         $steps = Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -WaitAt 'delete' -IncludeWarning
 
         $steps | Should -Contain 'lock ReadOnly'
@@ -1015,6 +1021,11 @@ $module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
     }
 
     It 'puts the lock back, and says so, when the process receives the signal that Ctrl+C sends, during the archive request' -Skip:($IsWindows) {
+        if (-not (Test-ChildHonorsSigint -Pwsh $script:Pwsh)) {
+            Set-ItResult -Skipped -Because 'the signal of Ctrl+C does not reach a child process here: the tests were started in the background of a shell'
+            return
+        }
+
         $steps = Invoke-Interrupted -Verdict 'ARCHIVE' -UnlockBeforeArchive 'yes' -WaitAt 'archive' -IncludeWarning
 
         @($steps | Where-Object { $_ -notlike 'warning: *' }) | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'archive', 'read', 'lock ReadOnly', 'read')

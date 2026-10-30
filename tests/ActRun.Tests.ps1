@@ -4,6 +4,7 @@
     $script:Now = [System.DateTime]::new(2026, 10, 30, 9, 0, 0, [System.DateTimeKind]::Utc)
 
     . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/ModuleStub.ps1')
+    . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/Signal.ps1')
     . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/ActFixture.ps1')
 
     # A tenant of sites 1 to Count, and a run that decides on the first of them: Decision is a list of the decisions of the rows
@@ -972,6 +973,11 @@ $module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
     }
 
     It 'does the same when the process receives the signal that Ctrl+C sends, while the action waits' -Skip:($IsWindows) {
+        if (-not (Test-ChildHonorsSigint -Pwsh $script:Pwsh)) {
+            Set-ItResult -Skipped -Because 'the signal of Ctrl+C does not reach a child process here: the tests were started in the background of a shell'
+            return
+        }
+
         $folder = New-InterruptedFolder
         $file = New-InterruptedLoopScript -Folder $folder -Mode 'wait'
 
