@@ -156,9 +156,9 @@
         $shared.TenantName = $shared.TenantName.ToLowerInvariant()
     }
 
-    $refused = @(@('microsoft', 'microsoftonline') + @($shared.RefusedTenants | ForEach-Object { "$_".ToLowerInvariant() }) | Select-Object -Unique)
+    $refused = @(Get-SPSLifecycleRefusedTenantList -RefusedTenant $shared.RefusedTenants)
     $shared.RefusedTenants = $refused
-    if ($shared.TenantName -and $refused -contains $shared.TenantName) {
+    if ($shared.TenantName -and (Test-SPSLifecycleRefusedTenant -TenantName $shared.TenantName -RefusedTenant $refused)) {
         $problems.Add("TenantName: the tenant '$($shared.TenantName)' is refused. The tool never runs on the Microsoft corporate tenants or on a tenant listed in RefusedTenants.")
     }
 
