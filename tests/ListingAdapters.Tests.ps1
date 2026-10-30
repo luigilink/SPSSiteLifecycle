@@ -619,6 +619,104 @@ $script:StubData.Items
     }
 }
 
+Describe 'Get-SPSLifecycleTenantSitePage with the paged call, on the real types of the admin API' {
+    # The real client library (the type libraries of the installed PnP.PowerShell, never the module) builds the request that the
+    # adapter queues, in a process of its own. Invoke-PnPQuery is replaced by a function that reads that request, as the client
+    # library would send it, and sends nothing: no connection exists, and no sign-in command is known in that process.
+    BeforeAll {
+        $script:RealCall = {
+            param([string]$Filter, [string]$StartIndex)
+
+            $base = (Get-Module -ListAvailable -Name 'PnP.PowerShell' | Sort-Object -Property Version -Descending | Select-Object -First 1).ModuleBase
+            $script = @'
+$env:PSModulePath = [System.IO.Path]::Combine($PSHOME, 'Modules')
+$ErrorActionPreference = 'Stop'
+foreach ($name in 'Microsoft.SharePoint.Client.dll', 'Microsoft.SharePoint.Client.Runtime.dll', 'Microsoft.Online.SharePoint.Client.Tenant.dll') {
+    $null = [System.Reflection.Assembly]::LoadFrom((Join-Path -Path '@BASE@' -ChildPath "Core/$name"))
+}
+
+Import-Module -Name '@MANIFEST@' -Force
+$module = Get-Module -Name SPSSiteLifecycle.Common
+& $module {
+    param($filter, $startIndex)
+
+    $script:Sent = [System.Collections.Generic.List[System.String]]::new()
+    $script:Context = [Microsoft.SharePoint.Client.ClientContext]::new('https://contoso-admin.sharepoint.com')
+
+    function script:Get-PnPContext { param($Connection) $script:Context }
+    function script:Invoke-PnPQuery {
+        param($RetryCount, $Connection)
+        $request = $script:Context.PendingRequest
+        $build = $request.GetType().GetMethod('BuildQuery', [System.Reflection.BindingFlags]'Instance,Public,NonPublic')
+        $script:Sent.Add($build.Invoke($request, @()).CreateTextReader().ReadToEnd())
+        $script:Retry = $RetryCount
+    }
+
+    $session = [PSCustomObject]@{ Connection = 'a connection'; TenantName = 'contoso'; AdminUrl = 'https://contoso-admin.sharepoint.com' }
+    $outcome = try {
+        $null = Get-SPSLifecycleTenantSitePage -Session $session -Source Csom -StartIndex $startIndex -Filter $filter
+        'no error'
+    }
+    catch {
+        $_.Exception.Message
+    }
+
+    [PSCustomObject]@{
+        Requests     = $script:Sent.Count
+        Request      = if ($script:Sent.Count -gt 0) { $script:Sent[0] } else { '' }
+        RetryCount   = $script:Retry
+        Outcome      = $outcome
+        SignInKnown  = [bool](Get-Command -Name 'Connect-PnPOnline' -ErrorAction SilentlyContinue)
+        ModuleLoaded = [bool](Get-Module -Name 'PnP.PowerShell')
+    } | ConvertTo-Json -Compress
+} '@FILTER@' '@START@'
+'@
+            $script = $script.Replace('@BASE@', $base.Replace("'", "''")).Replace('@MANIFEST@', $script:Manifest.Replace("'", "''"))
+            $script = $script.Replace('@FILTER@', $Filter.Replace("'", "''")).Replace('@START@', $StartIndex.Replace("'", "''"))
+            $path = Join-Path -Path $TestDrive -ChildPath ('real-call-{0}.ps1' -f [System.Guid]::NewGuid().ToString('N'))
+            [System.IO.File]::WriteAllText($path, $script)
+
+            $output = & (Join-Path -Path $PSHOME -ChildPath 'pwsh') -NoProfile -NonInteractive -File $path
+            $LASTEXITCODE | Should -Be 0
+            ($output | Select-Object -Last 1) | ConvertFrom-Json
+        }
+    }
+
+    It 'queues one request that holds the filter, the token, the details, and no OneDrive site, and asks again when the tenant throttles' -Skip:(-not (Get-Module -ListAvailable -Name 'PnP.PowerShell')) {
+        $call = & $script:RealCall "LockState -eq 'ReadOnly'" 'token-1'
+
+        $call.Requests | Should -Be 1
+        $call.RetryCount | Should -Be 5
+        $call.Request | Should -BeLike '*Name="GetSitePropertiesFromSharePointByFilters"*'
+        $call.Request | Should -BeLike "*<Property Name=`"Filter`" Type=`"String`">LockState -eq 'ReadOnly'</Property>*"
+        $call.Request | Should -BeLike '*<Property Name="StartIndex" Type="String">token-1</Property>*'
+        $call.Request | Should -BeLike '*<Property Name="IncludeDetail" Type="Boolean">true</Property>*'
+        $call.Request | Should -BeLike '*<Property Name="IncludePersonalSite" Type="Enum">2</Property>*'
+    }
+
+    It 'asks for every property of the sites that come back, so that none is left unloaded' -Skip:(-not (Get-Module -ListAvailable -Name 'PnP.PowerShell')) {
+        $call = & $script:RealCall '' ''
+
+        $call.Request | Should -BeLike '*<ChildItemQuery SelectAllProperties="true">*'
+    }
+
+    It 'sends no filter and no token for the first page of a whole listing' -Skip:(-not (Get-Module -ListAvailable -Name 'PnP.PowerShell')) {
+        $call = & $script:RealCall '' ''
+
+        $call.Request | Should -BeLike '*<Property Name="Filter" Type="Null" />*'
+        $call.Request | Should -BeLike '*<Property Name="StartIndex" Type="Null" />*'
+    }
+
+    It 'stops, after having queued the request, when the call gives back no page that can be read, and never signs in' -Skip:(-not (Get-Module -ListAvailable -Name 'PnP.PowerShell')) {
+        $call = & $script:RealCall '' ''
+
+        $call.Requests | Should -Be 1
+        $call.Outcome | Should -BeLike '*not been initialized*'
+        $call.SignInKnown | Should -BeFalse -Because 'no sign-in command may exist in that process'
+        $call.ModuleLoaded | Should -BeFalse -Because 'the module is never imported by a test'
+    }
+}
+
 Describe 'Get-SPSLifecycleTenantSite' {
     BeforeEach {
         Set-ModuleStub -Stub @{
