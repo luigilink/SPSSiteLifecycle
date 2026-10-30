@@ -285,7 +285,7 @@
                         $first = [System.Int64]0
                         if ($seen.TryGetValue($site.SiteId, [ref]$first)) {
                             if ($first -ne $guards) {
-                                throw "The site '$(ConvertTo-SPSLifecycleVisibleText -Text $site.SiteId)' came twice in the listing with another value for a field that guards it, so the tenant changed while it was read, and the listing cannot tell which reading is true. Run the Scan again."
+                                throw "The site '$(ConvertTo-SPSLifecycleVisibleText -Text $site.SiteId)' came twice in the listing with another value for a field that guards it, so the tenant changed while it was read, and the listing cannot tell which reading is true. Start the listing again from the first page (Restart): a run that takes the checkpoint up would read the first reading from it again."
                             }
 
                             $Summary.DuplicatesDropped++

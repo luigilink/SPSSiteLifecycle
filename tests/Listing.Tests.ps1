@@ -158,10 +158,8 @@ Describe 'Get-SPSLifecycleListingGuard' {
         $second | Should -Be $first
     }
 
-    It 'does not change with what changes while a listing goes on: <Field>' -ForEach @(
+    It 'does not change with what has no part in a verdict: <Field>' -ForEach @(
         @{ Field = 'Title'; Value = 'Renamed' }
-        @{ Field = 'StorageUsedMB'; Value = [long]99999 }
-        @{ Field = 'LastContentModified'; Value = [System.DateTime]::new(2026, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc) }
         @{ Field = 'SiteId'; Value = '00000009-0000-4000-8000-000000000009' }
     ) {
         (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $Value })) | Should -Be (Get-TestGuard -Record (New-TestRecord -Index 1))
@@ -176,8 +174,55 @@ Describe 'Get-SPSLifecycleListingGuard' {
         @{ Field = 'IsTeamsConnected'; Value = $false }
         @{ Field = 'IsTeamsChannelConnected'; Value = $true }
         @{ Field = 'ArchiveStatus'; Value = 'RecentlyArchived' }
+        @{ Field = 'StorageUsedMB'; Value = [long]99999 }
+        @{ Field = 'StorageUsedMB'; Value = [long]0 }
+        @{ Field = 'StorageUsedMB'; Value = $null }
+        @{ Field = 'LastContentModified'; Value = [System.DateTime]::new(2026, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc) }
+        @{ Field = 'LastContentModified'; Value = [System.DateTime]::new(2026, 10, 14, 10, 5, 58, [System.DateTimeKind]::Utc).AddTicks(2) }
+        @{ Field = 'LastContentModified'; Value = $null }
     ) {
         (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $Value })) | Should -Not -Be (Get-TestGuard -Record (New-TestRecord -Index 1))
+    }
+
+    It 'tells a size that is not known from a size of zero, and a date that is not known from the date of the first tick' {
+        (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ StorageUsedMB = $null })) | Should -Not -Be (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ StorageUsedMB = [long]0 }))
+        (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = $null })) | Should -Not -Be (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = [System.DateTime]::new(1, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc) }))
+    }
+
+    It 'does not stop on a size or a date that is not of the type of the record, and tells it from the others: <Field> <Value>' -ForEach @(
+        @{ Field = 'StorageUsedMB'; Value = 'many' }
+        @{ Field = 'StorageUsedMB'; Value = 12.5 }
+        @{ Field = 'LastContentModified'; Value = 'yesterday' }
+        @{ Field = 'LastContentModified'; Value = 42 }
+    ) {
+        { Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $Value }) } | Should -Not -Throw
+        $odd = Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $Value })
+
+        $odd | Should -BeOfType [long]
+        $odd | Should -Not -Be (Get-TestGuard -Record (New-TestRecord -Index 1))
+        $odd | Should -Not -Be (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $null }))
+        $odd | Should -Be (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $Value }))
+    }
+
+    It 'is the same for the same instant, whatever the kind of the date that holds it' {
+        $utc = [System.DateTime]::new(2026, 10, 14, 10, 5, 58, [System.DateTimeKind]::Utc)
+
+        (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = $utc.ToLocalTime() })) | Should -Be (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = $utc }))
+        (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = [System.DateTime]::SpecifyKind($utc, [System.DateTimeKind]::Unspecified) })) | Should -Be (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = $utc }))
+    }
+
+    It 'does not depend on the culture of the machine' -ForEach @('en-US', 'fr-FR', 'de-DE', 'tr-TR', 'ar-SA', 'th-TH') {
+        $before = [System.Threading.Thread]::CurrentThread.CurrentCulture
+        try {
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('en-US')
+            $expected = Get-TestGuard -Record (New-TestRecord -Index 7)
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($_)
+
+            Get-TestGuard -Record (New-TestRecord -Index 7) | Should -Be $expected
+        }
+        finally {
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = $before
+        }
     }
 
     It 'does not take a value that moves from one field to the next for the same site' {
@@ -406,6 +451,10 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             @{ Field = 'IsTeamsConnected'; Value = $false }
             @{ Field = 'IsTeamsChannelConnected'; Value = $true }
             @{ Field = 'ArchiveStatus'; Value = 'RecentlyArchived' }
+            @{ Field = 'StorageUsedMB'; Value = [long]5000 }
+            @{ Field = 'StorageUsedMB'; Value = $null }
+            @{ Field = 'LastContentModified'; Value = [System.DateTime]::new(2026, 10, 30, 8, 0, 0, [System.DateTimeKind]::Utc) }
+            @{ Field = 'LastContentModified'; Value = $null }
         ) {
             $folder = New-TestFolder
             $pages = @(
@@ -436,12 +485,11 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder } | Should -Throw -ExpectedMessage '*00000004-0000-4000-8000-000000000004*twice*another value*'
         }
 
-        It 'drops it as a duplicate when only what changes while a listing goes on differs: the title, the size and the date' {
+        It 'drops it as a duplicate when only what has no part in a verdict differs: the title' {
             $folder = New-TestFolder
-            $later = $script:Now.AddDays(3)
             $pages = @(
                 , @((New-TestRecord -Index 1), (New-TestRecord -Index 2))
-                , @((New-TestRecord -Index 1 -Override @{ Title = 'Renamed'; StorageUsedMB = [long]999; LastContentModified = $later }), (New-TestRecord -Index 3))
+                , @((New-TestRecord -Index 1 -Override @{ Title = 'Renamed' }), (New-TestRecord -Index 3))
             )
 
             $result = Invoke-TestListing -Source (New-TestSource -Pages @($pages[0], $pages[1]) -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder
@@ -755,6 +803,33 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
     }
 
     Context 'A listing that was interrupted: what it has already seen' {
+        It 'takes a site with no size and no date, which comes again after the resume, for the same site' {
+            $folder = New-TestFolder
+            $pages = New-TestPages -Sizes 3, 2, 2
+            $pages[1][0].StorageUsedMB = $null
+            $pages[1][0].LastContentModified = $null
+            $pages[2] = @((New-TestRecord -Index 4 -Override @{ StorageUsedMB = $null; LastContentModified = $null }), (New-TestRecord -Index 6))
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new()) -Failures @{ t2 = 99 }) -Folder $folder } | Should -Throw
+
+            $result = Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder
+
+            $result.Summary.Resumed | Should -BeTrue
+            $result.Summary.DuplicatesDropped | Should -Be 1
+            @($result.Records | Where-Object { $_.Title -eq 'Site 4' }) | Should -HaveCount 1
+        }
+
+        It 'stops when a site that comes again after the resume has another size or date than the saved page gave: <Field>' -ForEach @(
+            @{ Field = 'StorageUsedMB'; Value = [long]5000 }
+            @{ Field = 'LastContentModified'; Value = [System.DateTime]::new(2026, 10, 30, 8, 0, 0, [System.DateTimeKind]::Utc) }
+        ) {
+            $folder = New-TestFolder
+            $pages = New-TestPages -Sizes 3, 2, 2
+            $pages[2] = @((New-TestRecord -Index 4 -Override @{ $Field = $Value }), (New-TestRecord -Index 6))
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new()) -Failures @{ t2 = 99 }) -Folder $folder } | Should -Throw
+
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder } | Should -Throw -ExpectedMessage '*00000004-0000-4000-8000-000000000004*twice*another value*'
+        }
+
         It 'drops a site that comes again after the resume, which a saved page already gave, and counts it' {
             $folder = New-TestFolder
             $pages = New-TestPages -Sizes 3, 2, 2
