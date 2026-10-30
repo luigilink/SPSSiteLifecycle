@@ -137,6 +137,43 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             { ConvertTo-TestRecord -Item $item } | Should -Throw -ExpectedMessage '*contoso.sharepoint.com/sites/a*'
         }
 
+        It 'reads a size under the culture of the machine, as the admin API writes it and not as the culture writes a number: <Culture>' -ForEach @(
+            @{ Culture = 'en-US' }
+            @{ Culture = 'fr-FR' }
+            @{ Culture = 'de-DE' }
+            @{ Culture = 'tr-TR' }
+            @{ Culture = 'sv-SE' }
+            @{ Culture = 'ar-SA' }
+            @{ Culture = 'fa-IR' }
+        ) {
+            $before = [System.Threading.Thread]::CurrentThread.CurrentCulture
+            try {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+
+                (ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = '+12' })).StorageUsedMB | Should -Be 12
+                (ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = '1200' })).StorageUsedMB | Should -Be 1200
+                { ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = '-5' }) } | Should -Throw -ExpectedMessage "*'StorageUsage' is below zero*"
+            }
+            finally {
+                [System.Threading.Thread]::CurrentThread.CurrentCulture = $before
+            }
+        }
+
+        It 'reads a size whatever the variables that the caller happens to have, which do not stand for what the function has not set yet' {
+            $item = New-TestItem -Override @{ StorageUsage = 12L }
+
+            $record = & $script:Module {
+                param($i)
+                $notNumber = $true
+                $storageMB = 999
+                $sizeText = 'x'
+                $number = 7
+                ConvertTo-SPSLifecycleSiteRecord -Item $i -Source Csom
+            } $item
+
+            $record.StorageUsedMB | Should -Be 12
+        }
+
         It 'is no size, and not the one of a variable that the caller happens to have, when the call gives none' {
             $item = New-TestItem -Override @{ StorageUsage = $null }
 
@@ -161,6 +198,10 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             @{ Name = 'a text with a plus sign'; Value = '+12'; Expected = 12 }
             @{ Name = 'zero'; Value = [long]0; Expected = 0 }
             @{ Name = 'the largest size'; Value = [long]::MaxValue; Expected = [long]::MaxValue }
+            @{ Name = 'an unsigned long'; Value = [uint64]12; Expected = 12 }
+            @{ Name = 'the largest size as an unsigned long'; Value = [uint64][long]::MaxValue; Expected = [long]::MaxValue }
+            @{ Name = 'the largest size as a decimal'; Value = [decimal][long]::MaxValue; Expected = [long]::MaxValue }
+            @{ Name = 'a large size as a double'; Value = 9.1e18; Expected = [long]9100000000000000000 }
         ) {
             $record = ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = $Value })
 
@@ -192,6 +233,9 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             @{ Name = 'infinity'; Value = [double]::PositiveInfinity }
             @{ Name = 'a number that does not fit'; Value = 1e30 }
             @{ Name = 'an unsigned number that does not fit'; Value = [uint64]::MaxValue }
+            @{ Name = 'a fraction as a decimal'; Value = [decimal]1.5 }
+            @{ Name = 'the largest decimal, which does not fit'; Value = [decimal]::MaxValue }
+            @{ Name = 'a double at the limit of what is read'; Value = 9.2e18 }
             @{ Name = 'an object'; Value = (Get-Date) }
             @{ Name = 'a list'; Value = @(1, 2) }
         ) {
@@ -312,7 +356,7 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
         }
 
         It 'stops on an item that is null' {
-            { ConvertTo-TestRecord -Item $null } | Should -Throw -ExpectedMessage '*empty*'
+            { ConvertTo-TestRecord -Item $null } | Should -Throw -ExpectedMessage 'The site that the call gave is empty (null).'
         }
 
         It 'leaves a missing text empty and a missing size or date unknown, and the Scan core says what it cannot use' {

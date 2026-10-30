@@ -59,11 +59,15 @@
     # A source of pages. The page n (from 0) is asked with the token '' for the first and tn for the others, and gives tn+1 as
     # the token of the next one, or none after the last. Failures says how many times a token fails before it works.
     function script:New-TestSource {
-        param($Pages, $Calls, [hashtable]$Failures = @{})
+        param($Pages, $Calls, [hashtable]$Failures = @{}, [int]$DelayMilliseconds = 0)
 
         {
             param([string]$StartIndex)
             $Calls.Add($StartIndex)
+            if ($DelayMilliseconds -gt 0) {
+                Start-Sleep -Milliseconds $DelayMilliseconds
+            }
+
             if ($Failures.ContainsKey($StartIndex) -and $Failures[$StartIndex] -gt 0) {
                 $Failures[$StartIndex] = $Failures[$StartIndex] - 1
                 throw 'The server did not answer.'
@@ -283,6 +287,30 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             $summary.ElapsedSeconds | Should -BeGreaterOrEqual 0
             $summary.PageSecondsTotal | Should -BeGreaterOrEqual 0
             $summary.PageSecondsMax | Should -BeLessOrEqual $summary.PageSecondsTotal
+        }
+
+        It 'times each page and the whole listing' {
+            $folder = New-TestFolder
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $source = New-TestSource -Pages (New-TestPages -Sizes 2, 2, 2) -Calls $calls -DelayMilliseconds 40
+
+            $summary = (Invoke-TestListing -Source $source -Folder $folder).Summary
+
+            $summary.PageSecondsMax | Should -BeGreaterOrEqual 0.03
+            $summary.PageSecondsTotal | Should -BeGreaterOrEqual 0.09
+            $summary.PageSecondsMax | Should -BeLessThan $summary.PageSecondsTotal
+            $summary.ElapsedSeconds | Should -BeGreaterOrEqual $summary.PageSecondsTotal
+        }
+
+        It 'times the listing when it stops on an error too' {
+            $folder = New-TestFolder
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $source = New-TestSource -Pages (New-TestPages -Sizes 2, 2) -Calls $calls -Failures @{ t1 = 99 } -DelayMilliseconds 40
+            $summary = & $script:Module { Initialize-SPSLifecycleListingSummary }
+
+            { Invoke-TestListing -Source $source -Folder $folder -Summary $summary } | Should -Throw
+
+            $summary.ElapsedSeconds | Should -BeGreaterOrEqual 0.1
         }
 
         It 'leaves a manifest that says the listing finished, and no page, when it is over' {
@@ -543,7 +571,7 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             $calls = [System.Collections.Generic.List[string]]::new()
             $source = New-TestSource -Pages (New-TestPages -Sizes 2, 2) -Calls $calls -Failures @{ t1 = 1 }
 
-            { Invoke-TestListing -Source $source -Folder $folder -PageAttempts 1 } | Should -Throw -ExpectedMessage '*1 attempt*'
+            { Invoke-TestListing -Source $source -Folder $folder -PageAttempts 1 } | Should -Throw -ExpectedMessage '*after 1 attempt: *'
 
             @($calls | Where-Object { $_ -eq 't1' }) | Should -HaveCount 1
         }
