@@ -9,6 +9,7 @@ Describe 'The generated wiki pages' {
         @{ Name = 'Configuration'; Generator = 'Get-SPSLifecycleConfigurationPage' }
         @{ Name = 'Verdicts'; Generator = 'Get-SPSLifecycleVerdictPage' }
         @{ Name = 'Report'; Generator = 'Get-SPSLifecycleReportPage' }
+        @{ Name = 'App-Registration'; Generator = 'Get-SPSLifecycleAppRegistrationPage' }
     ) {
         $path = Join-Path -Path $script:WikiFolder -ChildPath "$Name.md"
         Test-Path -LiteralPath $path | Should -BeTrue -Because "wiki/$Name.md must exist: run tools/Update-Documentation.ps1"
@@ -57,6 +58,7 @@ Describe 'The generated wiki pages' {
             $text | Should -Match 'Configuration' -Because "$file must link to the Configuration page"
             $text | Should -Match 'Verdicts' -Because "$file must link to the Verdicts page"
             $text | Should -Match 'Report' -Because "$file must link to the Report page"
+            $text | Should -Match 'App-Registration' -Because "$file must link to the App-Registration page"
         }
     }
 }

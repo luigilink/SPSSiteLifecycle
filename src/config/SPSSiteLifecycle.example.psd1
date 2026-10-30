@@ -16,7 +16,8 @@
     TenantName            = 'contoso'
 
     # Required. Application (client) ID of your Microsoft Entra app registration, for the
-    # interactive sign-in of PnP.PowerShell.
+    # interactive sign-in of PnP.PowerShell. The setup script src/Register-SPSSiteLifecycleApp.ps1
+    # creates the app and shows this value (see the App-Registration page of the wiki).
     ClientId              = '11111111-2222-3333-4444-555555555555'
 
     # Folder for the reports, the checkpoints and the lock journal.

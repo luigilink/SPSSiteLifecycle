@@ -212,3 +212,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be read, or when it stopped after 3 errors in a row, with a warning that names the report, so that a scheduler can tell it from
   a run that ended as planned. The Getting Started page says what a person does between the phases (filter the report, fill in
   `Decision`, save it as CSV) and how to run the Act: report only first, then one action with `MaxActions = 1`.
+- Setup: `src/Register-SPSSiteLifecycleApp.ps1` registers the Microsoft Entra app that the tool signs in with, in one guided run (#8), through
+  the public function `Register-SPSLifecycleApp`. It shows the plan first (the tenant, the app, each permission with what the tool uses it
+  for, the certificate, the roles that create the app and give the consent; `-WhatIf` stops there), refuses the Microsoft tenants, asks
+  for the name of the tenant to be typed, then registers an app that a person signs in with (the default: delegated permissions, no
+  certificate) or an app that signs in alone (`-Kind Certificate`: application permissions and a self-signed certificate of 2 years by
+  default, whose password is typed twice and never shown, and whose files go to a folder outside the repository that only the user can
+  read, restricted again when the run is interrupted). It stops when an app of that name exists and says what became of the files, and
+  shows the lines for the settings file. The permissions are a table of data with a reason for each, and the generated App-Registration
+  page of the wiki says what the script does and how to do the same by hand. `.gitignore` keeps `*.pfx`, `*.cer`, `*.pem`, `*.key` and
+  `*.p12` out of a commit. Nothing of it has run against a tenant yet.

@@ -4,9 +4,9 @@
 
 * **PowerShell 7.4 or later.** PnP.PowerShell 3.x does not run on Windows PowerShell 5.1.
 * **PnP.PowerShell 3.x**, installed with `Install-Module -Name PnP.PowerShell -Scope CurrentUser`.
-* **An Entra ID app registration** for the interactive sign-in. PnP.PowerShell has required your own application since 9 September 2024: see [Register an Entra ID application to use with PnP PowerShell](https://pnp.github.io/powershell/articles/registerapplication.html). The tool asks for its client ID.
+* **A Microsoft Entra app registration** for the sign-in. PnP.PowerShell has required your own application since 9 September 2024. A script makes it in one guided run (`pwsh ./src/Register-SPSSiteLifecycleApp.ps1 -TenantName contoso`: it shows its plan first, and `-WhatIf` stops there), and the [App registration](App-Registration) page says what it does and how to do the same by hand. It needs a user who is allowed to register applications, and an administrator who can give the consent. The tool asks for the client ID of the app.
 * **Roles on the tenant:** SharePoint Administrator to read and act on the sites, and Groups Administrator to delete Microsoft 365 groups.
-* **Microsoft Graph delegated permissions of the app:** `Group.Read.All` is enough for a report-only run, `Group.ReadWrite.All` is needed to delete groups.
+* **The permissions of the app** are the ones of the script: `AllSites.FullControl` of SharePoint and `Group.ReadWrite.All` of Microsoft Graph, both delegated (see the [App registration](App-Registration) page for what the tool uses each for).
 * **Archiving only:** Microsoft 365 Archive turned on (pay-as-you-go billing) and a site collection admin role on each site to archive.
 
 ## Before the first run

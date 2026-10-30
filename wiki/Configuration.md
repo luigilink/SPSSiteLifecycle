@@ -28,7 +28,7 @@ Written at the top of the file.
 | Setting | Type | Default | Required in | Used by | Description |
 |---------|------|---------|-------------|---------|-------------|
 | `TenantName` | text | (none) | Scan and Act | Scan and Act | Name of the tenant: the first part of the SharePoint address (`contoso` for `contoso.sharepoint.com`). |
-| `ClientId` | GUID | (none) | Scan and Act | Scan and Act | Application (client) ID of the Microsoft Entra app registration that PnP.PowerShell uses for the interactive sign-in. |
+| `ClientId` | GUID | (none) | Scan and Act | Scan and Act | Application (client) ID of the Microsoft Entra app registration that PnP.PowerShell uses for the interactive sign-in. The setup script `src/Register-SPSSiteLifecycleApp.ps1` creates the app and shows it (see the [App registration](App-Registration) page). |
 | `OutputFolder` | folder path | `Reports` | no | Scan and Act | Folder where the reports, the checkpoints and the lock journal are written. It is created when missing. A relative path is relative to the folder of the settings file. |
 | `RefusedTenants` | list of texts | `@()` | no | Scan and Act | Tenant names that the tool refuses, in addition to the built-in list (`microsoft`, `microsoftonline`), which cannot be removed. |
 | `AcceptedLockStates` | list of `ReadOnly`, `Unlock` | `@('ReadOnly')` | no | Scan and Act | Lock states in which a site can be deleted or archived. `ReadOnly` is the safe default, because a person already decided to lock the site. Add `Unlock` to allow the direct deletion of an unlocked site. `NoAccess` is never accepted. |

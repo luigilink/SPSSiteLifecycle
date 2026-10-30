@@ -35,7 +35,7 @@
         }
         @{
             Section = 'Shared'; Name = 'ClientId'; Type = 'Guid'; RequiredIn = $both; UsedIn = $both
-            Description = 'Application (client) ID of the Microsoft Entra app registration that PnP.PowerShell uses for the interactive sign-in.'
+            Description = 'Application (client) ID of the Microsoft Entra app registration that PnP.PowerShell uses for the interactive sign-in. The setup script `src/Register-SPSSiteLifecycleApp.ps1` creates the app and shows it (see the [App registration](App-Registration) page).'
         }
         @{
             Section = 'Shared'; Name = 'OutputFolder'; Type = 'Path'; Kind = 'Folder'; UsedIn = $both
