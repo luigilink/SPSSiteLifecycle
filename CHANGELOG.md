@@ -176,3 +176,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lines of information: the time, how the sites were listed, the sites in the report and the sites left out, the suggested actions,
   the verdicts by count, and the path of the report. The script exits with 0, or with 1 after a message that says what stopped it and
   that nothing was changed in the tenant. `-Phase Act` says that the phase is not available in this version, and exits with 1.
+- Act: each row is read again from the tenant right before its action, and gets its verdict from the live state (#11), by
+  `Get-SPSLifecycleActVerdict` (it reads and changes nothing). The new adapters only read: `Get-SPSLifecycleLiveSite` (the site by its
+  address, with whether it has a hold) and `Get-SPSLifecycleGroupState` (`None`, `Active`, `SoftDeleted` or `NotFound`, by the ID as a
+  GUID). A site that is gone is `SKIP-NOT-FOUND`, an address that now belongs to another site is `SKIP-SITEID-MISMATCH`, and a site
+  that the engine would let through is kept back as `REVIEW-CONTENT-MODIFIED` (changed after the report, or no date) or
+  `REVIEW-RETENTION` (a hold). The decision of the person is the action of the engine and never lifts a gate. The group is read only
+  when the site has one and every gate before it has been passed. A read that fails is an error, never a verdict, so that it can never
+  lead to an action, and only the messages that the tenant gives for a thing that does not exist are read as "not there". The lab
+  has not checked these messages, nor `HasHolds`, nor the effect of a lock on the content date (#15).

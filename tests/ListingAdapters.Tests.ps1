@@ -163,6 +163,8 @@ Describe 'The tests of the adapters cannot reach a tenant' {
         @{ Name = 'Invoke-PnPQuery' }
         @{ Name = 'Get-PnPTenantSite' }
         @{ Name = 'Get-PnPHomeSite' }
+        @{ Name = 'Get-PnPMicrosoft365Group' }
+        @{ Name = 'Get-PnPDeletedMicrosoft365Group' }
         @{ Name = 'Disconnect-PnPOnline' }
         @{ Name = 'Set-PnPTenantSite' }
         @{ Name = 'Remove-PnPTenantSite' }

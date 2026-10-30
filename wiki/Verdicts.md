@@ -33,8 +33,8 @@ Every site gets one verdict, in the `Verdict` column of the CSV and in the summa
 | `DELETE-VIA-GROUP` | Action | Scan and Act | The site belongs to a Microsoft 365 group: delete the group, which deletes the site some time later (from minutes to hours). |
 | `SKIP-NOT-FOUND` | Skip | Act only | The site no longer exists in the tenant. |
 | `SKIP-SITEID-MISMATCH` | Skip | Act only | The URL exists, but with another site ID than in the CSV: the URL was reused by a new site. |
-| `REVIEW-CONTENT-MODIFIED` | Review | Act only | The content of the site changed after the CSV was generated. |
-| `REVIEW-RETENTION` | Review | Act only | A retention policy or a hold is known for the site (best effort: the tool cannot see every Microsoft Purview policy). |
+| `REVIEW-CONTENT-MODIFIED` | Review | Act only | The content of the site changed after the CSV was generated, or the tenant gives no date for it, so a change cannot be ruled out. |
+| `REVIEW-RETENTION` | Review | Act only | The tenant reports a hold on the site (`HasHolds`). Best effort: a retention policy that the site does not report is not seen, because the tool cannot see every Microsoft Purview policy. |
 
 ## System sites that are never touched
 
