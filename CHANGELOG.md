@@ -5,6 +5,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The tenant name and the names of the settings are read one character at a time (#24). `TenantName` accepted
+  the Kelvin sign (U+212A) and a capital I with a dot above (U+0130), which a regular expression that ignores the case
+  reads as a `k` and an `i`; the rule is now ASCII letters, digits and hyphens, matched as it is written, and a message
+  that shows a name writes the characters that are not printable ASCII as `\uXXXX`. The entries of `RefusedTenants` follow the
+  same rule, because an entry that can never be the name of a tenant refuses nothing. A setting whose name held a
+  zero-width space or a soft hyphen (`Refused<zero-width space>Tenants`) was read as the setting that it looked like, then
+  never found, so the list of refused tenants, or any other setting, was dropped without a message: the names are now
+  compared with `OrdinalIgnoreCase`, and a name that is not known stops the tool and shows the hidden character. The check
+  right before the sign-in repeats the rule on the tenant name, and wants an ASCII admin address.
+
 ### Added
 
 - Project skeleton: CI workflows (Pester on Windows and Linux, PSScriptAnalyzer, release,
@@ -91,3 +103,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant tables of the verdict engine are built once, and the lock date entries are hashtables, because the
   garbage collector took four fifths of the time. The tests run 5,000 and 20,000 sites and compare the times, so that
   a time that grows with the square of the size fails on any system.
+- The listing of the tenant (`Get-SPSLifecycleTenantSite`), which the Scan reads the sites with (#6). It lists
+  the sites page by page (about 1,500 a page) with the paged call of the SharePoint admin API, filtered on the
+  server by the lock state when a single one is asked, and falls back on `Get-PnPTenantSite`, saying why, when
+  the installed PnP.PowerShell does not have the types and members that the paged call needs. After each page
+  it saves a checkpoint (a manifest, one file per page with its SHA-256, and a lock file), and an interrupted
+  run takes it up where it stopped when it is for the same tenant, filter and way of asking, is less than 24
+  hours old, has dates that can be true (a clock that was set back is seen), holds every page intact and has
+  pages that form a chain of tokens (a page removed from the middle of the manifest is seen); otherwise it says
+  why, in words and with a code that names nothing (`StartCode`), and starts again, and a listing that finished
+  is never reused. The pages go down the pipeline one at a time. A page that fails is asked again, and a token
+  that was already asked, a page with no token and a token that is not a text stop the listing. The OneDrive
+  sites that came anyway and the addresses that SharePoint does not give are left out and counted. A site that
+  comes twice is kept once when the two readings agree on the fields that a safeguard or a verdict reads, the size
+  and the date of the last change included (compared by a 64-bit digest: 61 MB for 260,000 sites), and stops
+  the listing when they do not. A property that the call did not
+  load reads as `$null` in PowerShell and would have hidden a safeguard for every site, so every site is
+  checked for it, not the first of each page, and a page with a property that is not loaded stops the listing.
+  A size is a whole number of megabytes: a blank one is not known (the Scan gives it a review verdict), and a
+  boolean, a fraction, a text or a value out of range stops the listing instead of reading as 0, 1 or 2.
+  Everything that touches the tenant is in `Private/Adapters` (the check of PnP.PowerShell 3.0 or later, the
+  sign-in, which checks the refused tenants and the address of the admin site again right before it, the
+  sign-out and the read of a page), every call stops on an error (a cmdlet that gives some sites and then
+  writes an error is not taken for a last page, and a sign-in that gives no connection stops the tool), and a
+  test fails when a command that signs in, or a type of the admin API, is written anywhere else, or when a
+  command is built at run time outside the adapters. The refused tenants are one rule that the settings and the
+  sign-in share. The tests never reach a tenant: the commands of PnP.PowerShell are replaced by stubs that are
+  checked before each test, throwing tripwires stand on the sign-in, and the tests that look at the real types
+  load the libraries of types only, in a process of their own (and run only where PnP.PowerShell is
+  installed). Without a tenant, the checkpoint takes 22 microseconds to write and 32 to read a record, a
+  record is converted in 30, and 259,500 sites in 173 pages are listed in 12 s (11 s when the run resumes at the half). A lab script,
+  `tools/lab/Test-TenantListing.ps1`, runs the listing against a tenant and only reads: it reports the pages,
+  the times, counts and checks (a resume after a stop gives the same sites as a run that starts again, and the
+  sites can be compared field by field with `Get-PnPTenantSite`), with no tenant name, address, account or title
+  in what it prints and writes (what it shows comes from lists in the script: no text that the module or a library
+  writes is passed on, by whatever stream it comes, and the text of an error is never shown: it goes to a file of
+  the output folder; the versions are numbers, and a value that is typed wrong is named by its parameter and never
+  given back), and its logic is tested offline. The call has not run against a tenant yet: the first run is the lab.

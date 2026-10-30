@@ -91,8 +91,8 @@
             }
 
             $text = $Value.Trim()
-            if ($Row.Pattern -and $text -notmatch $Row.Pattern) {
-                return & $result $null "must be $($Row.PatternHint) (now: '$text')."
+            if ($Row.Pattern -and -not [System.Text.RegularExpressions.Regex]::IsMatch($text, $Row.Pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+                return & $result $null "must be $($Row.PatternHint) (now: '$(ConvertTo-SPSLifecycleVisibleText -Text $text -AsciiOnly)')."
             }
 
             return & $result $text ''
@@ -141,13 +141,24 @@
         }
 
         'StringList' {
-            return & $result @($items | ForEach-Object { $_.Trim() }) ''
+            $trimmed = @($items | ForEach-Object { $_.Trim() })
+            if ($Row.Pattern) {
+                foreach ($item in $trimmed) {
+                    if (-not [System.Text.RegularExpressions.Regex]::IsMatch($item, $Row.Pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+                        return & $result @() "has an entry that must be $($Row.PatternHint) (now: '$(ConvertTo-SPSLifecycleVisibleText -Text $item -AsciiOnly)')."
+                    }
+                }
+            }
+
+            return & $result $trimmed ''
         }
 
         'Choice' {
-            $match = @($Row.Values | Where-Object { $_ -ieq "$Value".Trim() })
+            # A choice is compared one character at a time: the comparison operators of PowerShell ignore a soft hyphen and a
+            # zero-width space, so a value that has one would be read as the choice that it looks like.
+            $match = @($Row.Values | Where-Object { [System.String]::Equals($_, "$Value".Trim(), [System.StringComparison]::OrdinalIgnoreCase) })
             if ($Value -isnot [System.String] -or $match.Count -eq 0) {
-                return & $result $null "must be one of: $($Row.Values -join ', ') (now: '$Value')."
+                return & $result $null "must be one of: $($Row.Values -join ', ') (now: '$(ConvertTo-SPSLifecycleVisibleText -Text "$Value" -AsciiOnly)')."
             }
 
             return & $result $match[0] ''
@@ -156,9 +167,9 @@
         'ChoiceList' {
             $checked = [System.Collections.Generic.List[System.String]]::new()
             foreach ($item in $items) {
-                $match = @($Row.Values | Where-Object { $_ -ieq $item.Trim() })
+                $match = @($Row.Values | Where-Object { [System.String]::Equals($_, $item.Trim(), [System.StringComparison]::OrdinalIgnoreCase) })
                 if ($match.Count -eq 0) {
-                    return & $result @() "must hold values among: $($Row.Values -join ', ') (now: '$item')."
+                    return & $result @() "must hold values among: $($Row.Values -join ', ') (now: '$(ConvertTo-SPSLifecycleVisibleText -Text $item -AsciiOnly)')."
                 }
 
                 if (-not $checked.Contains($match[0])) {

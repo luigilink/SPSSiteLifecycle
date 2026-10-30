@@ -11,8 +11,11 @@
         Each row has: Section (Shared, Scan or Act; Shared keys are written at the top of the file,
         the others inside the Scan or Act section), Name, Type (String, Guid, Path, PathList,
         StringList, Choice, ChoiceList, Int, Double, Bool), Default, DefaultText (for the
-        documentation), RequiredIn and UsedIn (phases), Min and Max, Pattern and PatternHint, Values,
-        Kind (File or Folder, for the paths), MustExist, AllowEmpty (lists) and Description.
+        documentation), RequiredIn and UsedIn (phases), Min and Max, Pattern and PatternHint (for a
+        String, and for each entry of a StringList: a .NET regular expression that is matched as it is
+        written, one character at a time, with no case folding and no culture, so that the Kelvin sign
+        and a dotted capital I are not the letters k and i), Values, Kind (File or Folder, for the
+        paths), MustExist, AllowEmpty (lists) and Description.
 
         .EXAMPLE
         Get-SPSLifecycleSettingSchema | Where-Object { $_.Section -eq 'Act' }
@@ -26,8 +29,8 @@
     $definitions = @(
         @{
             Section = 'Shared'; Name = 'TenantName'; Type = 'String'; RequiredIn = $both; UsedIn = $both
-            Pattern = '^[a-z0-9][a-z0-9-]{0,62}$'
-            PatternHint = 'letters, digits and hyphens only: the first part of the SharePoint address (contoso for contoso.sharepoint.com), not a URL'
+            Pattern = '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\z'
+            PatternHint = 'letters, digits and hyphens only, starting with a letter or a digit, 63 characters at most: the first part of the SharePoint address (contoso for contoso.sharepoint.com), not a URL'
             Description = 'Name of the tenant: the first part of the SharePoint address (`contoso` for `contoso.sharepoint.com`).'
         }
         @{
@@ -41,6 +44,8 @@
         }
         @{
             Section = 'Shared'; Name = 'RefusedTenants'; Type = 'StringList'; UsedIn = $both; AllowEmpty = $true
+            Pattern = '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\z'
+            PatternHint = 'letters, digits and hyphens only, starting with a letter or a digit, 63 characters at most: the first part of the SharePoint address (contoso for contoso.sharepoint.com), not a URL'
             Default = @(); DefaultText = '`@()`'
             Description = 'Tenant names that the tool refuses, in addition to the built-in list (`microsoft`, `microsoftonline`), which cannot be removed.'
         }
