@@ -703,3 +703,272 @@ $script:StubData.Items
         @($page.Items) | Should -HaveCount 0
     }
 }
+
+Describe 'Get-SPSLifecycleTenantSite' {
+    BeforeEach {
+        Set-ModuleStub -Stub @{
+            'Open-SPSLifecycleTenantSession'  = @'
+param($Setting)
+$script:StubLog.Add('open')
+if ($script:StubData.OpenFails) { throw $script:StubData.OpenFails }
+[PSCustomObject]@{ Connection = 'a connection'; TenantName = 'contoso' }
+'@
+            'Close-SPSLifecycleTenantSession' = @'
+param($Session)
+$script:StubLog.Add("close session=$($null -ne $Session)")
+'@
+            'Test-SPSLifecycleListingApi'     = @'
+$script:StubLog.Add('api checked')
+[PSCustomObject]@{ Available = $script:StubData.ApiAvailable; Reason = $script:StubData.ApiReason }
+'@
+            'Get-SPSLifecycleTenantSitePage'  = @'
+param($Session, $Source, [string]$StartIndex, [string]$Filter)
+$script:StubLog.Add("page source=$Source start=[$StartIndex] filter=[$Filter]")
+$pages = $script:StubData.Pages
+$index = if ($StartIndex -eq '') { 0 } else { [int]$StartIndex.Substring(1) }
+if ($script:StubData.FailAt -eq $StartIndex) { throw 'The server did not answer.' }
+$next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
+[PSCustomObject]@{ Items = @($pages[$index]); NextStartIndex = $next }
+'@
+        } -Data @{ OpenFails = ''; ApiAvailable = $true; ApiReason = ''; Pages = @(); FailAt = $null }
+    }
+
+    AfterEach {
+        Clear-ModuleStub
+    }
+
+    BeforeAll {
+        function script:New-TestRecord {
+            param([int]$Index)
+            [PSCustomObject][ordered]@{
+                Url = "https://contoso.sharepoint.com/sites/site$Index"; SiteId = ('{0:x8}-0000-4000-8000-{1:x12}' -f $Index, $Index); Title = "Site $Index"
+                Template = 'GROUP#0'; LockState = 'ReadOnly'; GroupId = ('{0:x8}-1111-4111-8111-{1:x12}' -f $Index, $Index)
+                IsHubSite = $false; IsTeamsConnected = $true; IsTeamsChannelConnected = $false; ArchiveStatus = 'NotArchived'
+                StorageUsedMB = [long]12; LastContentModified = $script:Now
+            }
+        }
+
+        function script:Set-TestPages {
+            param([int[]]$Sizes)
+            $number = 0
+            $pages = foreach ($size in $Sizes) { , @(for ($i = 0; $i -lt $size; $i++) { $number++; New-TestRecord -Index $number }) }
+            & $script:Module { param($p) $script:StubData.Pages = @($p) } @($pages)
+        }
+
+        function script:Invoke-TestTenantSite {
+            param($Setting = (New-TestSetting), [string]$Source = 'Auto', [switch]$Restart, [scriptblock]$OnProgress = $null)
+            $summary = & $script:Module { Initialize-SPSLifecycleListingSummary }
+            $parameters = @{ Setting = $Setting; Summary = $summary; Source = $Source; Now = $script:Now }
+            if ($Restart) { $parameters.Restart = $true }
+            if ($null -ne $OnProgress) { $parameters.OnProgress = $OnProgress }
+            $records = @(& $script:Module { param($p) Get-SPSLifecycleTenantSite @p } $parameters)
+            [PSCustomObject]@{ Records = $records; Summary = $summary; Setting = $Setting }
+        }
+    }
+
+    It 'lists the sites of the pages, signs in once, and ends the session' {
+        Set-TestPages -Sizes 3, 2
+
+        $result = Invoke-TestTenantSite
+
+        $result.Records | Should -HaveCount 5
+        $result.Summary.PagesRead | Should -Be 2
+        $result.Summary.SitesReturned | Should -Be 5
+        Get-StubLog | Should -Be @(
+            'open'
+            'api checked'
+            "page source=Csom start=[] filter=[LockState -eq 'ReadOnly']"
+            "page source=Csom start=[t1] filter=[LockState -eq 'ReadOnly']"
+            'close session=True'
+        )
+    }
+
+    It 'says in the summary how the sites were listed, with the OneDrive sites left out and the filter of the server' {
+        Set-TestPages -Sizes 1
+
+        $summary = (Invoke-TestTenantSite).Summary
+
+        $summary.Source | Should -BeExactly 'Csom'
+        $summary.FallbackReason | Should -BeExactly ''
+        $summary.PersonalSites | Should -BeExactly 'Excluded'
+        $summary.Filter | Should -BeExactly "LockState -eq 'ReadOnly'"
+        $summary.StartedOn | Should -Be $script:Now
+    }
+
+    It 'asks for no filter when the Scan lists several lock states, and leaves the choice to the Scan core' {
+        Set-TestPages -Sizes 1
+        $setting = New-TestSetting -Override @{ Scan = [PSCustomObject]@{ LockStates = @('ReadOnly', 'Unlock') } }
+
+        $result = Invoke-TestTenantSite -Setting $setting
+
+        $result.Summary.Filter | Should -BeExactly ''
+        (Get-StubLog) | Should -Contain 'page source=Csom start=[] filter=[]'
+    }
+
+    It 'writes the checkpoint in the output folder, in a folder of its own' {
+        Set-TestPages -Sizes 1
+        $setting = New-TestSetting
+
+        $null = Invoke-TestTenantSite -Setting $setting
+
+        Test-Path -LiteralPath (Join-Path -Path $setting.OutputFolder -ChildPath 'listing-checkpoint/manifest.json') | Should -BeTrue
+    }
+
+    It 'falls back on Get-PnPTenantSite when the paged call is not there, and says why' {
+        Set-TestPages -Sizes 2
+        & $script:Module { $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = 'The types of the SharePoint admin API are not in this PnP.PowerShell.' }
+
+        $result = Invoke-TestTenantSite
+
+        $result.Records | Should -HaveCount 2
+        $result.Summary.Source | Should -BeExactly 'Cmdlet'
+        $result.Summary.FallbackReason | Should -BeLike '*not in this PnP.PowerShell*'
+        (Get-StubLog) | Should -Contain "page source=Cmdlet start=[] filter=[LockState -eq 'ReadOnly']"
+    }
+
+    It 'uses the cmdlet when it is asked to, and says so' {
+        Set-TestPages -Sizes 1
+
+        $result = Invoke-TestTenantSite -Source Cmdlet
+
+        $result.Summary.Source | Should -BeExactly 'Cmdlet'
+        $result.Summary.FallbackReason | Should -BeLike '*asked*'
+        (Get-StubLog) | Should -Not -Contain 'api checked'
+    }
+
+    It 'stops, and ends the session, when the paged call is asked for and is not there' {
+        Set-TestPages -Sizes 1
+        & $script:Module { $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = 'The filter of the admin API has no property StartIndex.' }
+
+        { Invoke-TestTenantSite -Source Csom } | Should -Throw -ExpectedMessage '*StartIndex*'
+
+        (Get-StubLog) | Should -Contain 'close session=True'
+        (Get-StubLog | Where-Object { $_ -like 'page source*' }) | Should -HaveCount 0
+    }
+
+    It 'does not read the pages of a checkpoint that was made the other way: starts again and says that the way changed' {
+        Set-TestPages -Sizes 3, 2, 4
+        $setting = New-TestSetting
+        & $script:Module { $script:StubData.FailAt = 't2' }
+        { Invoke-TestTenantSite -Setting $setting } | Should -Throw
+        & $script:Module { $script:StubData.FailAt = $null; $script:StubData.ApiAvailable = $false; $script:StubData.ApiReason = 'no API' }
+
+        $result = Invoke-TestTenantSite -Setting $setting
+
+        $result.Summary.Resumed | Should -BeFalse
+        $result.Summary.StartReason | Should -BeLike '*asked*'
+        $result.Records | Should -HaveCount 9
+    }
+
+    It 'takes up an interrupted listing: the second run asks only for the pages that are missing' {
+        Set-TestPages -Sizes 3, 2, 4
+        $setting = New-TestSetting
+        & $script:Module { $script:StubData.FailAt = 't2' }
+        { Invoke-TestTenantSite -Setting $setting } | Should -Throw -ExpectedMessage '*page 3*'
+        & $script:Module { $script:StubData.FailAt = $null; $script:StubLog.Clear() }
+
+        $result = Invoke-TestTenantSite -Setting $setting
+
+        $result.Summary.Resumed | Should -BeTrue
+        $result.Summary.PagesFromCheckpoint | Should -Be 2
+        $result.Records | Should -HaveCount 9
+        (Get-StubLog | Where-Object { $_ -like 'page source*' }) | Should -Be @("page source=Csom start=[t2] filter=[LockState -eq 'ReadOnly']")
+    }
+
+    It 'starts again when it is asked to' {
+        Set-TestPages -Sizes 3, 2, 4
+        $setting = New-TestSetting
+        & $script:Module { $script:StubData.FailAt = 't2' }
+        { Invoke-TestTenantSite -Setting $setting } | Should -Throw
+        & $script:Module { $script:StubData.FailAt = $null }
+
+        $result = Invoke-TestTenantSite -Setting $setting -Restart
+
+        $result.Summary.Resumed | Should -BeFalse
+        $result.Summary.StartReason | Should -BeLike '*Restart*'
+    }
+
+    It 'ends the session when the listing fails' {
+        Set-TestPages -Sizes 3, 2
+        & $script:Module { $script:StubData.FailAt = 't1' }
+
+        { Invoke-TestTenantSite } | Should -Throw -ExpectedMessage '*page 2*'
+
+        @(Get-StubLog)[-1] | Should -BeExactly 'close session=True'
+    }
+
+    It 'does not list anything when the sign-in fails, and has no session to end' {
+        & $script:Module { $script:StubData.OpenFails = 'The sign-in failed.' }
+
+        { Invoke-TestTenantSite } | Should -Throw -ExpectedMessage '*sign-in failed*'
+
+        (Get-StubLog | Where-Object { $_ -like 'page source*' }) | Should -HaveCount 0
+        (Get-StubLog | Where-Object { $_ -like 'close*' }) | Should -HaveCount 0
+    }
+
+    It 'tells its progress to the caller after each page' {
+        Set-TestPages -Sizes 3, 2
+        $log = [System.Collections.Generic.List[object]]::new()
+        $onProgress = { param($progress) $log.Add($progress) }.GetNewClosure()
+
+        $null = Invoke-TestTenantSite -OnProgress $onProgress
+
+        ($log | ForEach-Object { $_.Pages }) | Should -Be @(1, 2)
+        ($log | ForEach-Object { $_.SitesReturned }) | Should -Be @(3, 5)
+    }
+
+    It 'shows its progress when the caller gives none, and does not stop for it' {
+        Set-TestPages -Sizes 3, 2
+
+        $result = Invoke-TestTenantSite
+
+        $result.Records | Should -HaveCount 5
+    }
+
+    It 'refuses a lock state that the server does not know, before it signs in' {
+        $setting = New-TestSetting -Override @{ Scan = [PSCustomObject]@{ LockStates = @('Locked') } }
+
+        { Invoke-TestTenantSite -Setting $setting } | Should -Throw -ExpectedMessage '*lock state*'
+
+        Get-StubLog | Should -HaveCount 0
+    }
+}
+
+Describe 'A refused tenant never reaches the sign-in, through the whole chain' {
+    BeforeEach {
+        Set-ModuleStub -Stub @{
+            'Assert-SPSLifecyclePnPModule' = @'
+$script:StubLog.Add('module checked')
+'@
+            'Connect-PnPOnline'            = @'
+[CmdletBinding()]
+param([string]$Url, [switch]$Interactive, [string]$ClientId, [string]$Tenant, [switch]$ReturnConnection)
+$script:StubLog.Add("Connect-PnPOnline Url=$Url")
+'a connection'
+'@
+            'Get-SPSLifecycleTenantSitePage' = @'
+param($Session, $Source, [string]$StartIndex, [string]$Filter)
+$script:StubLog.Add('page')
+[PSCustomObject]@{ Items = @(); NextStartIndex = '' }
+'@
+        }
+    }
+
+    AfterEach {
+        Clear-ModuleStub
+    }
+
+    It 'stops before anything is called: <Name>' -ForEach @(
+        @{ Name = 'the Microsoft tenant'; Override = @{ TenantName = 'microsoft'; AdminUrl = 'https://microsoft-admin.sharepoint.com' } }
+        @{ Name = 'the Microsoft tenant in capitals'; Override = @{ TenantName = 'MICROSOFT'; AdminUrl = 'https://MICROSOFT-admin.sharepoint.com' } }
+        @{ Name = 'a tenant of the settings'; Override = @{ TenantName = 'fabrikam'; AdminUrl = 'https://fabrikam-admin.sharepoint.com'; RefusedTenants = @('fabrikam') } }
+    ) {
+        $setting = New-TestSetting -Override $Override
+        $summary = & $script:Module { Initialize-SPSLifecycleListingSummary }
+
+        { @(& $script:Module { param($s, $sum) Get-SPSLifecycleTenantSite -Setting $s -Summary $sum -Source Cmdlet } $setting $summary) } | Should -Throw -ExpectedMessage '*refused*'
+
+        Get-StubLog | Should -HaveCount 0
+        Test-Path -LiteralPath (Join-Path -Path $setting.OutputFolder -ChildPath 'listing-checkpoint') | Should -BeFalse
+    }
+}
