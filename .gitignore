@@ -13,6 +13,13 @@ Reports/
 **/Reports/
 /private/
 
+# Keys and certificates (the setup script writes them outside the repository; this keeps one from being committed by mistake)
+*.pfx
+*.cer
+*.pem
+*.key
+*.p12
+
 # Local configuration (never commit tenant names, client IDs or other environment values):
 # only the example settings file is tracked
 *.local.psd1

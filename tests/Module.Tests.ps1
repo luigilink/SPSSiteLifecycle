@@ -63,7 +63,9 @@ Describe 'The SPSSiteLifecycle.Common module' {
     BeforeAll {
         # The commands of PnP.PowerShell that an adapter calls and that change the tenant: every one except the verbs that read (Get),
         # the sign-in and the sign-out, and Invoke-PnPQuery, which sends a query that the listing loaded (a read). The adapter checks its
-        # target (Assert-SPSLifecycleWriteTarget) before the first of them, in the same function.
+        # target in the same function, before the first of them: the registration of an app (Register-PnPEntraIDApp and its interactive
+        # variant) checks the tenant and the name of the app (Assert-SPSLifecycleAppTarget), and every other one checks the site or the
+        # group (Assert-SPSLifecycleWriteTarget). A check of the other kind is not the check of the command.
         function script:Find-UnguardedWrite {
             param([string]$Text)
 
@@ -71,12 +73,20 @@ Describe 'The SPSSiteLifecycle.Common module' {
             $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$errors)
             foreach ($function in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
                 $commands = @($function.Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))
-                $guard = @($commands | Where-Object { (Get-CommandBaseName -Command $_) -eq 'Assert-SPSLifecycleWriteTarget' } | ForEach-Object { $_.Extent.StartOffset })
-                $guardOffset = if ($guard.Count -gt 0) { ($guard | Measure-Object -Minimum).Minimum } else { [System.Int32]::MaxValue }
+                $firstOffset = {
+                    param($GuardName)
+                    $guard = @($commands | Where-Object { (Get-CommandBaseName -Command $_) -eq $GuardName } | ForEach-Object { $_.Extent.StartOffset })
+                    if ($guard.Count -gt 0) { ($guard | Measure-Object -Minimum).Minimum } else { [System.Int32]::MaxValue }
+                }
+                $writeGuardOffset = & $firstOffset 'Assert-SPSLifecycleWriteTarget'
+                $appGuardOffset = & $firstOffset 'Assert-SPSLifecycleAppTarget'
                 foreach ($command in $commands) {
                     $name = Get-CommandBaseName -Command $command
-                    if ($name -match '^[A-Za-z]+-PnP[A-Za-z]+$' -and $name -notmatch '^(Get|Connect|Disconnect)-' -and $name -ne 'Invoke-PnPQuery' -and $command.Extent.StartOffset -lt $guardOffset) {
-                        $name
+                    if ($name -match '^[A-Za-z]+-PnP[A-Za-z]+$' -and $name -notmatch '^(Get|Connect|Disconnect)-' -and $name -ne 'Invoke-PnPQuery') {
+                        $guardOffset = if ($name -match '^Register-PnPEntraIDApp') { $appGuardOffset } else { $writeGuardOffset }
+                        if ($command.Extent.StartOffset -lt $guardOffset) {
+                            $name
+                        }
                     }
                 }
             }
@@ -174,6 +184,13 @@ Describe 'The SPSSiteLifecycle.Common module' {
             @{ Name = 'a change that is named between quotes'; Text = "function F { & 'PnP.PowerShell\Set-PnPTenantSite' -Identity `$u }"; Expected = 1 }
             @{ Name = 'a change of a verb that is not Set or Remove'; Text = 'function F { Add-PnPSiteCollectionAdmin -Owners $a }'; Expected = 1 }
             @{ Name = 'two changes, one checked'; Text = 'function F { Remove-PnPTenantSite -Url $u; Assert-SPSLifecycleWriteTarget -Session $s -Url $u; Set-PnPTenantSite -Identity $u }'; Expected = 1 }
+            @{ Name = 'a registration of an app that is not checked'; Text = 'function F { param($a) Register-PnPEntraIDApp @a }'; Expected = 1 }
+            @{ Name = 'a registration of an app that is checked first'; Text = 'function F { param($t, $n, $a) Assert-SPSLifecycleAppTarget -TenantName $t -ApplicationName $n; Register-PnPEntraIDApp @a }'; Expected = 0 }
+            @{ Name = 'an interactive registration that is not checked'; Text = 'function F { param($a) Register-PnPEntraIDAppForInteractiveLogin @a }'; Expected = 1 }
+            @{ Name = 'an interactive registration that is checked first'; Text = 'function F { param($t, $n, $a) Assert-SPSLifecycleAppTarget -TenantName $t -ApplicationName $n; Register-PnPEntraIDAppForInteractiveLogin @a }'; Expected = 0 }
+            @{ Name = 'a registration that is checked after it'; Text = 'function F { param($t, $n, $a) Register-PnPEntraIDApp @a; Assert-SPSLifecycleAppTarget -TenantName $t -ApplicationName $n }'; Expected = 1 }
+            @{ Name = 'a registration that is checked as a site is'; Text = 'function F { param($s, $u, $a) Assert-SPSLifecycleWriteTarget -Session $s -Url $u; Register-PnPEntraIDApp @a }'; Expected = 1 }
+            @{ Name = 'a deletion that is checked as an app is'; Text = 'function F { param($t, $n, $u) Assert-SPSLifecycleAppTarget -TenantName $t -ApplicationName $n; Remove-PnPTenantSite -Url $u }'; Expected = 1 }
             @{ Name = 'a read'; Text = 'function F { Get-PnPTenantSite -Identity $u }'; Expected = 0 }
             @{ Name = 'the sign-in and the sign-out'; Text = 'function F { Connect-PnPOnline -Url $u; Disconnect-PnPOnline }'; Expected = 0 }
             @{ Name = 'the query that the listing sends'; Text = 'function F { Invoke-PnPQuery -Connection $c }'; Expected = 0 }

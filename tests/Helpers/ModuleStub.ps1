@@ -10,7 +10,7 @@
 $script:TenantReadCommand = @('Connect-PnPOnline', 'Get-PnPContext', 'Invoke-PnPQuery', 'Get-PnPTenantSite', 'Get-PnPHomeSite', 'Get-PnPMicrosoft365Group', 'Get-PnPDeletedMicrosoft365Group', 'Get-PnPTenant', 'Get-PnPAccessToken', 'Disconnect-PnPOnline')
 
 # The commands that change a tenant. The Scan reads and never writes, and a test of the Scan stops when one of these is called.
-$script:TenantWriteCommand = @('Set-PnPTenantSite', 'Remove-PnPTenantSite', 'Remove-PnPMicrosoft365Group', 'Set-PnPSiteArchiveState', 'Add-PnPSiteCollectionAdmin')
+$script:TenantWriteCommand = @('Set-PnPTenantSite', 'Remove-PnPTenantSite', 'Remove-PnPMicrosoft365Group', 'Set-PnPSiteArchiveState', 'Add-PnPSiteCollectionAdmin', 'Register-PnPEntraIDApp', 'Register-PnPEntraIDAppForInteractiveLogin')
 $script:TenantCommand = @($script:TenantReadCommand) + @($script:TenantWriteCommand)
 
 function script:Assert-ModuleStub {
@@ -70,7 +70,8 @@ function script:Set-ModuleStub {
 
 function script:Clear-ModuleStub {
     & $script:Module {
-        foreach ($name in @($script:StubSaved.Keys)) {
+        # Nothing was stubbed yet when a test that does not stub clears them (an AfterEach of a Describe).
+        foreach ($name in $(if ($null -ne $script:StubSaved) { @($script:StubSaved.Keys) } else { @() })) {
             if ($null -ne $script:StubSaved[$name]) {
                 Set-Item -Path "Function:\script:$name" -Value $script:StubSaved[$name]
             }
