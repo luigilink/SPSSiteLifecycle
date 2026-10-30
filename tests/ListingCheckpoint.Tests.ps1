@@ -357,6 +357,7 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
 
             $state.Exists | Should -BeFalse
             $state.Usable | Should -BeFalse
+            $state.Finished | Should -BeFalse
             $state.Reason | Should -BeExactly ''
         }
 
@@ -396,6 +397,7 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
 
             $state.Exists | Should -BeTrue
             $state.Usable | Should -BeFalse
+            $state.Finished | Should -BeTrue
             $state.Reason | Should -BeLike '*finished*'
         }
 

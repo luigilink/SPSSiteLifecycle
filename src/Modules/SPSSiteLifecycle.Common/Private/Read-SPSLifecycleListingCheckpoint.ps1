@@ -15,7 +15,8 @@
         - the manifest is the one that the tool writes, and every page it lists is there and has the hash that was
           saved, so that a page that was changed, cut or replaced is never read.
 
-        Returns an object with Exists (something was found), Usable, Reason (empty when there was nothing, or when it
+        Returns an object with Exists (something was found), Usable, Finished (what was found is the manifest of a
+        listing that finished, which is normal and not a problem), Reason (empty when there was nothing, or when it
         is usable) and Manifest (the manifest to add pages to, when it is usable).
 
         .PARAMETER Folder
@@ -72,8 +73,8 @@
     )
 
     $result = {
-        param($Exists, $Usable, $Reason, $Manifest)
-        [PSCustomObject][ordered]@{ Exists = $Exists; Usable = $Usable; Reason = $Reason; Manifest = $Manifest }
+        param($Exists, $Usable, $Reason, $Manifest, $Finished = $false)
+        [PSCustomObject][ordered]@{ Exists = $Exists; Usable = $Usable; Finished = $Finished; Reason = $Reason; Manifest = $Manifest }
     }
 
     $fullFolder = Resolve-SPSLifecycleFileSystemPath -Path $Folder
@@ -100,7 +101,7 @@
     }
 
     if ($json.State -ceq 'Completed') {
-        return & $result $true $false 'The previous listing finished, and a finished listing is never reused to answer a new Scan: a new one starts.' $null
+        return & $result $true $false 'The previous listing finished, and a finished listing is never reused to answer a new Scan: a new one starts.' $null $true
     }
 
     if (-not [System.String]::Equals($json.Tenant, $Tenant, [System.StringComparison]::OrdinalIgnoreCase)) {
