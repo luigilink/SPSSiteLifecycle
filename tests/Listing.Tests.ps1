@@ -88,7 +88,8 @@
             [scriptblock]$OnProgress = $null,
             [int]$PageAttempts = 3,
             [int]$MaxPages = 100000,
-            $PageSourceArgument = $null
+            $PageSourceArgument = $null,
+            [hashtable]$CallerVariable = @{}
         )
 
         if ($null -eq $Summary) {
@@ -112,10 +113,14 @@
         }
 
         $result = & $script:Module {
-            param($p)
+            param($p, $callerVariable)
+            foreach ($name in $callerVariable.Keys) {
+                Set-Variable -Name $name -Value $callerVariable[$name]
+            }
+
             $records = @(Invoke-SPSLifecycleSiteListing @p -WarningVariable warnings -WarningAction SilentlyContinue)
             [PSCustomObject]@{ Records = $records; Warnings = @($warnings | ForEach-Object { "$_" }) }
-        } $parameters
+        } $parameters $CallerVariable
 
         [PSCustomObject]@{ Records = $result.Records; Warnings = $result.Warnings; Summary = $Summary }
     }
@@ -600,6 +605,59 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
         }
     }
 
+    Context 'A listing that was interrupted: what it has already seen' {
+        It 'drops a site that comes again after the resume, which a saved page already gave, and counts it' {
+            $folder = New-TestFolder
+            $pages = New-TestPages -Sizes 3, 2, 2
+            $pages[2] = @((New-TestRecord -Index 4), (New-TestRecord -Index 6))
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new()) -Failures @{ t2 = 99 }) -Folder $folder } | Should -Throw
+
+            $result = Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder
+
+            $result.Summary.Resumed | Should -BeTrue
+            $result.Summary.DuplicatesDropped | Should -Be 1
+            ($result.Records | ForEach-Object { $_.Title }) | Should -Be @(1..6 | ForEach-Object { "Site $_" })
+        }
+
+        It 'stops when the next token is one that a saved page was asked with, and does not ask it again' {
+            $folder = New-TestFolder
+            $pages = New-TestPages -Sizes 3, 2, 4
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new()) -Failures @{ t2 = 99 }) -Folder $folder } | Should -Throw
+            $calls = [System.Collections.Generic.List[string]]::new()
+            $loops = {
+                param([string]$StartIndex)
+                $calls.Add($StartIndex)
+                [PSCustomObject]@{ Items = @(); NextStartIndex = 't1' }
+            }.GetNewClosure()
+
+            { Invoke-TestListing -Source $loops -Folder $folder } | Should -Throw -ExpectedMessage "*does not advance*'t1'*"
+
+            $calls | Should -Be @('t2')
+        }
+    }
+
+    Context 'The variables of the caller' {
+        It 'does not take for its own the manifest that its caller happens to have: a listing that starts is not a listing that resumes' {
+            $folder = New-TestFolder
+            $callers = @{ manifest = [PSCustomObject]@{ Pages = [System.Collections.Generic.List[System.Object]]::new(); NextToken = 'caller-token'; ListingComplete = $true } }
+            $calls = [System.Collections.Generic.List[string]]::new()
+
+            $result = Invoke-TestListing -Source (New-TestSource -Pages (New-TestPages -Sizes 3, 2) -Calls $calls) -Folder $folder -CallerVariable $callers
+
+            $calls | Should -Be @('', 't1')
+            $result.Records | Should -HaveCount 5
+            $result.Summary.Resumed | Should -BeFalse
+        }
+
+        It 'does not release a lock that its caller happens to hold under the same name, when it fails before it holds its own' {
+            $callers = @{ lock = [System.IO.MemoryStream]::new() }
+
+            { Invoke-TestListing -Source (New-TestSource -Pages (New-TestPages -Sizes 1) -Calls ([System.Collections.Generic.List[string]]::new())) -Folder "not`0a path" -CallerVariable $callers } | Should -Throw
+
+            $callers.lock.CanRead | Should -BeTrue -Because 'the pager must not dispose what it did not open'
+        }
+    }
+
     Context 'One run at a time' {
         It 'refuses to run while another run holds the checkpoint' {
             $folder = New-TestFolder
@@ -658,6 +716,10 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             $null = Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder -OnProgress $onProgress
 
             ($log | ForEach-Object { '{0}:{1}:{2}' -f $_.Pages, $_.SitesReturned, $_.FromCheckpoint }) | Should -Be @('1:3:True', '2:5:True', '3:9:False')
+            $log[0].SitesPerSecond | Should -Be 0
+            $log[1].SitesPerSecond | Should -Be 0
+            $log[0].PageSeconds | Should -Be 0
+            [System.Double]::IsNaN($log[2].SitesPerSecond) | Should -BeFalse
         }
     }
 

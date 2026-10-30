@@ -254,6 +254,7 @@ Describe 'Get-SPSLifecycleListingManifestProblem' {
         @{ Name = 'a time that is a long integer'; Edit = { param($m) $m.Pages[0].Seconds = [long]2 } }
         @{ Name = 'a time with a fraction'; Edit = { param($m) $m.Pages[0].Seconds = 2.35 } }
         @{ Name = 'an end that is a date'; Edit = { param($m) $m.FinishedOn = '20261030T091500.0000000Z' } }
+        @{ Name = 'a listing that has not saved a page yet: running, not complete, no page and no token'; Edit = { param($m) $m.Pages = @(); $m.NextToken = '' } }
         @{ Name = 'a finished listing: complete, with no page and no token'; Edit = { param($m) $m.State = 'Completed'; $m.ListingComplete = $true; $m.NextToken = ''; $m.Pages = @() } }
     ) {
         Get-TestProblem -Edit $Edit | Should -BeExactly ''
@@ -710,6 +711,25 @@ Describe 'Read-SPSLifecycleListingCheckpoint' {
             $null -eq $state.Manifest | Should -BeTrue
         }
 
+        It 'says what the filter was and what it is, with none written as (none): <Name>' -ForEach @(
+            @{ Name = 'changed'; Filter = "LockState -eq 'Unlock'"; Expected = "The filter changed (it was LockState -eq 'ReadOnly', it is LockState -eq 'Unlock')." }
+            @{ Name = 'removed'; Filter = ''; Expected = "The filter changed (it was LockState -eq 'ReadOnly', it is (none))." }
+        ) {
+            $folder = New-TestFolder
+            $manifest = New-TestManifest
+            $null = Save-TestPage -Folder $folder -Manifest $manifest
+
+            (Read-TestCheckpoint -Folder $folder -Filter $Filter).Reason | Should -BeExactly $Expected
+        }
+
+        It 'says that a filter was added when there was none' {
+            $folder = New-TestFolder
+            $manifest = & $script:Module { param($t, $o, $n) Initialize-SPSLifecycleListingManifest -Tenant $t -Filter '' -Options $o -Now $n } 'contoso' $script:Options $script:Now
+            $null = Save-TestPage -Folder $folder -Manifest $manifest
+
+            (Read-TestCheckpoint -Folder $folder -Filter "LockState -eq 'ReadOnly'").Reason | Should -BeExactly "The filter changed (it was (none), it is LockState -eq 'ReadOnly')."
+        }
+
         It 'is refused when the filter differs only by the case: the server reads it as written' {
             $folder = New-TestFolder
             $manifest = New-TestManifest
@@ -937,6 +957,8 @@ Describe 'Complete-SPSLifecycleListingCheckpoint and Clear-SPSLifecycleListingCh
         $json = Get-Content -LiteralPath (Join-Path $folder 'manifest.json') -Raw | ConvertFrom-Json
         $json.State | Should -BeExactly 'Completed'
         $json.FinishedOn | Should -BeExactly '20261030T090700.0000000Z'
+        $json.UpdatedOn | Should -BeExactly '20261030T090700.0000000Z'
+        $manifest.UpdatedOn | Should -BeExactly '20261030T090700.0000000Z'
         @($json.Pages) | Should -HaveCount 0
     }
 
@@ -961,9 +983,33 @@ Describe 'Complete-SPSLifecycleListingCheckpoint and Clear-SPSLifecycleListingCh
         (Get-ChildItem -LiteralPath $folder -Name | Sort-Object) | Should -Be @('listing.lock', 'notes.txt')
     }
 
-    It 'removes nothing, and does not fail, when there is no checkpoint' {
+    It 'removes nothing, and does not fail, when there is no checkpoint, even when every error is made to stop the caller' {
         $folder = Join-Path -Path (New-TestFolder) -ChildPath 'missing'
 
-        { & $script:Module { param($f) Clear-SPSLifecycleListingCheckpoint -Folder $f } $folder } | Should -Not -Throw
+        { & $script:Module { param($f) Clear-SPSLifecycleListingCheckpoint -Folder $f -ErrorAction Stop } $folder } | Should -Not -Throw
+        Test-Path -LiteralPath $folder | Should -BeFalse
+    }
+
+    It 'removes only the files that the tool wrote, named as it names them: <Name>' -ForEach @(
+        @{ Name = 'a manifest in capitals'; Leave = 'MANIFEST.JSON' }
+        @{ Name = 'a manifest with another extension'; Leave = 'manifest.json.bak' }
+        @{ Name = 'a page in capitals'; Leave = 'PAGE-000001.CSV' }
+        @{ Name = 'a page file in capitals only in its extension'; Leave = 'page-000001.CSV' }
+        @{ Name = 'a page numbered with fewer digits'; Leave = 'page-1.csv' }
+        @{ Name = 'a page numbered with more digits'; Leave = 'page-0000001.csv' }
+        @{ Name = 'a page that something else wrote after'; Leave = 'page-000001.csv.bak' }
+        @{ Name = 'a page with a prefix'; Leave = 'old-page-000001.csv' }
+        @{ Name = 'a partial file in capitals'; Leave = 'page-000003.csv.1a2b3c4d.PARTIAL' }
+        @{ Name = 'a file that only mentions partial'; Leave = 'partial.txt' }
+    ) {
+        # No real manifest or page of the same number is written here: on a file system that ignores the case (Windows, macOS), a
+        # file that only differs by the case from the one of the tool would be that very file.
+        $folder = New-TestFolder
+        Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'page-000009.csv') -Value 'written by the tool' -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath $Leave) -Value 'not written by the tool' -Encoding utf8NoBOM
+
+        & $script:Module { param($f) Clear-SPSLifecycleListingCheckpoint -Folder $f } $folder
+
+        @(Get-ChildItem -LiteralPath $folder -Name) | Should -Be @($Leave)
     }
 }
