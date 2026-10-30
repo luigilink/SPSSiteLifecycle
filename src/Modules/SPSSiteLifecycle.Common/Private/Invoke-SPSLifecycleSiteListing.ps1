@@ -188,7 +188,7 @@
             }
 
             $Summary.Resumed = $resumed
-            $seen = [System.Collections.Generic.HashSet[System.String]]::new([System.StringComparer]::Ordinal)
+            $seen = [System.Collections.Generic.Dictionary[System.String, System.Int64]]::new([System.StringComparer]::Ordinal)
             $tokens = [System.Collections.Generic.HashSet[System.String]]::new([System.StringComparer]::Ordinal)
 
             $progressHandler = $OnProgress
@@ -212,8 +212,8 @@
                 foreach ($entry in $manifest.Pages) {
                     $saved = @(Read-SPSLifecycleListingPage -Folder $folder -Entry $entry)
                     foreach ($site in $saved) {
-                        if ($site.SiteId) {
-                            $null = $seen.Add($site.SiteId)
+                        if ($site.SiteId -and -not $seen.ContainsKey($site.SiteId)) {
+                            $seen.Add($site.SiteId, (Get-SPSLifecycleListingGuard -Site $site))
                         }
                     }
 
@@ -261,8 +261,12 @@
                     }
                 }
 
-                if ($null -eq $page -or $page -is [System.Array] -or $null -eq $page.PSObject.Properties['Items']) {
+                if ($null -eq $page -or $page -is [System.Array] -or $null -eq $page.PSObject.Properties['Items'] -or $null -eq $page.PSObject.Properties['NextStartIndex']) {
                     throw "The page source gave no page for the token '$(ConvertTo-SPSLifecycleVisibleText -Text $token)': it must give one object with Items (the sites) and NextStartIndex (the token of the next page)."
+                }
+
+                if ($null -ne $page.NextStartIndex -and $page.NextStartIndex -isnot [System.String]) {
+                    throw "The page source gave a token that is not a text for the token '$(ConvertTo-SPSLifecycleVisibleText -Text $token)' (it is a $($page.NextStartIndex.GetType().Name)): a token is a text, and none is null or empty."
                 }
 
                 $items = @($page.Items)
@@ -274,9 +278,19 @@
                         continue
                     }
 
-                    if ($site.SiteId -and -not $seen.Add($site.SiteId)) {
-                        $Summary.DuplicatesDropped++
-                        continue
+                    if ($site.SiteId) {
+                        $guards = Get-SPSLifecycleListingGuard -Site $site
+                        $first = [System.Int64]0
+                        if ($seen.TryGetValue($site.SiteId, [ref]$first)) {
+                            if ($first -ne $guards) {
+                                throw "The site '$(ConvertTo-SPSLifecycleVisibleText -Text $site.SiteId)' came twice in the listing with another value for a field that guards it, so the tenant changed while it was read, and the listing cannot tell which reading is true. Run the Scan again."
+                            }
+
+                            $Summary.DuplicatesDropped++
+                            continue
+                        }
+
+                        $seen.Add($site.SiteId, $guards)
                     }
 
                     $keep.Add($site)

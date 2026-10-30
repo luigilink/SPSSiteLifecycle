@@ -142,6 +142,52 @@
     }
 }
 
+Describe 'Get-SPSLifecycleListingGuard' {
+    BeforeAll {
+        function script:Get-TestGuard {
+            param($Record)
+            & $script:Module { param($r) Get-SPSLifecycleListingGuard -Site $r } $Record
+        }
+    }
+
+    It 'is a number, the same for the same site read twice' {
+        $first = Get-TestGuard -Record (New-TestRecord -Index 1)
+        $second = Get-TestGuard -Record (New-TestRecord -Index 1)
+
+        $first | Should -BeOfType [long]
+        $second | Should -Be $first
+    }
+
+    It 'does not change with what changes while a listing goes on: <Field>' -ForEach @(
+        @{ Field = 'Title'; Value = 'Renamed' }
+        @{ Field = 'StorageUsedMB'; Value = [long]99999 }
+        @{ Field = 'LastContentModified'; Value = [System.DateTime]::new(2026, 1, 1, 0, 0, 0, [System.DateTimeKind]::Utc) }
+        @{ Field = 'SiteId'; Value = '00000009-0000-4000-8000-000000000009' }
+    ) {
+        (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $Value })) | Should -Be (Get-TestGuard -Record (New-TestRecord -Index 1))
+    }
+
+    It 'changes with each field that a safeguard reads: <Field>' -ForEach @(
+        @{ Field = 'Url'; Value = 'https://contoso.sharepoint.com/sites/moved' }
+        @{ Field = 'Template'; Value = 'STS#3' }
+        @{ Field = 'LockState'; Value = 'Unlock' }
+        @{ Field = 'GroupId'; Value = '99999999-1111-4111-8111-999999999999' }
+        @{ Field = 'IsHubSite'; Value = $true }
+        @{ Field = 'IsTeamsConnected'; Value = $false }
+        @{ Field = 'IsTeamsChannelConnected'; Value = $true }
+        @{ Field = 'ArchiveStatus'; Value = 'RecentlyArchived' }
+    ) {
+        (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ $Field = $Value })) | Should -Not -Be (Get-TestGuard -Record (New-TestRecord -Index 1))
+    }
+
+    It 'does not take a value that moves from one field to the next for the same site' {
+        $a = New-TestRecord -Index 1 -Override @{ Template = 'GROUP#0'; LockState = 'ReadOnly' }
+        $b = New-TestRecord -Index 1 -Override @{ Template = 'GROUP#0ReadOnly'; LockState = '' }
+
+        (Get-TestGuard -Record $a) | Should -Not -Be (Get-TestGuard -Record $b)
+    }
+}
+
 Describe 'Invoke-SPSLifecycleSiteListing' {
     Context 'A listing from the first page to the last' {
         It 'gives the sites of every page, in order, asking each page with the token of the one before' {
@@ -350,6 +396,71 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
         }
     }
 
+    Context 'A site that comes twice with other values' {
+        It 'stops, and names the site, when it comes again in another page with another value for a field that guards it: <Field>' -ForEach @(
+            @{ Field = 'Url'; Value = 'https://contoso.sharepoint.com/sites/moved' }
+            @{ Field = 'Template'; Value = 'STS#3' }
+            @{ Field = 'LockState'; Value = 'Unlock' }
+            @{ Field = 'GroupId'; Value = '99999999-1111-4111-8111-999999999999' }
+            @{ Field = 'IsHubSite'; Value = $true }
+            @{ Field = 'IsTeamsConnected'; Value = $false }
+            @{ Field = 'IsTeamsChannelConnected'; Value = $true }
+            @{ Field = 'ArchiveStatus'; Value = 'RecentlyArchived' }
+        ) {
+            $folder = New-TestFolder
+            $pages = @(
+                , @((New-TestRecord -Index 1), (New-TestRecord -Index 2))
+                , @((New-TestRecord -Index 1 -Override @{ $Field = $Value }), (New-TestRecord -Index 3))
+            )
+
+            { Invoke-TestListing -Source (New-TestSource -Pages @($pages[0], $pages[1]) -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder } | Should -Throw -ExpectedMessage '*00000001-0000-4000-8000-000000000001*twice*another value*'
+
+            Get-TestFiles -Folder $folder | Should -Be @('listing.lock', 'manifest.json', 'page-000001.csv')
+        }
+
+        It 'stops when it comes again in the same page with another value for a field that guards it' {
+            $folder = New-TestFolder
+            $pages = @(, @((New-TestRecord -Index 1), (New-TestRecord -Index 1 -Override @{ IsHubSite = $true })))
+
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder } | Should -Throw -ExpectedMessage '*twice*another value*'
+
+            Get-TestFiles -Folder $folder | Should -Be @('listing.lock')
+        }
+
+        It 'stops when it comes again after a resume with another value than the one that a saved page gave' {
+            $folder = New-TestFolder
+            $pages = New-TestPages -Sizes 3, 2, 2
+            $pages[2] = @((New-TestRecord -Index 4 -Override @{ LockState = 'Unlock' }), (New-TestRecord -Index 6))
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new()) -Failures @{ t2 = 99 }) -Folder $folder } | Should -Throw
+
+            { Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder } | Should -Throw -ExpectedMessage '*00000004-0000-4000-8000-000000000004*twice*another value*'
+        }
+
+        It 'drops it as a duplicate when only what changes while a listing goes on differs: the title, the size and the date' {
+            $folder = New-TestFolder
+            $later = $script:Now.AddDays(3)
+            $pages = @(
+                , @((New-TestRecord -Index 1), (New-TestRecord -Index 2))
+                , @((New-TestRecord -Index 1 -Override @{ Title = 'Renamed'; StorageUsedMB = [long]999; LastContentModified = $later }), (New-TestRecord -Index 3))
+            )
+
+            $result = Invoke-TestListing -Source (New-TestSource -Pages @($pages[0], $pages[1]) -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder
+
+            ($result.Records | ForEach-Object { $_.Title }) | Should -Be @('Site 1', 'Site 2', 'Site 3')
+            $result.Summary.DuplicatesDropped | Should -Be 1
+        }
+
+        It 'does not take two sites with no site ID for one: they are given, and the Scan core says what is wrong with them' {
+            $folder = New-TestFolder
+            $pages = @(, @((New-TestRecord -Index 1 -Override @{ SiteId = '' }), (New-TestRecord -Index 2 -Override @{ SiteId = '' })))
+
+            $result = Invoke-TestListing -Source (New-TestSource -Pages $pages -Calls ([System.Collections.Generic.List[string]]::new())) -Folder $folder
+
+            $result.Records | Should -HaveCount 2
+            $result.Summary.DuplicatesDropped | Should -Be 0
+        }
+    }
+
     Context 'A page that cannot be read' {
         It 'asks the page again when it fails, and goes on: <Failures> failure(s)' -ForEach @(
             @{ Failures = 1 }
@@ -392,6 +503,7 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
         It 'stops when the source gives no page, which is a defect and not a failure to retry: <Name>' -ForEach @(
             @{ Name = 'nothing'; Body = { param($s) $null } }
             @{ Name = 'a page without sites'; Body = { param($s) [PSCustomObject]@{ NextStartIndex = '' } } }
+            @{ Name = 'a page without a token, which would end the listing as the last page does'; Body = { param($s) [PSCustomObject]@{ Items = @() } } }
         ) {
             $folder = New-TestFolder
             $calls = [System.Collections.Generic.List[string]]::new()
@@ -401,6 +513,41 @@ Describe 'Invoke-SPSLifecycleSiteListing' {
             { Invoke-TestListing -Source $source -Folder $folder } | Should -Throw -ExpectedMessage '*no page*'
 
             $calls | Should -HaveCount 1
+        }
+    }
+
+    Context 'The last page' {
+        It 'ends the listing on a page whose token is null or empty: <Name>' -ForEach @(
+            @{ Name = 'null'; Token = $null }
+            @{ Name = 'an empty text'; Token = '' }
+        ) {
+            $folder = New-TestFolder
+            $token = $Token
+            $record = New-TestRecord -Index 1
+            $source = { param([string]$StartIndex) [PSCustomObject]@{ Items = @($record); NextStartIndex = $token } }.GetNewClosure()
+
+            $result = Invoke-TestListing -Source $source -Folder $folder
+
+            $result.Records | Should -HaveCount 1
+            $result.Summary.PagesRead | Should -Be 1
+        }
+    }
+
+    Context 'A token that is not a text' {
+        It 'stops, and does not read it as no token, which would end the listing as the last page does: <Name>' -ForEach @(
+            @{ Name = 'a number'; Token = 5 }
+            @{ Name = 'false'; Token = $false }
+            @{ Name = 'zero'; Token = 0 }
+            @{ Name = 'a list'; Token = @('t1') }
+        ) {
+            $folder = New-TestFolder
+            $token = $Token
+            $record = New-TestRecord -Index 1
+            $source = { param([string]$StartIndex) [PSCustomObject]@{ Items = @($record); NextStartIndex = $token } }.GetNewClosure()
+
+            { Invoke-TestListing -Source $source -Folder $folder -PageAttempts 1 } | Should -Throw -ExpectedMessage '*token that is not a text*'
+
+            Get-TestFiles -Folder $folder | Should -Be @('listing.lock')
         }
     }
 
