@@ -26,6 +26,23 @@
         [System.Text.RegularExpressions.Regex]::Replace($Path, '^(local|script|global|private|using|variable):', '', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
     }
 
+    # The variable that a name stands for, and the scope that it lives in. A function writes its own variables; it writes one of the
+    # file only when the name says so ($script:c), and the global scope is not the one of the file, so a name of the global scope is
+    # given the scope of the file here and is never trusted when it is read (see Find-DynamicCall).
+    function script:Get-VariableTarget {
+        param([string]$Path, $Own)
+
+        $options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+        $qualifier = [System.Text.RegularExpressions.Regex]::Match($Path, '^(?<scope>local|script|global|private|using|variable):', $options)
+        $scope = if ($qualifier.Success) { $qualifier.Groups['scope'].Value } else { '' }
+        $outside = [System.String]::Equals($scope, 'script', [System.StringComparison]::OrdinalIgnoreCase) -or [System.String]::Equals($scope, 'global', [System.StringComparison]::OrdinalIgnoreCase)
+        [PSCustomObject]@{
+            Name   = Get-VariableBaseName -Path $Path
+            Key    = if ($outside) { -1 } else { $Own }
+            Global = [System.String]::Equals($scope, 'global', [System.StringComparison]::OrdinalIgnoreCase)
+        }
+    }
+
     # The commands that reach the tenant, outside the adapters: by the name that a command is called by.
     function script:Find-TenantCommandUse {
         param([string]$Text)
@@ -174,6 +191,14 @@ Describe 'The SPSSiteLifecycle.Common module' {
                 $blockNames = @{}
                 $forced = @{}
                 $everything = @{}
+
+                # A name that can be written in the scope of another function is not trusted anywhere in the file: the names that
+                # Set-Variable and the like write (the scope is one of their parameters), that a reference or OutVariable gives, and
+                # that the drive of the variables names (a variable is found in the scopes that enclose a function too). When such a
+                # command writes a name that is not written, or has its arguments splatted, or Get-Variable or PSVariable gives the
+                # object of a variable, no name is trusted in the file at all.
+                $forcedFile = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                $everywhere = $false
                 foreach ($parameter in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParameterAst] }, $true)) {
                     $key = & $scopeOf $parameter
                     $typed = $false
@@ -187,22 +212,23 @@ Describe 'The SPSSiteLifecycle.Common module' {
                 }
 
                 foreach ($loop in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ForEachStatementAst] }, $true)) {
-                    $null = (& $nameSet $forced (& $scopeOf $loop)).Add((Get-VariableBaseName -Path $loop.Variable.VariablePath.UserPath))
+                    $target = Get-VariableTarget -Path $loop.Variable.VariablePath.UserPath -Own (& $scopeOf $loop)
+                    $null = (& $nameSet $forced $target.Key).Add($target.Name)
                 }
 
                 foreach ($reference in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ConvertExpressionAst] -and $n.Type.TypeName.Name -eq 'ref' -and $n.Child -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
-                    $null = (& $nameSet $forced (& $scopeOf $reference)).Add((Get-VariableBaseName -Path $reference.Child.VariablePath.UserPath))
+                    $null = $forcedFile.Add((Get-VariableBaseName -Path $reference.Child.VariablePath.UserPath))
                 }
 
                 foreach ($command in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
-                    $key = & $scopeOf $command
                     $name = Get-CommandBaseName -Command $command
                     $elements = @($command.CommandElements | Select-Object -Skip 1)
 
-                    # The object of a variable can be written, and which one is not followed: Get-Variable (and the object that
-                    # PSVariable gives, below) puts every name of the scope in doubt.
+                    # The object of a variable can be written, and which one is not followed (a variable is found in the scopes that
+                    # enclose the function too): Get-Variable, like the object that PSVariable gives below, puts every name of the file in
+                    # doubt.
                     if ($name -match '^(Get-Variable|gv)$') {
-                        $everything[$key] = $true
+                        $everywhere = $true
                     }
 
                     if ($name -match '^(Set-Variable|New-Variable|Clear-Variable|Remove-Variable|sv|nv|clv|rv|set)$') {
@@ -219,10 +245,10 @@ Describe 'The SPSSiteLifecycle.Common module' {
                             }
 
                             if ($value -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                                $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $value.Value))
+                                $null = $forcedFile.Add((Get-VariableBaseName -Path $value.Value))
                             }
                             else {
-                                $everything[$key] = $true
+                                $everywhere = $true
                             }
                         }
                     }
@@ -231,10 +257,10 @@ Describe 'The SPSSiteLifecycle.Common module' {
                         if ($elements[$i] -is [System.Management.Automation.Language.CommandParameterAst] -and $elements[$i].ParameterName -match '^((Out|Error|Warning|Information|Info|Pipeline)[A-Za-z]*|ov|ev|wv|iv|pv)$') {
                             $value = if ($null -ne $elements[$i].Argument) { $elements[$i].Argument } elseif ($i + 1 -lt $elements.Count) { $elements[$i + 1] } else { $null }
                             if ($value -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                                $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $value.Value.TrimStart('+')))
+                                $null = $forcedFile.Add((Get-VariableBaseName -Path $value.Value.TrimStart('+')))
                             }
                             elseif ($null -ne $value -and $value -isnot [System.Management.Automation.Language.CommandParameterAst]) {
-                                $everything[$key] = $true
+                                $everywhere = $true
                             }
                         }
                     }
@@ -248,12 +274,11 @@ Describe 'The SPSSiteLifecycle.Common module' {
                 foreach ($literal in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true)) {
                     $drive = [System.Text.RegularExpressions.Regex]::Match($literal.Value, '^\s*variable:[\\/]?(?<name>.*)$', $textOptions)
                     if ($drive.Success) {
-                        $key = & $scopeOf $literal
                         if ($drive.Groups['name'].Value -and $literal -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                            $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $drive.Groups['name'].Value))
+                            $null = $forcedFile.Add((Get-VariableBaseName -Path $drive.Groups['name'].Value))
                         }
                         else {
-                            $everything[$key] = $true
+                            $everywhere = $true
                         }
                     }
 
@@ -264,7 +289,7 @@ Describe 'The SPSSiteLifecycle.Common module' {
 
                 foreach ($member in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst] }, $true)) {
                     if ($member.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and [System.String]::Equals($member.Member.Value, 'PSVariable', [System.StringComparison]::OrdinalIgnoreCase)) {
-                        $everything[(& $scopeOf $member)] = $true
+                        $everywhere = $true
                         $drives.Add('the object of a variable, from PSVariable')
                     }
                 }
@@ -274,11 +299,14 @@ Describe 'The SPSSiteLifecycle.Common module' {
                     $key = & $scopeOf $assignment
                     $left = $assignment.Left
                     if ($left -is [System.Management.Automation.Language.VariableExpressionAst]) {
-                        if (-not $assignments.ContainsKey($key)) {
-                            $assignments[$key] = [System.Collections.Generic.List[System.Object]]::new()
+                        # The variable is kept with the scope that it lives in, which is the file for $script:c, and the scope of the
+                        # assignment is kept for the variable that the right side reads.
+                        $written = Get-VariableTarget -Path $left.VariablePath.UserPath -Own $key
+                        if (-not $assignments.ContainsKey($written.Key)) {
+                            $assignments[$written.Key] = [System.Collections.Generic.List[System.Object]]::new()
                         }
 
-                        $assignments[$key].Add($assignment)
+                        $assignments[$written.Key].Add([PSCustomObject]@{ Assignment = $assignment; Name = $written.Name; Scope = $key })
                         continue
                     }
 
@@ -290,7 +318,8 @@ Describe 'The SPSSiteLifecycle.Common module' {
                         }
 
                         if ($target -is [System.Management.Automation.Language.VariableExpressionAst]) {
-                            $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $target.VariablePath.UserPath))
+                            $written = Get-VariableTarget -Path $target.VariablePath.UserPath -Own $key
+                            $null = (& $nameSet $forced $written.Key).Add($written.Name)
                         }
                     }
                 }
@@ -300,19 +329,23 @@ Describe 'The SPSSiteLifecycle.Common module' {
                     for ($round = 0; $round -lt 3; $round++) {
                         $candidates = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                         $others = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-                        foreach ($assignment in $assignments[$key]) {
-                            $right = $assignment.Right
+                        foreach ($entry in $assignments[$key]) {
+                            $right = $entry.Assignment.Right
                             if ($right -is [System.Management.Automation.Language.CommandExpressionAst]) {
                                 $right = $right.Expression
                             }
 
-                            $left = Get-VariableBaseName -Path $assignment.Left.VariablePath.UserPath
-                            if ($right -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
-                                ($right -is [System.Management.Automation.Language.VariableExpressionAst] -and $names.Contains((Get-VariableBaseName -Path $right.VariablePath.UserPath)))) {
-                                $null = $candidates.Add($left)
+                            $copied = $false
+                            if ($right -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                                $read = Get-VariableTarget -Path $right.VariablePath.UserPath -Own $entry.Scope
+                                $copied = -not $read.Global -and (& $nameSet $blockNames $read.Key).Contains($read.Name)
+                            }
+
+                            if ($right -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or $copied) {
+                                $null = $candidates.Add($entry.Name)
                             }
                             else {
-                                $null = $others.Add($left)
+                                $null = $others.Add($entry.Name)
                             }
                         }
 
@@ -341,9 +374,10 @@ Describe 'The SPSSiteLifecycle.Common module' {
 
                     $target = $command.CommandElements[0]
                     if ($target -is [System.Management.Automation.Language.VariableExpressionAst]) {
-                        $key = & $scopeOf $command
-                        $variable = Get-VariableBaseName -Path $target.VariablePath.UserPath
-                        if (-not $everything.ContainsKey($key) -and (& $nameSet $blockNames $key).Contains($variable) -and -not (& $nameSet $forced $key).Contains($variable)) {
+                        # A variable that is read with the scope of the file ($script:c) is the one of the file, and one of the global scope
+                        # is never followed.
+                        $read = Get-VariableTarget -Path $target.VariablePath.UserPath -Own (& $scopeOf $command)
+                        if (-not $everywhere -and -not $read.Global -and -not $everything.ContainsKey($read.Key) -and (& $nameSet $blockNames $read.Key).Contains($read.Name) -and -not (& $nameSet $forced $read.Key).Contains($read.Name) -and -not $forcedFile.Contains($read.Name)) {
                             continue
                         }
                     }
@@ -543,6 +577,38 @@ Describe 'The SPSSiteLifecycle.Common module' {
             @{ Name = 'a static method of the type of a script block, that is not Create'; Text = "[scriptblock]::Equals('a', 'b')"; Expected = 0 }
             @{ Name = 'a variable that is a script block, and the same variable written with another case is given a text'; Text = "`$c = { 1 }; `$C = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
             @{ Name = 'a variable that is a script block, and OutVariable has no value but is followed by another parameter'; Text = "`$c = { 1 }; Get-Date -OutVariable -Verbose; & `$c"; Expected = 0 }
+            @{ Name = 'a variable of the script scope that a function gives a text'; Text = "`$c = { 1 }`nfunction A { `$script:c = 'Connect-PnPOnline' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that a function gives a text, with the scope in capitals'; Text = "`$c = { 1 }`nfunction A { `$SCRIPT:c = 'Connect-PnPOnline' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable that a function gives a text in the global scope'; Text = "`$c = { 1 }`nfunction A { `$global:c = 'Connect-PnPOnline' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that a function gives a script block'; Text = "`$c = { 1 }`nfunction A { `$script:c = { 2 } }`nA`n& `$c"; Expected = 0 }
+            @{ Name = 'a variable that a function gives a text in its own scope, and that of the file stays a script block'; Text = "`$c = { 1 }`nfunction A { `$local:c = 'x' }`nA`n& `$c"; Expected = 0 }
+            @{ Name = 'a variable that a function gives a text as a private one'; Text = "`$c = { 1 }`nfunction A { `$private:c = 'x' }`nA`n& `$c"; Expected = 0 }
+            @{ Name = 'a variable of the script scope that Set-Variable gives a text in a function'; Text = "`$c = { 1 }`nfunction A { Set-Variable -Name c -Scope Script -Value 'Connect-PnPOnline' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the global scope that Set-Variable gives a text in a function, with the scope bound by a colon'; Text = "`$c = { 1 }`nfunction A { Set-Variable -Scope:Global -Name c -Value 'x' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the caller of a function that Set-Variable gives a text'; Text = "function A { `$c = { 1 }; B; & `$c }`nfunction B { Set-Variable -Name c -Scope 1 -Value 'Connect-PnPOnline' }"; Expected = 1 }
+            @{ Name = 'a variable that Set-Variable gives a text by a name that is not written, in another scope'; Text = "`$c = { 1 }`nfunction A { `$n = 'c'; Set-Variable -Name `$n -Scope Script -Value 'x' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable that Set-Variable gives a text with its arguments splatted, in a function'; Text = "`$c = { 1 }`nfunction A { Set-Variable @args }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of another scope that the object of Get-Variable writes'; Text = "`$c = { 1 }`nfunction A { Get-Variable c -Scope Script | ForEach-Object { `$_.Value = 'x' } }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that OutVariable writes in a function'; Text = "`$c = { 1 }`nfunction A { Get-Date -OutVariable script:c | Out-Null }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that a reference is given for, in a function'; Text = "`$c = { 1 }`nfunction A { Update-Something ([ref]`$script:c) }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that a foreach holds, in a function'; Text = "`$c = { 1 }`nfunction A { foreach (`$script:c in 'x') { } }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that a typed assignment gives a text, in a function'; Text = "`$c = { 1 }`nfunction A { [string]`$script:c = 'x' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that a list assignment gives a text, in a function'; Text = "`$c = { 1 }`nfunction A { `$x, `$script:c = 'x', 'y' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a call through the script scope, and a variable of the function that is a script block'; Text = "function A { `$c = { 1 }; & `$script:c }"; Expected = 1 }
+            @{ Name = 'a call through the script scope, and a variable of the file that is a script block'; Text = "`$c = { 1 }`nfunction A { & `$script:c }"; Expected = 0 }
+            @{ Name = 'a call through the script scope, and a variable of the function that is a text'; Text = "`$script:c = { 1 }`nfunction A { `$c = 'x'; & `$script:c }"; Expected = 0 }
+            @{ Name = 'a call through the script scope, and a variable of the file that a function gives a text'; Text = "`$c = { 1 }`nfunction A { `$c = 'x'; & `$script:c }"; Expected = 0 }
+            @{ Name = 'a call through the global scope'; Text = "`$c = { 1 }`nfunction A { & `$global:c }"; Expected = 1 }
+            @{ Name = 'a call through the script scope of a variable that the file gives a text'; Text = "`$c = 'Connect-PnPOnline'`nfunction A { `$c = { 1 }; & `$script:c }"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that a function gives a text, with the global scope in capitals'; Text = "`$c = { 1 }`nfunction A { `$GLOBAL:c = 'Connect-PnPOnline' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a call through the global scope, written in capitals'; Text = "`$c = { 1 }`nfunction A { & `$GLOBAL:c }"; Expected = 1 }
+            @{ Name = 'a variable of a function that another function gives a text with Set-Variable, the name in another case'; Text = "function A { `$c = { 1 }; B; & `$c }`nfunction B { Set-Variable -Name C -Scope 1 -Value 'x' }"; Expected = 1 }
+            @{ Name = 'a variable of a function that another function writes by the drive of the variables'; Text = "function A { `$c = { 1 }; B; & `$c }`nfunction B { Set-Item variable:c 'x' }"; Expected = 1 }
+            @{ Name = 'a variable of a function that another function gives a text with Set-Variable, in its own scope and with the name in another case'; Text = "function A { `$c = { 1 }; B; & `$c }`nfunction B { Set-Variable -Name C -Scope Local -Value 'x' }"; Expected = 1 }
+            @{ Name = 'a variable of the file that a function writes through a reference'; Text = "`$c = { 1 }`nfunction A { Update-Something ([ref]`$c) }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the file that a function writes with OutVariable'; Text = "`$c = { 1 }`nfunction A { Get-Date -OutVariable c | Out-Null }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable of the file that the object of Get-Variable writes in a function, with no scope given'; Text = "`$c = { 1 }`nfunction A { (Get-Variable c).Value = 'x' }`nA`n& `$c"; Expected = 1 }
+            @{ Name = 'a variable that a list assignment gives a text, after the assignment of another one'; Text = "`$c = { 1 }; `$d = { 2 }; `$a, `$c = 'x', 'Connect-PnPOnline'; & `$c"; Expected = 1 }
         ) {
             @(Find-DynamicCall -Text $Text) | Should -HaveCount $Expected
         }
