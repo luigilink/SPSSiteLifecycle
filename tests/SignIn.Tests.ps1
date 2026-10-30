@@ -140,6 +140,43 @@ Describe 'Test-SPSLifecycleCertificateDate' {
         $result.Message | Should -BeLike 'The certificate expired on *: the sign-in would fail*'
     }
 
+    It 'says "1 day", and not "1 days", when one day is left, and counts whole days' {
+        $result = Test-Date -NotAfter $script:Now.AddDays(1.5)
+
+        $result.State | Should -BeExactly 'Soon'
+        $result.DaysLeft | Should -Be 1
+        $result.Message | Should -BeLike 'The certificate ends in 1 day (on *'
+        (Test-Date -NotAfter $script:Now.AddDays(2.5)).Message | Should -BeLike 'The certificate ends in 2 days (on *'
+    }
+
+    It 'says that a certificate is valid from the very moment it starts' {
+        (Test-Date -NotAfter $script:Now.AddYears(2) -NotBefore $script:Now).State | Should -BeExactly 'Valid'
+        (Test-Date -NotAfter $script:Now.AddYears(2) -NotBefore $script:Now.AddSeconds(1)).State | Should -BeExactly 'NotYetValid'
+    }
+
+    It 'writes the dates the same way whatever the culture of the machine, a calendar that is not Gregorian included' {
+        $thai = [System.Globalization.CultureInfo]::new('th-TH')
+        if ($thai.DateTimeFormat.Calendar -isnot [System.Globalization.ThaiBuddhistCalendar]) {
+            Set-ItResult -Skipped -Because 'this machine has no culture data for the Buddhist calendar'
+            return
+        }
+
+        $previous = [System.Globalization.CultureInfo]::CurrentCulture
+        try {
+            [System.Globalization.CultureInfo]::CurrentCulture = $thai
+            $soon = (Test-Date -NotAfter $script:Now.AddDays(12)).Message
+            $expired = (Test-Date -NotAfter $script:Now.AddDays(-1)).Message
+            $notYet = (Test-Date -NotAfter $script:Now.AddYears(2) -NotBefore $script:Now.AddDays(3)).Message
+        }
+        finally {
+            [System.Globalization.CultureInfo]::CurrentCulture = $previous
+        }
+
+        $soon | Should -BeLike '*(on 2026-11-11)*'
+        $expired | Should -BeLike '*expired on 2026-10-29:*'
+        $notYet | Should -BeLike '*not valid before 2026-11-02 09:15 (UTC)*'
+    }
+
     It 'says that a certificate that is not valid yet is not' {
         $result = Test-Date -NotAfter $script:Now.AddYears(2) -NotBefore $script:Now.AddHours(1)
 
