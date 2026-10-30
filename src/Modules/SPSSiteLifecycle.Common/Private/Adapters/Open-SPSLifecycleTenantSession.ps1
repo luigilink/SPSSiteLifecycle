@@ -38,10 +38,14 @@
 
     $tenantName = "$($Setting.TenantName)".Trim().ToLowerInvariant()
     try {
-        $connection = Connect-PnPOnline -Url $Setting.AdminUrl -Interactive -ClientId $clientId -Tenant "$tenantName.onmicrosoft.com" -ReturnConnection
+        $connection = Connect-PnPOnline -Url $Setting.AdminUrl -Interactive -ClientId $clientId -Tenant "$tenantName.onmicrosoft.com" -ReturnConnection -ErrorAction Stop
     }
     catch {
         throw "The sign-in to the admin site of the tenant failed: $($_.Exception.Message)"
+    }
+
+    if ($null -eq $connection) {
+        throw 'The sign-in to the admin site of the tenant gave no connection. The calls that follow would use the connection that this PowerShell session already holds, which may be the one of another tenant, so the tool stops.'
     }
 
     [PSCustomObject][ordered]@{

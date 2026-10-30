@@ -60,15 +60,15 @@
             $parameters.Filter = $Filter
         }
 
-        return ConvertTo-SPSLifecycleSitePage -Item @(Get-PnPTenantSite @parameters) -Source Cmdlet -NextStartIndex ''
+        return ConvertTo-SPSLifecycleSitePage -Item @(Get-PnPTenantSite @parameters -ErrorAction Stop) -Source Cmdlet -NextStartIndex ''
     }
 
-    $context = Get-PnPContext -Connection $Session.Connection
+    $context = Get-PnPContext -Connection $Session.Connection -ErrorAction Stop
     $tenant = [Microsoft.Online.SharePoint.TenantAdministration.Tenant]::new($context)
     $request = Get-SPSLifecycleListingRequest -Filter $Filter -StartIndex $StartIndex
     $result = $tenant.GetSitePropertiesFromSharePointByFilters($request)
     $context.Load($result)
-    Invoke-PnPQuery -RetryCount 5 -Connection $Session.Connection
+    Invoke-PnPQuery -RetryCount 5 -Connection $Session.Connection -ErrorAction Stop
 
     ConvertTo-SPSLifecycleSitePage -Item $result -Source Csom -NextStartIndex "$($result.NextStartIndexFromSharePoint)"
 }

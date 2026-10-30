@@ -492,9 +492,11 @@ $script:StubLog.Add('module checked')
 param([string]$Url, [switch]$Interactive, [string]$ClientId, [string]$Tenant, [switch]$ReturnConnection)
 $script:StubLog.Add("Connect-PnPOnline Url=$Url Interactive=$($Interactive.IsPresent) ClientId=$ClientId Tenant=$Tenant ReturnConnection=$($ReturnConnection.IsPresent)")
 if ($script:StubData.ConnectFails) { throw 'AADSTS50020: the account does not exist in the tenant.' }
+if ($script:StubData.ConnectWritesError) { Write-Error 'The sign-in window was closed.'; return }
+if ($script:StubData.ConnectGivesNothing) { return }
 'a connection'
 '@
-        } -Data @{ ConnectFails = $false }
+        } -Data @{ ConnectFails = $false; ConnectWritesError = $false; ConnectGivesNothing = $false }
     }
 
     AfterEach {
@@ -543,6 +545,18 @@ if ($script:StubData.ConnectFails) { throw 'AADSTS50020: the account does not ex
         Get-StubLog | Should -HaveCount 0
     }
 
+    It 'stops when the sign-in reports an error without throwing and gives nothing: a session with no connection would use the one that the user already has, maybe of another tenant' {
+        & $script:Module { $script:StubData.ConnectWritesError = $true }
+
+        { Open-TestSession -Setting (New-TestSetting) } | Should -Throw -ExpectedMessage '*sign-in*failed*window was closed*'
+    }
+
+    It 'stops when the sign-in gives no connection and no error' {
+        & $script:Module { $script:StubData.ConnectGivesNothing = $true }
+
+        { Open-TestSession -Setting (New-TestSetting) } | Should -Throw -ExpectedMessage '*sign-in*no connection*'
+    }
+
     It 'says that the sign-in failed, and why' {
         & $script:Module { $script:StubData.ConnectFails = $true }
 
@@ -584,8 +598,9 @@ Describe 'Get-SPSLifecycleTenantSitePage with Get-PnPTenantSite' {
 param([switch]$Detailed, [string]$Filter, $Connection, [switch]$IncludeOneDriveSites)
 $script:StubLog.Add("Get-PnPTenantSite Detailed=$($Detailed.IsPresent) Filter=[$Filter] Connection=$Connection IncludeOneDriveSites=$($IncludeOneDriveSites.IsPresent)")
 $script:StubData.Items
+if ($script:StubData.WritesError) { Write-Error 'Access denied for a part of the tenant.' }
 '@
-        } -Data @{ Items = @() }
+        } -Data @{ Items = @(); WritesError = $false }
     }
 
     AfterEach {
@@ -622,6 +637,12 @@ $script:StubData.Items
         @(Get-StubLog)[0] | Should -BeLike '*Filter=[[]]*'
     }
 
+    It 'stops when the cmdlet gives some sites and reports an error without throwing: a part of the tenant that was not read must not look like a complete listing' {
+        & $script:Module { $script:StubData.WritesError = $true }
+
+        { Get-TestCmdletPage -Items @((New-TestItem -Source Cmdlet)) } | Should -Throw -ExpectedMessage '*Access denied for a part of the tenant*'
+    }
+
     It 'gives an empty page for a tenant of no site' {
         $page = Get-TestCmdletPage -Items @()
 
@@ -635,7 +656,7 @@ Describe 'Get-SPSLifecycleTenantSitePage with the paged call, on the real types 
     # library would send it, and sends nothing: no connection exists, and no sign-in command is known in that process.
     BeforeAll {
         $script:RealCall = {
-            param([string]$Filter, [string]$StartIndex)
+            param([string]$Filter, [string]$StartIndex, [bool]$QueryError = $false)
 
             $base = (Get-Module -ListAvailable -Name 'PnP.PowerShell' | Sort-Object -Property Version -Descending | Select-Object -First 1).ModuleBase
             $script = @'
@@ -648,14 +669,16 @@ foreach ($name in 'Microsoft.SharePoint.Client.dll', 'Microsoft.SharePoint.Clien
 Import-Module -Name '@MANIFEST@' -Force
 $module = Get-Module -Name SPSSiteLifecycle.Common
 & $module {
-    param($filter, $startIndex)
+    param($filter, $startIndex, $queryError)
 
     $script:Sent = [System.Collections.Generic.List[System.String]]::new()
     $script:Context = [Microsoft.SharePoint.Client.ClientContext]::new('https://contoso-admin.sharepoint.com')
 
-    function script:Get-PnPContext { param($Connection) $script:Context }
+    function script:Get-PnPContext { [CmdletBinding()] param($Connection) $script:Context }
     function script:Invoke-PnPQuery {
+        [CmdletBinding()]
         param($RetryCount, $Connection)
+        if ($queryError) { Write-Error 'The query failed for a part of the tenant.'; return }
         $request = $script:Context.PendingRequest
         $build = $request.GetType().GetMethod('BuildQuery', [System.Reflection.BindingFlags]'Instance,Public,NonPublic')
         $script:Sent.Add($build.Invoke($request, @()).CreateTextReader().ReadToEnd())
@@ -663,6 +686,9 @@ $module = Get-Module -Name SPSSiteLifecycle.Common
     }
 
     $session = [PSCustomObject]@{ Connection = 'a connection'; TenantName = 'contoso'; AdminUrl = 'https://contoso-admin.sharepoint.com' }
+    # The adapter is run under the preference of a normal session: an error that a command writes does not stop the code unless the
+    # adapter asks for it. (The global preference is the one that the functions of a module read.)
+    $global:ErrorActionPreference = 'Continue'
     $outcome = try {
         $null = Get-SPSLifecycleTenantSitePage -Session $session -Source Csom -StartIndex $startIndex -Filter $filter
         'no error'
@@ -679,10 +705,10 @@ $module = Get-Module -Name SPSSiteLifecycle.Common
         SignInKnown  = [bool](Get-Command -Name 'Connect-PnPOnline' -ErrorAction SilentlyContinue)
         ModuleLoaded = [bool](Get-Module -Name 'PnP.PowerShell')
     } | ConvertTo-Json -Compress
-} '@FILTER@' '@START@'
+} '@FILTER@' '@START@' @QUERYERROR@
 '@
             $script = $script.Replace('@BASE@', $base.Replace("'", "''")).Replace('@MANIFEST@', $script:Manifest.Replace("'", "''"))
-            $script = $script.Replace('@FILTER@', $Filter.Replace("'", "''")).Replace('@START@', $StartIndex.Replace("'", "''"))
+            $script = $script.Replace('@FILTER@', $Filter.Replace("'", "''")).Replace('@START@', $StartIndex.Replace("'", "''")).Replace('@QUERYERROR@', $(if ($QueryError) { '$true' } else { '$false' }))
             $path = Join-Path -Path $TestDrive -ChildPath ('real-call-{0}.ps1' -f [System.Guid]::NewGuid().ToString('N'))
             [System.IO.File]::WriteAllText($path, $script)
 
@@ -715,6 +741,14 @@ $module = Get-Module -Name SPSSiteLifecycle.Common
 
         $call.Request | Should -BeLike '*<Property Name="Filter" Type="Null" />*'
         $call.Request | Should -BeLike '*<Property Name="StartIndex" Type="Null" />*'
+    }
+
+    It 'stops on an error that the query reports without throwing, and does not go on to read a collection that was not loaded' -Skip:(-not (Get-Module -ListAvailable -Name 'PnP.PowerShell')) {
+        $call = & $script:RealCall '' '' $true
+
+        $call.Requests | Should -Be 0
+        $call.Outcome | Should -BeLike '*The query failed for a part of the tenant*'
+        $call.Outcome | Should -Not -BeLike '*not been initialized*'
     }
 
     It 'stops, after having queued the request, when the call gives back no page that can be read, and never signs in' -Skip:(-not (Get-Module -ListAvailable -Name 'PnP.PowerShell')) {
