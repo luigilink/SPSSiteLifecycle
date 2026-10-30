@@ -41,9 +41,14 @@ The inactive site policy of Microsoft 365 can make inactive sites read-only, the
 ```powershell
 # Phase 1: read the tenant and write the report (nothing is changed)
 pwsh ./src/SPSSiteLifecycle.ps1 -ConfigFile ./contoso.psd1 -Phase Scan
+
+# Between the phases, a person opens the CSV, filters it, writes Delete, Archive or Lock in the Decision column, and saves it as CSV
+
+# Phase 2: read each decided site again and say what would be done (report only), or do it (Execute = $true, after a typed confirmation)
+pwsh ./src/SPSSiteLifecycle.ps1 -ConfigFile ./contoso.psd1 -Phase Act
 ```
 
-The script has two parameters. Everything else is a setting in the `.psd1` file (see `src/config/SPSSiteLifecycle.example.psd1`). The Act phase (`-Phase Act`) is not available in this version. See [Getting Started](https://github.com/luigilink/SPSSiteLifecycle/wiki/Getting-Started).
+The script has two parameters. Everything else is a setting in the `.psd1` file (see `src/config/SPSSiteLifecycle.example.psd1`). Its exit code is `0` when the phase ended as planned, `1` on an error, and, for the Act, `2` when the run ended with rows that failed or stopped after 3 errors in a row. See [Getting Started](https://github.com/luigilink/SPSSiteLifecycle/wiki/Getting-Started).
 
 ## Quick links
 

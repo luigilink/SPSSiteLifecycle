@@ -28,4 +28,23 @@
 4. The run ends with a few lines: how long it took, how the sites were listed, how many are in the report and how many were left out, what the report suggests, the verdicts by count, and the path of the report. `-InformationAction SilentlyContinue` hides them.
 5. Open the report in a spreadsheet and read it. `Decision` is empty on every row: the tool never decides in your place.
 
-The Scan only reads: nothing is changed in the tenant, and a run that stops half-way leaves no report. The exit code is `0` when the run ended and `1` on any error, after a message that says what stopped it. `-Phase Act` is not available in this version.
+The Scan only reads: nothing is changed in the tenant, and a run that stops half-way leaves no report. The exit code is `0` when the run ended and `1` on any error, after a message that says what stopped it.
+
+## Between the two phases
+
+The tool never decides in your place. Open the report (`sites-<time>.csv`) in a spreadsheet, filter it (the `Verdict` and `SuggestedAction` columns help), write `Delete`, `Archive` or `Lock` in the `Decision` column of the sites that you want to act on, and save the file as CSV (UTF-8 or the CSV that your Excel saves: the semicolon of a French Excel is read). An empty `Decision` leaves the site untouched, and any other word stops the tool before the first action. Put the path of the file in `Act.InputFile` of the settings. The file must not be older than `Act.MaxCsvAgeDays` (30 days by default): a site can change in the meantime, and the tool reads each site again anyway.
+
+## Run the Act
+
+1. **Report only first** (the default: `Act.Execute` is not set). Run it:
+
+   ```powershell
+   pwsh ./src/SPSSiteLifecycle.ps1 -ConfigFile ./contoso.psd1 -Phase Act
+   ```
+
+   The tool checks the whole file before it signs in, shows a banner (the file, its date, the decisions), reads each decided site again from the tenant and says what it would do. Nothing is changed and nothing is asked. It writes `act-<time>.csv` in `OutputFolder`: a row for each decision, with the verdict (a site that is protected, excluded, locked for less than `MinLockedDays`, whose content changed or that has a hold is left alone), and the outcome.
+2. **Then one action.** Put `Execute = $true` and `MaxActions = 1` in the `Act` section, and run it again. The tool shows the banner, asks you to type the name of the tenant, then a phrase that carries the number of actions (`DELETE 1`, `ARCHIVE 1` or `APPLY 1`), and only then signs in and does the first action that passes every check. Check the result in the tenant, then raise `MaxActions` (25 by default). The tool stops when its input is redirected: the confirmation is typed by a person.
+3. **What a deletion does.** A site that has a Microsoft 365 group is deleted through its group (SharePoint deletes the site some time later, from minutes to hours: a later run sees the group in the recycle bin and does not delete it twice). A site that has none is unlocked, read again, and deleted into the recycle bin (it can be restored while the retention lasts), and locked again if that fails. `Archive` needs Microsoft 365 Archive to be on for sites, and `Lock` writes the date in the lock journal, which a later run reads as the age of the lock.
+4. **The exit code** is `0` when the run ended as planned, `1` on an error, and `2` when the run ended but a row failed or could not be read, or when it stopped after 3 errors in a row (the run stops by itself, and the Act report says which rows).
+
+Start with a non-production tenant, and read the Design Decisions page (D6) for every check that is made before an action.

@@ -203,3 +203,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs Microsoft 365 Archive to be on for sure before an archive. Every adapter that changes the tenant checks its target again (the
   tenant of the session, the host of the address, no OneDrive, no root site, no encoded slash, a group by its ID), and a structure test
   checks that each one does. None of these calls has run against a tenant yet.
+- Act: `src/SPSSiteLifecycle.ps1 -Phase Act` runs the Act phase (#13), through `Invoke-SPSLifecycleAct`, with the same settings file and
+  no other parameter. It shows the banner and the summary as information, and its exit code is `0` when the run ended as planned,
+  `1` on any error (with a message that sends the person to the Act report), and `2` when the run ended but a row failed or could
+  not be read, or when it stopped after 3 errors in a row, with a warning that names the report, so that a scheduler can tell it from
+  a run that ended as planned. The Getting Started page says what a person does between the phases (filter the report, fill in
+  `Decision`, save it as CSV) and how to run the Act: report only first, then one action with `MaxActions = 1`.
