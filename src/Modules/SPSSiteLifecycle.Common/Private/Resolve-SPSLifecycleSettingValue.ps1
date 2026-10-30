@@ -92,7 +92,9 @@
 
             $text = $Value.Trim()
             if ($Row.Pattern -and -not [System.Text.RegularExpressions.Regex]::IsMatch($text, $Row.Pattern, [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
-                return & $result $null "must be $($Row.PatternHint) (now: '$(ConvertTo-SPSLifecycleVisibleText -Text $text -AsciiOnly)')."
+                # A row that may hold a secret by mistake (the name of a variable that is a password) never tells what it was given.
+                $now = if ($Row.NoEcho) { '' } else { " (now: '$(ConvertTo-SPSLifecycleVisibleText -Text $text -AsciiOnly)')" }
+                return & $result $null "must be $($Row.PatternHint)$now."
             }
 
             return & $result $text ''

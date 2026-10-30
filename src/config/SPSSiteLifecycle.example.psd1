@@ -20,6 +20,25 @@
     # creates the app and shows this value (see the App-Registration page of the wiki).
     ClientId              = '11111111-2222-3333-4444-555555555555'
 
+    # How the tool signs in: 'Interactive' (a person signs in, in a window) or 'Certificate' (the app
+    # signs in alone, for a run that nobody watches). 'Certificate' needs TenantId and exactly one of
+    # CertificateThumbprint and CertificatePath, and an app that was registered for it (see the
+    # App-Registration page of the wiki). A password never goes in this file.
+    # Authentication        = 'Interactive'
+
+    # Certificate sign-in only. ID of your Microsoft Entra tenant (a GUID).
+    # TenantId              = '66666666-7777-8888-9999-000000000000'
+
+    # Certificate sign-in only. Thumbprint of a certificate of the Windows store (Windows only) ...
+    # CertificateThumbprint = '0123456789ABCDEF0123456789ABCDEF01234567'
+
+    # ... or the .pfx file of the certificate (any platform), kept outside the repository.
+    # CertificatePath       = 'C:\Keys\SPSSiteLifecycle.pfx'
+
+    # For a .pfx file: the name of the environment variable that holds its password. Without it the
+    # tool asks for the password, which a run that nobody watches cannot.
+    # CertificatePasswordVariable = 'SPSSITELIFECYCLE_PFX_PASSWORD'
+
     # Folder for the reports, the checkpoints and the lock journal.
     # OutputFolder          = 'Reports'
 

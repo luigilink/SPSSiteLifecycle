@@ -89,6 +89,10 @@
     $describeUnknown = {
         param($Key, $Where)
         $shown = ConvertTo-SPSLifecycleVisibleText -Text "$Key" -AsciiOnly
+        if ([System.Text.RegularExpressions.Regex]::IsMatch("$Key", 'pass|pwd|secret', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)) {
+            return "'$shown' looks like a password or a secret, and a password never goes in the settings file, where it is read, copied and committed. Put the password of the .pfx file in an environment variable and name it in CertificatePasswordVariable, or leave that out and the tool asks for it. The tool uses no client secret."
+        }
+
         $elsewhere = @($schema | Where-Object { [System.String]::Equals($_.Name, "$Key", [System.StringComparison]::OrdinalIgnoreCase) })
         if ($elsewhere.Count -gt 0) {
             $row = $elsewhere[0]
@@ -185,6 +189,27 @@
         $reports = @('Scan.SharePointUsageReport', 'Scan.TeamsActivityReport', 'Scan.GroupsActivityReport')
         if (@($reports | Where-Object { $provided[$_] }).Count -eq 0) {
             $problems.Add('Scan: give at least one activity report: SharePointUsageReport, TeamsActivityReport or GroupsActivityReport. Without one, the tool cannot tell which sites are inactive.')
+        }
+    }
+
+    if ($shared.Authentication -eq 'Certificate') {
+        if (-not $provided['TenantId']) {
+            $problems.Add('TenantId: required when Authentication is Certificate. It is the ID of your Microsoft Entra tenant (a GUID), asked for instead of built from TenantName, because the SharePoint name is not always the name of the tenant.')
+        }
+
+        if (($provided['CertificateThumbprint'] -eq $true) -eq ($provided['CertificatePath'] -eq $true)) {
+            $problems.Add('Authentication is Certificate, which needs exactly one of CertificateThumbprint (a certificate of the Windows store) and CertificatePath (a .pfx file).')
+        }
+
+        if ($provided['CertificateThumbprint'] -eq $true -and $provided['CertificatePasswordVariable'] -eq $true) {
+            $problems.Add('CertificatePasswordVariable: only for CertificatePath, since a certificate of the store has no password to give.')
+        }
+    }
+    else {
+        foreach ($name in 'TenantId', 'CertificateThumbprint', 'CertificatePath', 'CertificatePasswordVariable') {
+            if ($provided[$name] -eq $true) {
+                $problems.Add("${name}: only used when Authentication is Certificate. Set Authentication = 'Certificate', or remove it.")
+            }
         }
     }
 

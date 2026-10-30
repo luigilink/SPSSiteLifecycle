@@ -397,6 +397,193 @@ Describe 'The settings schema' {
     }
 }
 
+Describe 'The sign-in settings' {
+    BeforeAll {
+        $script:Tenant = '8f3d2c1b-4a5e-4f60-9b7a-0c1d2e3f4a5b'
+        $script:Thumbprint = '0123456789ABCDEF0123456789ABCDEF01234567'
+
+        # A settings file with the shared keys of the sign-in written after the tenant and the client, and the files that its phase reads.
+        function script:New-SignInConfig {
+            param([string]$Extra = '', [switch]$WithPfx)
+
+            $body = @"
+@{
+    TenantName = 'Contoso'
+    ClientId   = '11111111-2222-3333-4444-555555555555'
+$Extra
+    Scan       = @{ SharePointUsageReport = 'usage.csv' }
+}
+"@
+            $path = New-TestConfig -Body $body
+            $folder = Split-Path -Path $path -Parent
+            Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'usage.csv') -Value 'x'
+            if ($WithPfx) { Set-Content -LiteralPath (Join-Path -Path $folder -ChildPath 'app.pfx') -Value 'x' }
+            $path
+        }
+
+        function script:Get-SignInProblem {
+            param([string]$Extra, [switch]$WithPfx)
+
+            $message = ''
+            try { $null = Get-TestSetting -Path (New-SignInConfig -Extra $Extra -WithPfx:$WithPfx) -Phase Scan } catch { $message = $_.Exception.Message }
+            $message
+        }
+    }
+
+    Context 'The defaults, and the interactive sign-in' {
+        It 'signs in interactively when nothing is said, and holds no certificate setting' {
+            $setting = Get-TestSetting -Path (New-SignInConfig) -Phase Scan
+
+            $setting.Authentication | Should -BeExactly 'Interactive'
+            $setting.TenantId | Should -BeNullOrEmpty
+            $setting.CertificateThumbprint | Should -BeNullOrEmpty
+            $setting.CertificatePath | Should -BeNullOrEmpty
+            $setting.CertificatePasswordVariable | Should -BeNullOrEmpty
+        }
+
+        It 'accepts Interactive written out, in any case' {
+            (Get-TestSetting -Path (New-SignInConfig -Extra "    Authentication = 'interactive'") -Phase Scan).Authentication | Should -BeExactly 'Interactive'
+        }
+
+        It 'refuses a value that is not a way to sign in: <Value>' -ForEach @(
+            @{ Value = "'Secret'" }
+            @{ Value = "'Device'" }
+            @{ Value = "''" }
+            @{ Value = '$true' }
+            @{ Value = "'Cert$([char]0x00AD)ificate'" }
+        ) {
+            Get-SignInProblem -Extra "    Authentication = $Value" | Should -BeLike '*Authentication*'
+        }
+    }
+
+    Context 'The certificate sign-in' {
+        It 'reads a certificate of the Windows store, by its thumbprint' {
+            $setting = Get-TestSetting -Path (New-SignInConfig -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificateThumbprint = '$($script:Thumbprint.ToLowerInvariant())'") -Phase Scan
+
+            $setting.Authentication | Should -BeExactly 'Certificate'
+            $setting.TenantId | Should -BeExactly $script:Tenant
+            $setting.CertificateThumbprint | Should -BeExactly $script:Thumbprint.ToLowerInvariant()
+            $setting.CertificatePath | Should -BeNullOrEmpty
+        }
+
+        It 'reads a .pfx file, relative to the folder of the settings file, with the name of the variable that holds its password' {
+            $path = New-SignInConfig -Extra "    Authentication = 'Certificate'`n    TenantId = '$($script:Tenant.ToUpperInvariant())'`n    CertificatePath = 'app.pfx'`n    CertificatePasswordVariable = 'SPSLC_PFX_PASSWORD'" -WithPfx
+
+            $setting = Get-TestSetting -Path $path -Phase Scan
+
+            $setting.TenantId | Should -BeExactly $script:Tenant
+            $setting.CertificatePath | Should -BeExactly (Join-Path -Path (Split-Path -Path $path -Parent) -ChildPath 'app.pfx')
+            $setting.CertificatePasswordVariable | Should -BeExactly 'SPSLC_PFX_PASSWORD'
+        }
+
+        It 'asks for the tenant ID: the SharePoint name is not always the name of the tenant' {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    CertificateThumbprint = '$script:Thumbprint'" | Should -BeLike '*TenantId: required when Authentication is Certificate*'
+        }
+
+        It 'asks for exactly one of the thumbprint and the file: <Name>' -ForEach @(
+            @{ Name = 'none'; Extra = "    TenantId = '8f3d2c1b-4a5e-4f60-9b7a-0c1d2e3f4a5b'"; Expected = '*exactly one of CertificateThumbprint*and CertificatePath*' }
+            @{ Name = 'both'; Extra = "    TenantId = '8f3d2c1b-4a5e-4f60-9b7a-0c1d2e3f4a5b'`n    CertificateThumbprint = '0123456789ABCDEF0123456789ABCDEF01234567'`n    CertificatePath = 'app.pfx'"; Expected = '*exactly one of CertificateThumbprint*and CertificatePath*' }
+        ) {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n$Extra" -WithPfx | Should -BeLike $Expected
+        }
+
+        It 'does not give a password variable to a certificate of the store: it has no password' {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificateThumbprint = '$script:Thumbprint'`n    CertificatePasswordVariable = 'PWD'" | Should -BeLike '*CertificatePasswordVariable*only for CertificatePath*'
+        }
+
+        It 'refuses a tenant ID that is not a GUID, or that is all zeros: <Value>' -ForEach @(
+            @{ Value = "'contoso.onmicrosoft.com'" }
+            @{ Value = "'8f3d2c1b-4a5e-4f60-9b7a'" }
+            @{ Value = "'00000000-0000-0000-0000-000000000000'" }
+            @{ Value = "''" }
+        ) {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = $Value`n    CertificateThumbprint = '$script:Thumbprint'" | Should -BeLike '*TenantId*GUID*'
+        }
+
+        It 'refuses a thumbprint that is not 40 hexadecimal characters: <Name>' -ForEach @(
+            @{ Name = 'with colons'; Value = '01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67' }
+            @{ Name = 'with spaces'; Value = '0123 4567 89AB CDEF 0123 4567 89AB CDEF 0123 4567' }
+            @{ Name = '39 characters'; Value = '0123456789ABCDEF0123456789ABCDEF0123456' }
+            @{ Name = '41 characters'; Value = '0123456789ABCDEF0123456789ABCDEF012345678' }
+            @{ Name = 'not hexadecimal'; Value = 'G123456789ABCDEF0123456789ABCDEF01234567' }
+        ) {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificateThumbprint = '$Value'" | Should -BeLike '*CertificateThumbprint*40 hexadecimal*'
+        }
+
+        It 'refuses an empty thumbprint and an empty variable name, as it refuses an empty text anywhere' {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificateThumbprint = ''" | Should -BeLike '*CertificateThumbprint: must be a text that is not empty*'
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificatePath = 'app.pfx'`n    CertificatePasswordVariable = ''" -WithPfx | Should -BeLike '*CertificatePasswordVariable: must be a text that is not empty*'
+        }
+
+        It 'refuses a file that is not there, as every file that a phase reads' {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificatePath = 'missing.pfx'" | Should -BeLike '*CertificatePath: was not found*missing.pfx*'
+        }
+
+        It 'refuses the name of a variable that is not one: <Name>' -ForEach @(
+            @{ Name = 'a digit first'; Value = '1PASSWORD' }
+            @{ Name = 'a dash'; Value = 'MY-PASSWORD' }
+            @{ Name = 'a space'; Value = 'MY PASSWORD' }
+            @{ Name = 'a dollar sign'; Value = '$env:PASSWORD' }
+            @{ Name = 'the password itself, with a space'; Value = 'Correct Horse Battery' }
+        ) {
+            Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificatePath = 'app.pfx'`n    CertificatePasswordVariable = '$Value'" -WithPfx | Should -BeLike '*CertificatePasswordVariable*name of an environment variable*'
+        }
+
+        It 'does not repeat a value that was refused in the name of a variable, which may be a password that was put there by mistake' {
+            $message = Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    TenantId = '$script:Tenant'`n    CertificatePath = 'app.pfx'`n    CertificatePasswordVariable = 'Correct-Horse-Battery-1'" -WithPfx
+
+            $message | Should -BeLike '*CertificatePasswordVariable*'
+            $message | Should -Not -BeLike '*Correct-Horse*'
+        }
+
+        It 'does not use a certificate setting when the sign-in is interactive, so that a person does not think that it does: <Key>' -ForEach @(
+            @{ Key = 'TenantId'; Line = "    TenantId = '8f3d2c1b-4a5e-4f60-9b7a-0c1d2e3f4a5b'" }
+            @{ Key = 'CertificateThumbprint'; Line = "    CertificateThumbprint = '0123456789ABCDEF0123456789ABCDEF01234567'" }
+            @{ Key = 'CertificatePath'; Line = "    CertificatePath = 'app.pfx'" }
+            @{ Key = 'CertificatePasswordVariable'; Line = "    CertificatePasswordVariable = 'PWD'" }
+        ) {
+            Get-SignInProblem -Extra $Line -WithPfx | Should -BeLike "*${Key}: only used when Authentication is Certificate*"
+        }
+
+        It 'reports every problem at once' {
+            $message = Get-SignInProblem -Extra "    Authentication = 'Certificate'`n    CertificatePasswordVariable = 'PWD'"
+
+            $message | Should -BeLike '*TenantId*'
+            $message | Should -BeLike '*exactly one of*'
+        }
+    }
+
+    Context 'A password never goes in the settings file' {
+        It 'refuses a key that holds a password or a secret, says why, and says what to use instead: <Key>' -ForEach @(
+            @{ Key = 'CertificatePassword' }
+            @{ Key = 'certificatepassword' }
+            @{ Key = 'Password' }
+            @{ Key = 'PfxPassword' }
+            @{ Key = 'ClientSecret' }
+            @{ Key = 'Secret' }
+            @{ Key = 'CertPwd' }
+            @{ Key = 'Passphrase' }
+        ) {
+            $message = Get-SignInProblem -Extra "    $Key = 'Correct-Horse-Battery-1'"
+
+            $message | Should -BeLike "*never goes in the settings file*CertificatePasswordVariable*the tool asks for it*"
+            $message | Should -Not -BeLike '*Correct-Horse*' -Because 'the value of the key must not be told'
+            $message | Should -Not -BeLike '*Did you mean*' -Because 'CertificatePasswordVariable is not a spelling of a password key'
+        }
+
+        It 'refuses it inside a section as well' {
+            $body = "@{ TenantName = 'contoso'; ClientId = '11111111-2222-3333-4444-555555555555'; Scan = @{ SharePointUsageReport = 'usage.csv'; ClientSecret = 'xyz' } }"
+            $path = New-TestConfig -Body $body
+
+            { Get-TestSetting -Path $path -Phase Scan } | Should -Throw -ExpectedMessage '*Scan section*never goes in the settings file*'
+        }
+
+        It 'still says what an unknown key is, for a key that is not about a password' {
+            Get-SignInProblem -Extra "    Authenticaton = 'Certificate'" | Should -BeLike "*Unknown setting 'Authenticaton'*Did you mean 'Authentication'*"
+        }
+    }
+}
+
 Describe 'The names that the settings hold' {
     Context 'TenantName is ASCII, whatever the culture and the case folding' {
         It 'accepts <Name> under <Culture>' -ForEach @(

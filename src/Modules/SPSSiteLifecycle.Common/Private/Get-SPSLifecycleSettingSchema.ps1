@@ -15,7 +15,8 @@
         String, and for each entry of a StringList: a .NET regular expression that is matched as it is
         written, one character at a time, with no case folding and no culture, so that the Kelvin sign
         and a dotted capital I are not the letters k and i), Values, Kind (File or Folder, for the
-        paths), MustExist, AllowEmpty (lists) and Description.
+        paths), MustExist, AllowEmpty (lists), NoEcho (a String that may hold a secret by mistake: a
+        message about it never tells what it was given) and Description.
 
         .EXAMPLE
         Get-SPSLifecycleSettingSchema | Where-Object { $_.Section -eq 'Act' }
@@ -36,6 +37,31 @@
         @{
             Section = 'Shared'; Name = 'ClientId'; Type = 'Guid'; RequiredIn = $both; UsedIn = $both
             Description = 'Application (client) ID of the Microsoft Entra app registration that PnP.PowerShell uses for the interactive sign-in. The setup script `src/Register-SPSSiteLifecycleApp.ps1` creates the app and shows it (see the [App registration](App-Registration) page).'
+        }
+        @{
+            Section = 'Shared'; Name = 'Authentication'; Type = 'Choice'; UsedIn = $both
+            Values = @('Interactive', 'Certificate'); Default = 'Interactive'; DefaultText = '`Interactive`'
+            Description = 'How the tool signs in. `Interactive`: a person signs in, in a window, with the app of `ClientId`. `Certificate`: the app signs in alone, with a certificate, for a run that nobody watches (a scheduled task, a server); it needs `TenantId` and exactly one of `CertificateThumbprint` and `CertificatePath`, and an app that was registered for it (see the [App registration](App-Registration) page). The Act phase with `Execute` still needs a person to type its confirmation.'
+        }
+        @{
+            Section = 'Shared'; Name = 'TenantId'; Type = 'Guid'; UsedIn = $both
+            Description = 'ID of the Microsoft Entra tenant, a GUID: required when `Authentication` is `Certificate`, and used only then. The tool asks for the ID instead of building a name from `TenantName`, because the SharePoint name is not always the name of the tenant.'
+        }
+        @{
+            Section = 'Shared'; Name = 'CertificateThumbprint'; Type = 'String'; UsedIn = $both
+            Pattern = '\A[0-9A-Fa-f]{40}\z'
+            PatternHint = '40 hexadecimal characters, with no spaces or colons'
+            Description = 'Thumbprint of the certificate that the app signs in with, found in the `My` store of Windows (`CurrentUser`, then `LocalMachine`): Windows only. Exactly one of `CertificateThumbprint` and `CertificatePath` when `Authentication` is `Certificate`.'
+        }
+        @{
+            Section = 'Shared'; Name = 'CertificatePath'; Type = 'Path'; Kind = 'File'; MustExist = $true; UsedIn = $both
+            Description = 'The `.pfx` file of the certificate that the app signs in with, on any platform. A relative path is relative to the folder of the settings file. Keep the file outside the repository, in a folder that only the account that runs the tool can read.'
+        }
+        @{
+            Section = 'Shared'; Name = 'CertificatePasswordVariable'; Type = 'String'; UsedIn = $both; NoEcho = $true
+            Pattern = '\A[A-Za-z_][A-Za-z0-9_]{0,254}\z'
+            PatternHint = 'the name of an environment variable: letters, digits and underscores, not starting with a digit'
+            Description = 'Name of the environment variable that holds the password of the `.pfx` file, for `CertificatePath` only. When it is not given, the tool asks for the password, typed and never shown, which a run that nobody watches cannot do. **A password never goes in the settings file:** a key such as `CertificatePassword` is refused.'
         }
         @{
             Section = 'Shared'; Name = 'OutputFolder'; Type = 'Path'; Kind = 'Folder'; UsedIn = $both
@@ -168,6 +194,7 @@
         Kind        = ''
         MustExist   = $false
         AllowEmpty  = $false
+        NoEcho      = $false
         Description = ''
     }
 
