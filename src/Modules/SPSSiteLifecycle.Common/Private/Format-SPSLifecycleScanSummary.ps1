@@ -39,17 +39,7 @@
         '{0} {1}' -f $Count.ToString('N0', $culture), $(if ($Count -eq 1) { $One } else { $Many })
     }
 
-    $seconds = [System.Math]::Max(0.0, [System.Double]$Summary.ElapsedSeconds)
-    if ($seconds -lt 60) {
-        $time = '{0} s' -f ([System.Math]::Floor($seconds * 10) / 10).ToString('N1', $culture)
-    }
-    else {
-        $whole = [System.Int64][System.Math]::Floor($seconds)
-        $hours = [System.Int64][System.Math]::Floor($whole / 3600)
-        $minutes = [System.Int64][System.Math]::Floor(($whole % 3600) / 60)
-        $rest = $whole % 60
-        $time = if ($hours -gt 0) { "$hours h $minutes min $rest s" } else { "$minutes min $rest s" }
-    }
+    $time = ConvertTo-SPSLifecycleDurationText -Seconds ([System.Double]$Summary.ElapsedSeconds)
 
     $source = switch ($listing.Source) {
         'Csom' { 'the paged call of the SharePoint admin API' }

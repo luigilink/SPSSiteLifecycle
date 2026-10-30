@@ -185,3 +185,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the site has one and every gate before it has been passed. A read that fails is an error, never a verdict, so that it can never
   lead to an action, and only the messages that the tenant gives for a thing that does not exist are read as "not there". The lab
   has not checked these messages, nor `HasHolds`, nor the effect of a lock on the content date (#15).
+- Act: the loop that applies the decisions, behind the safeguards (#12), as the public function `Invoke-SPSLifecycleAct` (the entry
+  script does not call it yet). Report only is the default (`Act.Execute` must be exactly `$true`): every row is read again and gets
+  the verdict it would get, and no adapter that changes the tenant is called. With `Execute`, a banner (the file, its date and age,
+  the decisions, the most that the run will do), then the name of the tenant and a phrase that carries the number of actions
+  (`DELETE n`, `ARCHIVE n` or `APPLY n`) are typed, and the tool stops when the input is redirected. `MaxActions` counts the actions
+  that were tried, `DelaySeconds` is the pause between two actions, the run stops after 3 errors in a row, and each row is read
+  again right before its action. The Act report `act-<time>.csv` has a row for each decision, written to the disk as it is made.
+  The actions follow the lab (27 and 28 October): a read-only site is unlocked, deleted into the recycle bin and locked again when
+  that fails; a site with a group is deleted through its group; a lock writes its date in the lock journal; an archive can unlock
+  the site first and lock it again afterwards, and add the administrator who signed in. Every adapter that changes the tenant checks
+  its target again (the tenant of the session, the host of the address, no OneDrive, no root site, a group by its ID), and a structure
+  test checks that each one does. None of these calls has run against a tenant yet.

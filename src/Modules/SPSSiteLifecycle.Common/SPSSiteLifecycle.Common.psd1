@@ -11,6 +11,7 @@
 
     FunctionsToExport = @(
         'Get-SPSLifecycleSetting'
+        'Invoke-SPSLifecycleAct'
         'Invoke-SPSLifecycleScan'
     )
 
