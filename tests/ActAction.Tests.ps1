@@ -269,6 +269,8 @@ Describe 'Get-SPSLifecycleSiteChange' {
         @{ Name = 'a size above the limit is no change for another action'; Override = @{ StorageUsedMB = [System.Int64]5000 }; Check = $false; Expected = '' }
         @{ Name = 'a size above the limit stops a deletion'; Override = @{ StorageUsedMB = [System.Int64]5000 }; Check = $true; Expected = '*size*DeleteMaxSizeGB*' }
         @{ Name = 'the size at the limit is not above it'; Override = @{ StorageUsedMB = [System.Int64]1024 }; Check = $true; Expected = '' }
+        @{ Name = 'a size a megabyte above the limit is above it'; Override = @{ StorageUsedMB = [System.Int64]1025 }; Check = $true; Expected = '*size*DeleteMaxSizeGB*' }
+        @{ Name = 'an empty site has a size that is known: it is zero'; Override = @{ StorageUsedMB = [System.Int64]0 }; Check = $true; Expected = '' }
         @{ Name = 'a size that is not known stops a deletion'; Override = @{ StorageUsedMB = $null }; Check = $true; Expected = '*size is unknown*' }
         @{ Name = 'a size that is below zero stops a deletion'; Override = @{ StorageUsedMB = [System.Int64]-1 }; Check = $true; Expected = '*size is unknown*' }
         @{ Name = 'a size that is a text stops a deletion'; Override = @{ StorageUsedMB = '12' }; Check = $true; Expected = '*size is unknown*' }

@@ -253,3 +253,70 @@ $answer
         { Invoke-TestConfirm -Answer @('contoso', '  APPLY 15  ') } | Should -Not -Throw
     }
 }
+
+Describe 'The numbers of the banner and of the summary of an Act run, whatever the culture' {
+    BeforeAll {
+        function script:New-ActSummaryObject {
+            param([hashtable]$Count = @{}, [string]$Mode = 'Execute', [string]$Stopped = '', [double]$Elapsed = 125.4)
+
+            $counts = [ordered]@{ Done = 0; Failed = 0; WouldDo = 0; Skipped = 0; Review = 0; ReadError = 0; NotRun = 0 }
+            foreach ($key in $Count.Keys) { $counts[$key] = $Count[$key] }
+            [PSCustomObject]@{ Phase = 'Act'; TenantName = 'contoso'; Mode = $Mode; ElapsedSeconds = $Elapsed; ReportPath = '/reports/act-20261030T090000Z.csv'; Counts = $counts; StoppedBecause = $Stopped }
+        }
+
+        function script:Format-TestActSummary {
+            param($Summary)
+            @(& $script:Module { param($s) Format-SPSLifecycleActSummary -Summary $s } $Summary)
+        }
+
+        function script:Use-Culture {
+            param([string]$Name, [scriptblock]$Action)
+
+            $previous = [System.Globalization.CultureInfo]::CurrentCulture
+            try {
+                [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Name)
+                & $Action
+            }
+            finally {
+                [System.Globalization.CultureInfo]::CurrentCulture = $previous
+            }
+        }
+    }
+
+    It 'tells the run of the summary in a few lines' {
+        $lines = Format-TestActSummary -Summary (New-ActSummaryObject -Count @{ Done = 1234; Failed = 1; Skipped = 20; Review = 3; NotRun = 2 })
+
+        $lines | Should -Be @(
+            'Act of the tenant contoso ended in 2 min 5 s. EXECUTE: the tenant was changed.'
+            'Rows with a decision: 1,260. Done 1,234, Failed 1, WouldDo 0, Skipped 20, Review 3, ReadError 0, NotRun 2.'
+            'Report: /reports/act-20261030T090000Z.csv'
+        )
+    }
+
+    It 'says that a report-only run changed nothing' {
+        (Format-TestActSummary -Summary (New-ActSummaryObject -Mode 'ReportOnly' -Count @{ WouldDo = 3 }))[0] | Should -BeExactly 'Act of the tenant contoso ended in 2 min 5 s. REPORT ONLY: nothing was changed.'
+    }
+
+    It 'says why the run stopped' {
+        $lines = Format-TestActSummary -Summary (New-ActSummaryObject -Stopped 'ConsecutiveErrors' -Count @{ Failed = 3 })
+
+        $lines | Should -Contain 'The run stopped after 3 errors in a row: the rows that follow were not read.'
+    }
+
+    It 'writes the numbers the same way under another culture' {
+        $lines = Use-Culture -Name 'fr-FR' -Action { Format-TestActSummary -Summary (New-ActSummaryObject -Elapsed 3.26 -Count @{ Done = 1234 }) }
+
+        $lines[0] | Should -BeExactly 'Act of the tenant contoso ended in 3.2 s. EXECUTE: the tenant was changed.'
+        $lines[1] | Should -BeLike 'Rows with a decision: 1,234. Done 1,234,*'
+    }
+
+    It 'writes the age and the date of the banner the same way under another culture' {
+        $lines = Use-Culture -Name 'fr-FR' -Action {
+            $plan = Get-TestPlan -Import (New-PlanImport -AgeDays 1234.5 -Delete 1234)
+            @(& $script:Module { param($p, $s) Format-SPSLifecycleActBanner -Plan $p -Setting $s } $plan (New-PlanSetting -MaxActions 5000))
+        }
+
+        $lines[2] | Should -BeExactly 'Generated on: 2026-10-29 08:00 UTC (the oldest row of the file), 1,234.5 days ago; the limit is 30 days (MaxCsvAgeDays).'
+        $lines[3] | Should -BeLike 'Decisions: Delete 1234, Archive 3, Lock 0 (1237 in all)*'
+    }
+}

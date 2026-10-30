@@ -119,7 +119,7 @@
         }
     }
 
-    if (-not [System.Uri]::UnescapeDataString($uri.AbsolutePath).Trim('/') -or -not $path.Trim('/')) {
+    if (-not $path.Trim('/')) {
         throw "The address '$shown' is the root site of the tenant, which the tool never changes."
     }
 }
