@@ -77,15 +77,21 @@
     }
 
     $flags = if (Test-SPSLifecycleWindowsPlatform) { [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet } else { [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::DefaultKeySet }
-    try {
-        $certificate = if ($null -eq $Password) {
-            [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($path, [System.String]'', $flags)
+    # No password is a null one first: macOS with .NET 8 opens a file that has none, or an empty one, with a null password only, and an empty
+    # text is what a null becomes when it is cast to a string.
+    $attempts = if ($null -eq $Password) { @([System.Management.Automation.Language.NullString]::Value, [System.String]'') } else { @($Password) }
+    $certificate = $null
+    foreach ($attempt in $attempts) {
+        try {
+            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($path, $attempt, $flags)
+            break
         }
-        else {
-            [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($path, $Password, $flags)
+        catch {
+            $null = $_
         }
     }
-    catch {
+
+    if ($null -eq $certificate) {
         throw "The certificate file '$leaf' could not be opened: the password is not the right one, or the file is not a certificate with its private key (.pfx)."
     }
 

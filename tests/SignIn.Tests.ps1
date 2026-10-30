@@ -290,7 +290,7 @@ $script:StubData.Answers[0]
 Describe 'Read-SPSLifecycleSignInCertificate' {
     BeforeAll {
         function script:New-PfxFile {
-            param([string]$Name = 'app.pfx', [string]$Password = 'Correct-Horse-Battery-1', [switch]$PublicOnly, [int]$Days = 100, [int]$StartDays = -1)
+            param([string]$Name = 'app.pfx', [string]$Password = 'Correct-Horse-Battery-1', [switch]$PublicOnly, [switch]$EmptyPassword, [int]$Days = 100, [int]$StartDays = -1)
 
             $folder = Join-Path -Path $TestDrive -ChildPath ([System.Guid]::NewGuid().ToString('N'))
             $null = New-Item -Path $folder -ItemType Directory
@@ -300,6 +300,9 @@ Describe 'Read-SPSLifecycleSignInCertificate' {
             $path = Join-Path -Path $folder -ChildPath $Name
             if ($PublicOnly) {
                 [System.IO.File]::WriteAllBytes($path, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+            }
+            elseif ($EmptyPassword) {
+                [System.IO.File]::WriteAllBytes($path, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, [System.String]''))
             }
             elseif ($Password) {
                 [System.IO.File]::WriteAllBytes($path, $certificate.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $Password))
@@ -336,6 +339,15 @@ Describe 'Read-SPSLifecycleSignInCertificate' {
         $info = Read-Certificate -Setting (New-SignInSetting -Override @{ Authentication = 'Certificate'; CertificatePath = $made.Path })
 
         $info.Thumbprint | Should -BeExactly $made.Certificate.Thumbprint.ToUpperInvariant()
+    }
+
+    It 'reads a .pfx file that was made with an empty password the same way' {
+        $made = New-PfxFile -EmptyPassword
+
+        $info = Read-Certificate -Setting (New-SignInSetting -Override @{ Authentication = 'Certificate'; CertificatePath = $made.Path })
+
+        $info.Thumbprint | Should -BeExactly $made.Certificate.Thumbprint.ToUpperInvariant()
+        $info.HasPrivateKey | Should -BeTrue
     }
 
     It 'says that the password is not the right one, without telling it, or the one that was given' {
