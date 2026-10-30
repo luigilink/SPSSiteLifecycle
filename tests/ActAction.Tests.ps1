@@ -464,7 +464,7 @@ Describe 'Invoke-SPSLifecycleSiteAction' {
 
             $detail = Invoke-TestAction -Verdict 'DELETE-SITE' -Site (New-ActionSite -GroupId '')
 
-            Get-StubLog | Should -Be @('lock Unlock', 'read', 'home site', 'delete site')
+            Get-StubLog | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete site')
             $detail | Should -BeExactly 'The site was deleted: it is in the recycle bin of the deleted sites.'
         }
 
@@ -481,7 +481,7 @@ Describe 'Invoke-SPSLifecycleSiteAction' {
 
             { Invoke-TestAction -Verdict 'DELETE-SITE' -Site (New-ActionSite -GroupId '') } | Should -Throw -ExpectedMessage '*could not be deleted*Access denied*The site was locked again.'
 
-            Get-StubLog | Should -Be @('lock Unlock', 'read', 'home site', 'delete site', 'read', 'lock ReadOnly', 'read')
+            Get-StubLog | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete site', 'read', 'lock ReadOnly', 'read')
         }
 
         It 'does not say that the site was locked again when it does not report it: the request is asynchronous' {
@@ -646,6 +646,67 @@ Describe 'Invoke-SPSLifecycleSiteAction' {
             @(Get-StubLog | Where-Object { $_ -eq 'home site' }) | Should -HaveCount 0
         }
 
+        It 'reads the site one last time, after the group and the home site, right before it acts: what they take is time, and the site is unlocked' {
+            Set-ActionStub -Read @('Unlock')
+
+            $null = Invoke-TestAction -Verdict 'DELETE-SITE' -Site (New-ActionSite -GroupId '')
+            Get-StubLog | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete site')
+
+            Set-ActionStub -Read @('Unlock', 'Unlock', 'ReadOnly')
+            $null = Invoke-TestAction -Verdict 'ARCHIVE' -Setting (New-ActionSetting -UnlockBeforeArchive $true -GrantSiteAdmin $true) -Account 'admin@contoso.example'
+            @(Get-StubLog | Select-Object -First 7) | Should -Be @('lock Unlock', 'read', 'group', 'home site', 'read', 'admin admin@contoso.example', 'archive')
+        }
+
+        It 'does not delete a site that changed during the reads of the group and of the home site, and locks it again: <Name>' -ForEach @(
+            @{ Name = 'its content changed'; Last = @{ LockState = 'Unlock'; LastContentModified = ([System.DateTime]::new(2026, 10, 30, 8, 59, 0, [System.DateTimeKind]::Utc)) }; Expected = '*changed while it was unlocked (its content changed), so it was not touched.*The site was locked again.' }
+            @{ Name = 'a hold appeared'; Last = @{ LockState = 'Unlock'; HasHolds = $true }; Expected = '*changed while it was unlocked (the tenant reports a hold*The site was locked again.' }
+            @{ Name = 'it became large'; Last = @{ LockState = 'Unlock'; StorageUsedMB = [System.Int64]5000 }; Expected = '*changed while it was unlocked (its size is above DeleteMaxSizeGB)*The site was locked again.' }
+            @{ Name = 'it became a hub site'; Last = @{ LockState = 'Unlock'; IsHubSite = $true }; Expected = '*changed while it was unlocked (its hub site flag is not the same)*The site was locked again.' }
+            @{ Name = 'it got a group'; Last = @{ LockState = 'Unlock'; GroupId = '22222222-2222-2222-2222-222222222222' }; Expected = '*changed while it was unlocked (its group is not the same)*The site was locked again.' }
+            @{ Name = 'its date cannot be read'; Last = @{ LockState = 'Unlock'; LastContentModified = $null }; Expected = '*changed while it was unlocked (the date of its content cannot be read)*The site was locked again.' }
+        ) {
+            Set-ActionStub -Read @('Unlock', $Last, 'Unlock', 'ReadOnly')
+
+            { Invoke-TestAction -Verdict 'DELETE-SITE' -Site (New-ActionSite -GroupId '') } | Should -Throw -ExpectedMessage $Expected
+
+            @(Get-StubLog | Where-Object { $_ -eq 'delete site' }) | Should -HaveCount 0
+            @(Get-StubLog | Where-Object { $_ -like 'lock *' }) | Should -Be @('lock Unlock', 'lock ReadOnly')
+        }
+
+        It 'does not delete a site that another site replaced at its address during those reads, and does not lock the other site' {
+            Set-ActionStub -Read @('Unlock', @{ LockState = 'Unlock'; SiteId = $script:SiteB }, @{ LockState = 'Unlock'; SiteId = $script:SiteB })
+
+            { Invoke-TestAction -Verdict 'DELETE-SITE' -Site (New-ActionSite -GroupId '') } | Should -Throw -ExpectedMessage '*site ID is not the one that was read*another site*left as it is.'
+
+            @(Get-StubLog | Where-Object { $_ -eq 'delete site' }) | Should -HaveCount 0
+            @(Get-StubLog | Where-Object { $_ -like 'lock *' }) | Should -Be @('lock Unlock')
+        }
+
+        It 'does not act on a site that is not there any more at the last read' {
+            Set-ActionStub -Read @('Unlock', $null)
+
+            { Invoke-TestAction -Verdict 'DELETE-SITE' -Site (New-ActionSite -GroupId '') } | Should -Throw -ExpectedMessage '*not there any more, so it was not touched.*nothing to lock again*'
+
+            @(Get-StubLog | Where-Object { $_ -eq 'delete site' }) | Should -HaveCount 0
+            @(Get-StubLog | Where-Object { $_ -like 'lock *' }) | Should -Be @('lock Unlock')
+        }
+
+        It 'does not archive, and does not add the administrator, when the site changed during the reads of the group and of the home site' {
+            Set-ActionStub -Read @('Unlock', @{ LockState = 'Unlock'; HasHolds = $true }, 'Unlock', 'ReadOnly')
+
+            { Invoke-TestAction -Verdict 'ARCHIVE' -Setting (New-ActionSetting -UnlockBeforeArchive $true -GrantSiteAdmin $true) -Account 'admin@contoso.example' } | Should -Throw -ExpectedMessage '*changed while it was unlocked (the tenant reports a hold*The site was locked again.'
+
+            @(Get-StubLog | Where-Object { $_ -like 'admin*' -or $_ -eq 'archive' }) | Should -HaveCount 0
+        }
+
+        It 'does not read the site one more time when it was not unlocked: the verdict has just read it' {
+            Set-ActionStub
+
+            $null = Invoke-TestAction -Verdict 'ARCHIVE' -Site (New-ActionSite -LockState 'Unlock')
+
+            Get-StubLog | Should -Be @('archive')
+        }
+
         It 'does not check the size of a site that is archived: the size does not matter for an archive' {
             Set-ActionStub -Read @(@{ LockState = 'Unlock'; StorageUsedMB = [System.Int64]5000 }, 'ReadOnly')
 
@@ -718,7 +779,7 @@ Describe 'Invoke-SPSLifecycleSiteAction' {
 
             $detail = Invoke-TestAction -Verdict 'ARCHIVE' -Setting (New-ActionSetting -UnlockBeforeArchive $true)
 
-            Get-StubLog | Should -Be @('lock Unlock', 'read', 'group', 'home site', 'archive', 'read', 'lock ReadOnly', 'read')
+            Get-StubLog | Should -Be @('lock Unlock', 'read', 'group', 'home site', 'read', 'archive', 'read', 'lock ReadOnly', 'read')
             $detail | Should -BeExactly 'The archive was requested: it takes place later. The site is locked again.'
         }
 
@@ -768,7 +829,7 @@ Describe 'Invoke-SPSLifecycleSiteAction' {
 
             { Invoke-TestAction -Verdict 'ARCHIVE' -Setting (New-ActionSetting -UnlockBeforeArchive $true) } | Should -Throw -ExpectedMessage '*could not be requested*Access denied*The site was locked again.'
 
-            Get-StubLog | Should -Be @('lock Unlock', 'read', 'group', 'home site', 'archive', 'read', 'lock ReadOnly', 'read')
+            Get-StubLog | Should -Be @('lock Unlock', 'read', 'group', 'home site', 'read', 'archive', 'read', 'lock ReadOnly', 'read')
         }
 
         It 'locks the site again when the administrator cannot be added' {
@@ -842,7 +903,7 @@ Describe 'A run that is interrupted while a site is unlocked' {
         # own, where a step throws such an exception (StopAt names it, or the number of the read), or an ordinary error (FailAt), with a site that
         # reports the lock state that was asked for last, and reads what the process did to the lock of the site.
         function script:Invoke-Interrupted {
-            param([string]$Verdict, [string]$UnlockBeforeArchive, [string]$StopAt = '', [string]$FailAt = '', [int]$StopAtRead = 0)
+            param([string]$Verdict, [string]$UnlockBeforeArchive, [string]$StopAt = '', [string]$FailAt = '', [int]$StopAtRead = 0, [switch]$IncludeWarning, [string]$WaitAt = '')
 
             $folder = Join-Path -Path $TestDrive -ChildPath ([System.Guid]::NewGuid().ToString('N'))
             $null = New-Item -Path $folder -ItemType Directory
@@ -851,21 +912,23 @@ Describe 'A run that is interrupted while a site is unlocked' {
 $ErrorActionPreference = 'Stop'
 $module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
 & $module {
-    param($log, $stopAt, $failAt, $stopAtRead, $verdict, $unlockBeforeArchive)
+    param($log, $stopAt, $waitAt, $failAt, $stopAtRead, $verdict, $unlockBeforeArchive)
     $script:Log = $log
     $script:StopAt = $stopAt
+    $script:WaitAt = $waitAt
     $script:FailAt = $failAt
     $script:StopAtRead = $stopAtRead
     $script:Reads = 0
     $script:State = 'ReadOnly'
     function script:Write-Step { param([string]$Text) [System.IO.File]::AppendAllText($script:Log, "$Text`n") }
-    function script:Step { param([string]$Name) Write-Step $Name; if ($script:StopAt -eq $Name) { throw [System.Management.Automation.PipelineStoppedException]::new() }; if ($script:FailAt -eq $Name) { throw 'The step failed.' } }
+    function script:Step { param([string]$Name) Write-Step $Name; if ($script:WaitAt -eq $Name) { [System.IO.File]::WriteAllText("$($script:Log).ready", 'ready'); Microsoft.PowerShell.Utility\Start-Sleep -Seconds 120 }; if ($script:StopAt -eq $Name) { throw [System.Management.Automation.PipelineStoppedException]::new() }; if ($script:FailAt -eq $Name) { throw 'The step failed.' } }
     function script:Set-SPSLifecycleSiteLockState { param($Session, $Url, $State) Step "lock $State"; $script:State = $State }
     function script:Remove-SPSLifecycleSite { param($Session, $Url) Step 'delete' }
     function script:Request-SPSLifecycleSiteArchive { param($Session, $Url) Step 'archive' }
     function script:Get-SPSLifecycleHomeSiteUrl { param($Session) Write-Step 'home site'; '' }
     function script:Get-SPSLifecycleGroupState { param($Session, $GroupId) Write-Step 'group'; 'Active' }
     function script:Start-Sleep { param([double]$Seconds) }
+    function script:Write-Warning { param([string]$Message) Write-Step "warning: $Message" }
     function script:Get-SPSLifecycleLiveSite {
         param($Session, $Url)
         Write-Step 'read'
@@ -876,23 +939,51 @@ $module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
     $site = [PSCustomObject]@{ Url = '@@URL@@'; SiteId = '@@SITEID@@'; Title = 'Sales'; Template = 'GROUP#0'; LockState = 'ReadOnly'; GroupId = ''; IsHubSite = $false; IsTeamsConnected = $false; IsTeamsChannelConnected = $false; ArchiveStatus = 'NotArchived'; StorageUsedMB = [long]12; LastContentModified = [datetime]'2025-01-05'; HasHolds = $false }
     $setting = [PSCustomObject]@{ LockJournal = 'x'; CsvDelimiterChar = ','; DeleteMaxSizeGB = 1.0; Act = [PSCustomObject]@{ UnlockBeforeArchive = ($unlockBeforeArchive -eq 'yes'); GrantSiteAdmin = $false } }
     Invoke-SPSLifecycleSiteAction -Session ([PSCustomObject]@{ Connection = 'c' }) -Setting $setting -Verdict $verdict -Site $site
-} '@@LOG@@' '@@STOPAT@@' '@@FAILAT@@' @@STOPATREAD@@ '@@VERDICT@@' '@@UNLOCK@@'
+} '@@LOG@@' '@@STOPAT@@' '@@WAITAT@@' '@@FAILAT@@' @@STOPATREAD@@ '@@VERDICT@@' '@@UNLOCK@@'
 '@
-            $text = $template.Replace('@@MANIFEST@@', $script:Manifest).Replace('@@URL@@', $script:UrlA).Replace('@@SITEID@@', $script:SiteA).Replace('@@LOG@@', $log).Replace('@@STOPAT@@', $StopAt).Replace('@@FAILAT@@', $FailAt).Replace('@@STOPATREAD@@', "$StopAtRead").Replace('@@VERDICT@@', $Verdict).Replace('@@UNLOCK@@', $UnlockBeforeArchive)
+            $text = $template.Replace('@@MANIFEST@@', $script:Manifest).Replace('@@URL@@', $script:UrlA).Replace('@@SITEID@@', $script:SiteA).Replace('@@LOG@@', $log).Replace('@@STOPAT@@', $StopAt).Replace('@@WAITAT@@', $WaitAt).Replace('@@FAILAT@@', $FailAt).Replace('@@STOPATREAD@@', "$StopAtRead").Replace('@@VERDICT@@', $Verdict).Replace('@@UNLOCK@@', $UnlockBeforeArchive)
             $file = Join-Path -Path $folder -ChildPath 'run.ps1'
             [System.IO.File]::WriteAllText($file, $text)
-            $null = & $script:Pwsh -NoProfile -File $file 2>&1
+            if ($WaitAt) {
+                # The signal that Ctrl+C sends, once the process is in the step that waits for it.
+                $info = [System.Diagnostics.ProcessStartInfo]::new($script:Pwsh)
+                foreach ($argument in '-NoProfile', '-NonInteractive', '-File', $file) { $info.ArgumentList.Add($argument) }
+                $info.UseShellExecute = $false
+                $info.RedirectStandardInput = $true
+                $info.RedirectStandardOutput = $true
+                $info.RedirectStandardError = $true
+                $process = [System.Diagnostics.Process]::Start($info)
+                try {
+                    $null = $process.StandardOutput.ReadToEndAsync()
+                    $null = $process.StandardError.ReadToEndAsync()
+                    $deadline = [System.DateTime]::UtcNow.AddSeconds(90)
+                    while (-not (Test-Path -LiteralPath "$log.ready") -and [System.DateTime]::UtcNow -lt $deadline -and -not $process.HasExited) {
+                        Start-Sleep -Milliseconds 200
+                    }
 
-            @(if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log } else { @() })
+                    Test-Path -LiteralPath "$log.ready" | Should -BeTrue -Because 'the child process has to be in the step before it is interrupted'
+                    $null = & /bin/kill -INT $process.Id
+                    $process.WaitForExit(90000) | Should -BeTrue -Because 'the interrupted process has to end'
+                }
+                finally {
+                    if (-not $process.HasExited) { $process.Kill($true) }
+                }
+            }
+            else {
+                $null = & $script:Pwsh -NoProfile -File $file 2>&1
+            }
+
+            $lines = @(if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log } else { @() })
+            if ($IncludeWarning) { $lines } else { @($lines | Where-Object { $_ -notlike 'warning: *' }) }
         }
     }
 
     It 'puts the lock back, with the same care as after a failure, when the run is interrupted during the deletion' {
-        Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -StopAt 'delete' | Should -Be @('lock Unlock', 'read', 'home site', 'delete', 'read', 'lock ReadOnly', 'read')
+        Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -StopAt 'delete' | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete', 'read', 'lock ReadOnly', 'read')
     }
 
     It 'puts the lock back when the run is interrupted during the archive request' {
-        Invoke-Interrupted -Verdict 'ARCHIVE' -UnlockBeforeArchive 'yes' -StopAt 'archive' | Should -Be @('lock Unlock', 'read', 'home site', 'archive', 'read', 'lock ReadOnly', 'read')
+        Invoke-Interrupted -Verdict 'ARCHIVE' -UnlockBeforeArchive 'yes' -StopAt 'archive' | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'archive', 'read', 'lock ReadOnly', 'read')
     }
 
     It 'puts the lock back when the run is interrupted during the request to unlock: it may have been applied' {
@@ -900,9 +991,9 @@ $module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
     }
 
     It 'does it again when the run is interrupted while it was putting the lock back after a failure' {
-        $steps = Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -FailAt 'delete' -StopAtRead 2
+        $steps = Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -FailAt 'delete' -StopAtRead 3
 
-        $steps | Should -Be @('lock Unlock', 'read', 'home site', 'delete', 'read', 'read', 'lock ReadOnly', 'read')
+        $steps | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete', 'read', 'read', 'lock ReadOnly', 'read')
     }
 
     It 'does not lock a site that it did not unlock' {
@@ -910,7 +1001,36 @@ $module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
     }
 
     It 'does not put the lock back after a deletion that went through, or after a failure that it has already dealt with' {
-        Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' | Should -Be @('lock Unlock', 'read', 'home site', 'delete')
-        Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -FailAt 'delete' | Should -Be @('lock Unlock', 'read', 'home site', 'delete', 'read', 'lock ReadOnly', 'read')
+        Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete')
+        Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -FailAt 'delete' | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete', 'read', 'lock ReadOnly', 'read')
+    }
+
+    It 'puts the lock back, and says so, when the process receives the signal that Ctrl+C sends, during the deletion' -Skip:($IsWindows) {
+        $steps = Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -WaitAt 'delete' -IncludeWarning
+
+        $steps | Should -Contain 'lock ReadOnly'
+        @($steps | Where-Object { $_ -notlike 'warning: *' }) | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'delete', 'read', 'lock ReadOnly', 'read')
+        @($steps | Where-Object { $_ -like 'warning: *' }) | Should -HaveCount 2
+        $steps[-1] | Should -BeLike 'warning: *The site was locked again.'
+    }
+
+    It 'puts the lock back, and says so, when the process receives the signal that Ctrl+C sends, during the archive request' -Skip:($IsWindows) {
+        $steps = Invoke-Interrupted -Verdict 'ARCHIVE' -UnlockBeforeArchive 'yes' -WaitAt 'archive' -IncludeWarning
+
+        @($steps | Where-Object { $_ -notlike 'warning: *' }) | Should -Be @('lock Unlock', 'read', 'home site', 'read', 'archive', 'read', 'lock ReadOnly', 'read')
+        $steps[-1] | Should -BeLike 'warning: *The site was locked again.'
+    }
+
+    It 'says that it is putting the lock back before it does it, which can take 2 minutes, and what became of it after' {
+        $steps = Invoke-Interrupted -Verdict 'DELETE-SITE' -UnlockBeforeArchive 'no' -StopAt 'delete' -IncludeWarning
+
+        $first = [System.Array]::FindIndex($steps, [System.Predicate[string]] { param($s) $s -like 'warning: *locking it again*up to 2 minutes*' })
+        $lock = [System.Array]::IndexOf($steps, 'lock ReadOnly')
+        $last = [System.Array]::FindIndex($steps, [System.Predicate[string]] { param($s) $s -like 'warning: *interrupted*The site was locked again.' })
+
+        $first | Should -BeGreaterThan -1
+        $lock | Should -BeGreaterThan $first
+        $last | Should -BeGreaterThan $lock
+        $steps[$first] | Should -BeLike '*do not close this window*'
     }
 }

@@ -10,9 +10,11 @@
         and a text that comes from the tenant neutralized against formula injection, and quoted when it holds the separator, a
         quote, a line break, or a space at its ends.
 
-        The outcome must be one of Done, Failed, WouldDo, Skipped, Review, ReadError or NotRun, and a row with another one, or
-        whose value cannot be written, is refused with its line and its column, and nothing of it is written. A report that is
-        not there is not created: it would have no header.
+        The outcome must be one of Done, Failed, WouldDo, Skipped, Review, ReadError, NotRun, InProgress or Interrupted, and a row
+        with another one, or whose value cannot be written, is refused with its line and its column, and nothing of it is
+        written. A report that is not there is not created: it would have no header.
+        InProgress and Interrupted are not outcomes of a row: the first is written before the tenant is touched, and the second
+        when the run was interrupted during the action (see Invoke-SPSLifecycleActLoop).
 
         .PARAMETER Path
         The path of the report, as Initialize-SPSLifecycleActReport gave it.
@@ -51,14 +53,14 @@
 
     $outcome = "$($Row.Outcome)"
     $known = $false
-    foreach ($name in 'Done', 'Failed', 'WouldDo', 'Skipped', 'Review', 'ReadError', 'NotRun') {
+    foreach ($name in 'Done', 'Failed', 'WouldDo', 'Skipped', 'Review', 'ReadError', 'NotRun', 'InProgress', 'Interrupted') {
         if ([System.String]::Equals($outcome, $name, [System.StringComparison]::Ordinal)) {
             $known = $true
         }
     }
 
     if (-not $known) {
-        throw "Outcome '$(ConvertTo-SPSLifecycleVisibleText -Text $outcome -AsciiOnly)' (line $($Row.Line)) is not Done, Failed, WouldDo, Skipped, Review, ReadError or NotRun."
+        throw "Outcome '$(ConvertTo-SPSLifecycleVisibleText -Text $outcome -AsciiOnly)' (line $($Row.Line)) is not Done, Failed, WouldDo, Skipped, Review, ReadError, NotRun, InProgress or Interrupted."
     }
 
     $current = ''

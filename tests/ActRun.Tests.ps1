@@ -785,8 +785,7 @@ if ($script:StubData.Verdicts -eq 2) { throw 'Something nobody expected.' }
             $report = @(Get-ChildItem -LiteralPath $run.Reports -Filter 'act-*.csv')
             $report | Should -HaveCount 1
             $rows = @(Import-Csv -LiteralPath $report[0].FullName)
-            $rows | Should -HaveCount 1
-            $rows[0].Outcome | Should -BeExactly 'Done'
+            @($rows.Outcome) | Should -Be @('InProgress', 'Done')
         }
     }
 
@@ -818,5 +817,189 @@ if ($script:StubData.Verdicts -eq 2) { throw 'Something nobody expected.' }
 
             $result.Text | Should -Contain 'The run stopped after 3 errors in a row: the rows that follow were not read.'
         }
+    }
+}
+
+Describe 'The record of an action, before it is done' {
+    It 'is written to the disk before the tenant is touched, and the row of the outcome comes after it' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2') }
+        $existing = & $script:Module { $script:StubData }
+        $existing.ReportFolder = $run.Reports
+        Set-ModuleStub -Stub @{
+            'Remove-SPSLifecycleGroup' = @'
+param($Session, $GroupId)
+$file = @(Get-ChildItem -LiteralPath $script:StubData.ReportFolder -Filter 'act-*.csv')[0]
+$rows = @(Import-Csv -LiteralPath $file.FullName)
+$script:StubLog.Add("rows when the group is deleted: $(($rows | ForEach-Object { "$($_.Outcome)/$($_.Verdict)/$($_.Line)" }) -join ' ')")
+'@
+        } -Data $existing
+
+        $result = Invoke-TestAct -Run $run
+
+        @(Get-StubLog | Where-Object { $_ -like 'rows when the group is deleted: *' }) | Should -Be @(
+            'rows when the group is deleted: InProgress/DELETE-VIA-GROUP/2'
+            'rows when the group is deleted: InProgress/DELETE-VIA-GROUP/2 Done/DELETE-VIA-GROUP/2 InProgress/DELETE-VIA-GROUP/3'
+        )
+        @($result.AllRows.Outcome) | Should -Be @('InProgress', 'Done', 'InProgress', 'Done')
+        @($result.Rows.Outcome) | Should -Be @('Done', 'Done')
+    }
+
+    It 'says what it means, so that a person who finds it with no outcome after it knows what to do' {
+        $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1') }
+
+        $result = Invoke-TestAct -Run $run
+
+        $result.AllRows[0].Outcome | Should -BeExactly 'InProgress'
+        $result.AllRows[0].Detail | Should -BeLike '*Started*stopped during the action*may still be unlocked*Check the site.'
+        $result.AllRows[0].Url | Should -BeExactly $result.AllRows[1].Url
+        $result.AllRows[0].SiteId | Should -BeExactly $result.AllRows[1].SiteId
+    }
+
+    It 'is followed by the row of the outcome when the action fails' {
+        $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1'); Fail = @{ 'delete group' = 'The group could not be deleted: Throttled.' } }
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.AllRows.Outcome) | Should -Be @('InProgress', 'Failed')
+        $result.AllRows[1].Detail | Should -BeLike '*Throttled*'
+    }
+
+    It 'is not an outcome: the counts, the actions that were tried and MaxActions know nothing of it' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 2' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+        $result = Invoke-TestAct -Run $run
+
+        $result.Summary.Counts.Done | Should -Be 2
+        $result.Summary.Counts.NotRun | Should -Be 1
+        $result.Summary.Counts.Keys | Should -Not -Contain 'InProgress'
+        $result.Summary.ActionsAttempted | Should -Be 2
+        @($result.AllRows.Outcome) | Should -Be @('InProgress', 'Done', 'InProgress', 'Done', 'NotRun')
+    }
+
+    It 'is not written when nothing is done: report only, a skip, a review, a read that fails, a row that is not reached' {
+        $reportOnly = Start-ActScenario -Decision 'Delete', 'Delete'
+        @((Invoke-TestAct -Run $reportOnly).AllRows.Outcome) | Should -Be @('WouldDo', 'WouldDo')
+
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 1' -Override @{ 1 = @{ IsHubSite = $true } } -Data @{ Answers = @('contoso', 'DELETE 1') }
+        @((Invoke-TestAct -Run $run).AllRows.Outcome) | Should -Be @('Skipped', 'InProgress', 'Done', 'NotRun', 'NotRun')
+
+        $unread = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1'); Fail = @{ read = 'The site could not be read: Throttled.' } }
+        @((Invoke-TestAct -Run $unread).AllRows.Outcome) | Should -Be @('ReadError')
+    }
+
+    It 'does not do the action when the row cannot be written, and stops the run: nothing is done that is not on record' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2') }
+        $existing = & $script:Module { $script:StubData }
+        Set-ModuleStub -Stub @{
+            'Add-SPSLifecycleActReportRow' = @'
+param($Path, $Row, $Delimiter)
+$script:StubLog.Add("row $($Row.Outcome)")
+if ($Row.Outcome -eq 'InProgress') { throw 'The report is on a disk that is full.' }
+'@
+        } -Data $existing
+
+        { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*disk that is full*'
+
+        @(Get-Calls 'delete group *') | Should -HaveCount 0
+        @(Get-StubLog | Where-Object { $_ -like 'row *' }) | Should -Be @('row InProgress')
+    }
+}
+
+Describe 'A run that is interrupted during an action' {
+    BeforeAll {
+        $script:Pwsh = (Get-Process -Id $PID).Path
+
+        # The loop, in a process of its own, with one row whose action either throws what Ctrl+C raises (Mode inject) or waits to be interrupted
+        # (Mode wait: it writes ready.txt first). A catch does not catch Ctrl+C, so what the loop does about it has to be a finally.
+        function script:New-InterruptedLoopScript {
+            param([string]$Folder, [string]$Mode)
+
+            $template = @'
+$ErrorActionPreference = 'Stop'
+$module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
+& $module {
+    param($folder, $mode)
+    $script:Folder = $folder
+    $script:Mode = $mode
+    function script:Get-SPSLifecycleHomeSiteUrl { param($Session) '' }
+    function script:Get-SPSLifecycleActVerdict {
+        param($Row, $Session, $Setting, $LockDateIndex, $ExclusionIndex, $HomeSiteUrl, $Now)
+        [PSCustomObject]@{ Verdict = 'DELETE-VIA-GROUP'; ReadError = ''; Site = [PSCustomObject]@{ Url = $Row.Url; SiteId = $Row.SiteId; GroupId = '11111111-1111-4111-8111-111111111111'; LockState = 'ReadOnly' } }
+    }
+    function script:Invoke-SPSLifecycleSiteAction {
+        param($Session, $Setting, $Verdict, $Site, $Account, $Now)
+        if ($script:Mode -eq 'inject') { throw [System.Management.Automation.PipelineStoppedException]::new() }
+        [System.IO.File]::WriteAllText((Join-Path -Path $script:Folder -ChildPath 'ready.txt'), 'ready')
+        Start-Sleep -Seconds 120
+        'not interrupted'
+    }
+    $report = Initialize-SPSLifecycleActReport -OutputFolder $folder -Delimiter ',' -GeneratedOn ([System.DateTime]::UtcNow)
+    $setting = [PSCustomObject]@{ CsvDelimiterChar = [System.Char]','; Act = [PSCustomObject]@{ MaxActions = 5; DelaySeconds = 0 } }
+    $row = [PSCustomObject]@{ Line = 2; Url = 'https://contoso.sharepoint.com/sites/a'; SiteId = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Decision = 'Delete' }
+    $null = Invoke-SPSLifecycleActLoop -Session ([PSCustomObject]@{ Connection = 'c' }) -Setting $setting -Plan ([PSCustomObject]@{ Mode = 'Execute' }) -Row @($row) -LockDateIndex ([PSCustomObject]@{}) -ExclusionIndex ([PSCustomObject]@{}) -ReportPath $report
+} '@@FOLDER@@' '@@MODE@@'
+'@
+            $file = Join-Path -Path $Folder -ChildPath 'run.ps1'
+            [System.IO.File]::WriteAllText($file, $template.Replace('@@MANIFEST@@', $script:Manifest).Replace('@@FOLDER@@', $Folder).Replace('@@MODE@@', $Mode))
+            $file
+        }
+
+        function script:New-InterruptedFolder {
+            $folder = Join-Path -Path $TestDrive -ChildPath ([System.Guid]::NewGuid().ToString('N'))
+            $null = New-Item -Path $folder -ItemType Directory
+            $folder
+        }
+
+        function script:Read-InterruptedReport {
+            param([string]$Folder)
+
+            $report = @(Get-ChildItem -LiteralPath $Folder -Filter 'act-*.csv')
+            if ($report.Count -eq 1) { @(Import-Csv -LiteralPath $report[0].FullName) } else { @() }
+        }
+    }
+
+    It 'leaves a row that says so, after the one that says that the action was started: the tenant may have been changed' {
+        $folder = New-InterruptedFolder
+        $file = New-InterruptedLoopScript -Folder $folder -Mode 'inject'
+
+        $null = & $script:Pwsh -NoProfile -File $file 2>&1
+
+        $rows = Read-InterruptedReport -Folder $folder
+        @($rows.Outcome) | Should -Be @('InProgress', 'Interrupted')
+        $rows[1].Detail | Should -BeLike '*ended during the action*interrupted*tenant may have been changed*Check the site*unlocked*'
+        $rows[1].Verdict | Should -BeExactly 'DELETE-VIA-GROUP'
+        $rows[1].Url | Should -BeExactly $rows[0].Url
+    }
+
+    It 'does the same when the process receives the signal that Ctrl+C sends, while the action waits' -Skip:($IsWindows) {
+        $folder = New-InterruptedFolder
+        $file = New-InterruptedLoopScript -Folder $folder -Mode 'wait'
+
+        $info = [System.Diagnostics.ProcessStartInfo]::new($script:Pwsh)
+        foreach ($argument in '-NoProfile', '-NonInteractive', '-File', $file) { $info.ArgumentList.Add($argument) }
+        $info.UseShellExecute = $false
+        $info.RedirectStandardInput = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $process = [System.Diagnostics.Process]::Start($info)
+        try {
+            $output = $process.StandardOutput.ReadToEndAsync()
+            $errors = $process.StandardError.ReadToEndAsync()
+            $ready = Join-Path -Path $folder -ChildPath 'ready.txt'
+            $deadline = [System.DateTime]::UtcNow.AddSeconds(90)
+            while (-not (Test-Path -LiteralPath $ready) -and [System.DateTime]::UtcNow -lt $deadline -and -not $process.HasExited) {
+                Start-Sleep -Milliseconds 200
+            }
+
+            Test-Path -LiteralPath $ready | Should -BeTrue -Because 'the child process has to be in the action before it is interrupted'
+            $null = & /bin/kill -INT $process.Id
+            $process.WaitForExit(60000) | Should -BeTrue -Because 'the interrupted process has to end'
+        }
+        finally {
+            if (-not $process.HasExited) { $process.Kill($true) }
+        }
+
+        $rows = Read-InterruptedReport -Folder $folder
+        @($rows.Outcome) | Should -Be @('InProgress', 'Interrupted')
     }
 }

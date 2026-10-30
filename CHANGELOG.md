@@ -192,12 +192,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the decisions, the most that the run will do), then the name of the tenant and a phrase that carries the number of actions
   (`DELETE n`, `ARCHIVE n` or `APPLY n`) are typed, and the tool stops when the input is redirected. `MaxActions` counts the actions
   that were tried, `DelaySeconds` is the pause between two actions, the run stops after 3 errors in a row, and each row is read
-  again right before its action. The Act report `act-<time>.csv` has a row for each decision, written to the disk as it is made.
+  again right before its action. The Act report `act-<time>.csv` has a row for each decision, written to the disk as it is made, and
+  a row `InProgress` that is written before the tenant is touched for a decision (the tool does not act when it cannot be written): a
+  run that is killed, or a window that is closed, during an action leaves it with no outcome after it, which says which site to look
+  at, and an interrupted run (Ctrl+C) adds a row `Interrupted`.
   The actions follow the lab (27 and 28 October): a read-only site is unlocked, deleted into the recycle bin and locked again when
   that fails; a site with a group is deleted through its group; a lock writes its date in the lock journal; an archive can unlock
   the site first and lock it again afterwards, and add the administrator who signed in. A site that was unlocked is read again, and
   nothing is done if it changed meanwhile (the site ID, a hold, the content, the size of a deletion, its group and the home site,
-  read again); a lock is said to be put back only when the site reports it, an address that another site took is left alone, a request
+  read again, and then the site one last time right before the write); a lock is said to be put back only when the site reports it, an address that another site took is left alone, a request
   to unlock that throws is treated as possibly applied, and an interrupted run puts the lock back too, with the same care. The home
   site is read for each row. Execute
   needs Microsoft 365 Archive to be on for sure before an archive. Every adapter that changes the tenant checks its target again (the
