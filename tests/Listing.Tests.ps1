@@ -215,18 +215,52 @@ Describe 'Get-SPSLifecycleListingGuard' {
         (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = [System.DateTime]::SpecifyKind($utc, [System.DateTimeKind]::Unspecified) })) | Should -Be (Get-TestGuard -Record (New-TestRecord -Index 1 -Override @{ LastContentModified = $utc }))
     }
 
-    It 'does not depend on the culture of the machine' -ForEach @('en-US', 'fr-FR', 'de-DE', 'tr-TR', 'ar-SA', 'th-TH') {
+    It 'does not depend on the culture of the machine, for a size and a date of any kind: <Culture>' -ForEach @(
+        @{ Culture = 'en-US' }
+        @{ Culture = 'fr-FR' }
+        @{ Culture = 'de-DE' }
+        @{ Culture = 'tr-TR' }
+        @{ Culture = 'sv-SE' }
+        @{ Culture = 'ar-SA' }
+        @{ Culture = 'fa-IR' }
+        @{ Culture = 'th-TH' }
+    ) {
+        $records = @(
+            (New-TestRecord -Index 7)
+            (New-TestRecord -Index 7 -Override @{ StorageUsedMB = [long]-5 })
+            (New-TestRecord -Index 7 -Override @{ StorageUsedMB = 12.5 })
+            (New-TestRecord -Index 7 -Override @{ LastContentModified = 'yesterday' })
+            (New-TestRecord -Index 7 -Override @{ LastContentModified = 12.5 })
+            (New-TestRecord -Index 7 -Override @{ StorageUsedMB = $null; LastContentModified = $null })
+        )
         $before = [System.Threading.Thread]::CurrentThread.CurrentCulture
         try {
             [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('en-US')
-            $expected = Get-TestGuard -Record (New-TestRecord -Index 7)
-            [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($_)
+            $expected = @($records | ForEach-Object { Get-TestGuard -Record $_ })
+            [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($Culture)
+            $actual = @($records | ForEach-Object { Get-TestGuard -Record $_ })
 
-            Get-TestGuard -Record (New-TestRecord -Index 7) | Should -Be $expected
+            $actual | Should -Be $expected
         }
         finally {
             [System.Threading.Thread]::CurrentThread.CurrentCulture = $before
         }
+    }
+
+    It 'is not changed by the variables that its caller happens to have' {
+        $record = New-TestRecord -Index 3 -Override @{ StorageUsedMB = $null; LastContentModified = $null }
+        $plain = Get-TestGuard -Record $record
+
+        $held = & $script:Module {
+            param($r)
+            $size = 'x'
+            $ticks = 'y'
+            $date = 5
+            $invariant = $null
+            Get-SPSLifecycleListingGuard -Site $r
+        } $record
+
+        $held | Should -Be $plain
     }
 
     It 'does not take a value that moves from one field to the next for the same site' {

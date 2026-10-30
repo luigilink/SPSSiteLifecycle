@@ -147,6 +147,12 @@
         return 'the listing is running, complete, and lists no page (a listing that is not finished always has read at least one, even for a tenant of no site).'
     }
 
+    # The first page is asked with no token, so a listing that has saved no page has none to go on with: a token without a page
+    # would be asked as it is, and the pages before it would be lost without anything saying so.
+    if ($pages.Count -eq 0 -and $Manifest.NextToken.Length -ne 0) {
+        return 'the listing has no page and still has a token to go on with.'
+    }
+
     if (-not $Manifest.ListingComplete -and $pages.Count -gt 0 -and $Manifest.NextToken.Length -eq 0) {
         return 'the listing is not complete and has no token to go on with.'
     }
