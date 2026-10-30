@@ -16,16 +16,27 @@
         that is not valid UTF-8 stops the decoding with a DecoderFallbackException, whatever comes before it: a
         file in another encoding, or a UTF-8 file that is damaged, is refused, never repaired.
 
+        With StrictAfterMark, a file that a person gives is read as Excel writes it (UTF-8, UTF-16, and Windows-1252 when
+        there is no mark and the bytes are not UTF-8), except that a byte order mark is a declaration: the file says what it
+        is, so a byte that does not fit (an invalid byte after a UTF-8 mark, a lone surrogate or a left-over byte after a
+        UTF-16 mark) is a damage and stops the decoding with a DecoderFallbackException instead of becoming U+FFFD, which
+        would change a web address and leave the row without its site. Only a file without a mark keeps the guess, which
+        is harmless for web addresses, GUIDs and dates, that are ASCII.
+
         .PARAMETER Bytes
         The content of the file.
 
         .PARAMETER Strict
         Reads UTF-8 only, and refuses what is not valid UTF-8 instead of replacing or guessing.
 
+        .PARAMETER StrictAfterMark
+        Reads a list that a person gives, and refuses a byte that does not fit the encoding that the byte order mark
+        declares. It cannot be given with Strict.
+
         .EXAMPLE
         ConvertFrom-SPSLifecycleCsvByte -Bytes ([System.IO.File]::ReadAllBytes($path))
     #>
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Tolerant')]
     [OutputType([System.String])]
     param
     (
@@ -34,9 +45,13 @@
         [System.Byte[]]
         $Bytes,
 
-        [Parameter()]
+        [Parameter(ParameterSetName = 'Strict')]
         [System.Management.Automation.SwitchParameter]
-        $Strict
+        $Strict,
+
+        [Parameter(ParameterSetName = 'Marked')]
+        [System.Management.Automation.SwitchParameter]
+        $StrictAfterMark
     )
 
     if ($Strict) {
@@ -46,15 +61,18 @@
     }
 
     if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
-        return [System.Text.Encoding]::UTF8.GetString($Bytes, 3, $Bytes.Length - 3)
+        $utf8 = if ($StrictAfterMark) { [System.Text.UTF8Encoding]::new($false, $true) } else { [System.Text.Encoding]::UTF8 }
+        return $utf8.GetString($Bytes, 3, $Bytes.Length - 3)
     }
 
     if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) {
-        return [System.Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2)
+        $littleEndian = if ($StrictAfterMark) { [System.Text.UnicodeEncoding]::new($false, $false, $true) } else { [System.Text.Encoding]::Unicode }
+        return $littleEndian.GetString($Bytes, 2, $Bytes.Length - 2)
     }
 
     if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF) {
-        return [System.Text.Encoding]::BigEndianUnicode.GetString($Bytes, 2, $Bytes.Length - 2)
+        $bigEndian = if ($StrictAfterMark) { [System.Text.UnicodeEncoding]::new($true, $false, $true) } else { [System.Text.Encoding]::BigEndianUnicode }
+        return $bigEndian.GetString($Bytes, 2, $Bytes.Length - 2)
     }
 
     try {
