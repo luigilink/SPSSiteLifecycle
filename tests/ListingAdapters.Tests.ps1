@@ -605,9 +605,10 @@ param($Connection)
 $script:StubLog.Add("Get-PnPHomeSite Connection=$Connection")
 if ($script:StubData.Fails) { throw $script:StubData.Fails }
 if ($script:StubData.WritesError) { Write-Error 'Access denied.'; return }
+if ($script:StubData.WritesNothing) { return }
 $script:StubData.Answer
 '@
-        } -Data @{ Fails = ''; WritesError = $false; Answer = 'https://contoso.sharepoint.com/sites/home' }
+        } -Data @{ Fails = ''; WritesError = $false; WritesNothing = $false; Answer = 'https://contoso.sharepoint.com/sites/home' }
     }
 
     AfterEach {
@@ -642,6 +643,12 @@ $script:StubData.Answer
         Get-TestHomeSiteUrl | Should -BeExactly ''
     }
 
+    It 'gives an empty text when the cmdlet writes nothing at all' {
+        & $script:Module { $script:StubData.WritesNothing = $true }
+
+        Get-TestHomeSiteUrl | Should -BeExactly ''
+    }
+
     It 'stops, and says why, when the tenant does not give the home site: the home site is never touched, and it cannot be recognized without its address' {
         & $script:Module { $script:StubData.Fails = 'Access denied.' }
 
@@ -666,6 +673,16 @@ $script:StubData.Answer
         & $script:Module { param($a) $script:StubData.Answer = $a } $Answer
 
         { Get-TestHomeSiteUrl } | Should -Throw -ExpectedMessage '*home site*not the web address of a site*'
+    }
+
+    It 'shows at most 100 characters of an answer that is not an address: <Name>' -ForEach @(
+        @{ Name = '100 characters, all of them'; Length = 100; Expected = "('$('x' * 100)')" }
+        @{ Name = '101 characters, the first 100 and dots'; Length = 101; Expected = "('$('x' * 100)...')" }
+        @{ Name = '300 characters, the first 100 and dots'; Length = 300; Expected = "('$('x' * 100)...')" }
+    ) {
+        & $script:Module { param($n) $script:StubData.Answer = 'x' * $n } $Length
+
+        { Get-TestHomeSiteUrl } | Should -Throw -ExpectedMessage "*$Expected*"
     }
 
     It 'does not write the answer in the message when it holds a hidden character' {

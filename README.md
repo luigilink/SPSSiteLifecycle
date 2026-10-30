@@ -36,6 +36,15 @@ The inactive site policy of Microsoft 365 can make inactive sites read-only, the
 - **An Entra ID app registration** for the interactive sign-in, as PnP.PowerShell requires your own app: see [Register an Entra ID application to use with PnP PowerShell](https://pnp.github.io/powershell/articles/registerapplication.html).
 - **SharePoint Administrator** on the tenant, plus **Groups Administrator** to delete Microsoft 365 groups. Archiving also needs Microsoft 365 Archive turned on (pay-as-you-go billing) and a site collection admin role on each archived site.
 
+## Usage
+
+```powershell
+# Phase 1: read the tenant and write the report (nothing is changed)
+pwsh ./src/SPSSiteLifecycle.ps1 -ConfigFile ./contoso.psd1 -Phase Scan
+```
+
+The script has two parameters. Everything else is a setting in the `.psd1` file (see `src/config/SPSSiteLifecycle.example.psd1`). The Act phase (`-Phase Act`) is not available in this version. See [Getting Started](https://github.com/luigilink/SPSSiteLifecycle/wiki/Getting-Started).
+
 ## Quick links
 
 - 📖 [Documentation (Wiki)](https://github.com/luigilink/SPSSiteLifecycle/wiki)

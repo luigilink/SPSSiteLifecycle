@@ -168,3 +168,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scan: the home site of the tenant is read (`Get-PnPHomeSite`, one read after the sign-in) and protected. The verdict engine already
   protected the home site, but nothing gave it its address, so the Scan would have suggested it. A failure to read it, or an answer that is
   not the https address of a site, stops the listing before any page. The lab script reports whether the tenant has one.
+- Scan: the entry script `src/SPSSiteLifecycle.ps1` runs the Scan phase (#7), with `-ConfigFile` and `-Phase` and no other parameter,
+  through the new public function `Invoke-SPSLifecycleScan`. The settings, the activity reports, the lock date lists and the exclusion
+  lists are read and checked before the sign-in window opens; the report is started before the sign-in too, so that a report that exists
+  already stops the run. The Scan lists the sites, gives each its verdict, writes `sites-<time>.csv` in the output folder (a run that
+  stops half-way leaves no report that looks complete, an interrupted listing is taken up the next time), and writes a summary as
+  lines of information: the time, how the sites were listed, the sites in the report and the sites left out, the suggested actions,
+  the verdicts by count, and the path of the report. The script exits with 0, or with 1 after a message that says what stopped it and
+  that nothing was changed in the tenant. `-Phase Act` says that the phase is not available in this version, and exits with 1.

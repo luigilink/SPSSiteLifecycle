@@ -552,7 +552,7 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
         }
 
         It 'stops when the source gives something that is not one address: <Name>' -ForEach @(
-            @{ Name = 'two addresses'; Value = @('https://contoso.sharepoint.com/sites/a', 'https://contoso.sharepoint.com/sites/b') }
+            @{ Name = 'an array of two addresses'; Value = @('https://contoso.sharepoint.com/sites/a', 'https://contoso.sharepoint.com/sites/b') }
             @{ Name = 'a number'; Value = 42 }
             @{ Name = 'an object'; Value = [PSCustomObject]@{ Url = 'https://contoso.sharepoint.com/sites/a' } }
         ) {
@@ -560,6 +560,14 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
             $source = { , $state.Value }.GetNewClosure()
 
             { Invoke-TestScanWithSource -Site (New-ScanSite) -Source $source } | Should -Throw -ExpectedMessage '*home site*not a text*'
+        }
+
+        It 'stops when the source gives two answers, one after the other, since it cannot tell which is the home site: <Name>' -ForEach @(
+            @{ Name = 'two addresses'; Source = { 'https://contoso.sharepoint.com/sites/a'; 'https://contoso.sharepoint.com/sites/b' } }
+            @{ Name = 'three addresses'; Source = { 'https://contoso.sharepoint.com/sites/a'; 'https://contoso.sharepoint.com/sites/b'; 'https://contoso.sharepoint.com/sites/c' } }
+            @{ Name = 'an empty text and an address'; Source = { ''; 'https://contoso.sharepoint.com/sites/a' } }
+        ) {
+            { Invoke-TestScanWithSource -Site (New-ScanSite) -Source $Source } | Should -Throw -ExpectedMessage '*home site*not a text*'
         }
 
         It 'cannot be given together with the address itself, which would leave it to the order of the two to decide' {
