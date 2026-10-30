@@ -130,6 +130,25 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
             (ConvertTo-TestRecord -Item (New-TestItem -Source Csom) -Source Cmdlet).StorageUsedMB | Should -BeNullOrEmpty
         }
 
+        It 'refuses a size that is not a number, and names the property and the site' {
+            $item = New-TestItem -Override @{ StorageUsage = 'a lot' }
+
+            { ConvertTo-TestRecord -Item $item } | Should -Throw -ExpectedMessage "*'StorageUsage' is not a number of megabytes ('a lot')*"
+            { ConvertTo-TestRecord -Item $item } | Should -Throw -ExpectedMessage '*contoso.sharepoint.com/sites/a*'
+        }
+
+        It 'is no size, and not the one of a variable that the caller happens to have, when the call gives none' {
+            $item = New-TestItem -Override @{ StorageUsage = $null }
+
+            $record = & $script:Module {
+                param($i)
+                $storageMB = 999
+                ConvertTo-SPSLifecycleSiteRecord -Item $i -Source Csom
+            } $item
+
+            $null -eq $record.StorageUsedMB | Should -BeTrue
+        }
+
         It 'stays a size of zero when the site holds nothing' {
             $record = ConvertTo-TestRecord -Item (New-TestItem -Override @{ StorageUsage = 0L })
 
@@ -175,6 +194,16 @@ Describe 'ConvertTo-SPSLifecycleSiteRecord' {
 
             $record.LastContentModified.Kind | Should -Be ([System.DateTimeKind]::Utc)
             $record.LastContentModified.Ticks | Should -Be $Expected.Ticks
+        }
+
+        It 'refuses a value that is not a date, and names the property and the site: <Name>' -ForEach @(
+            @{ Name = 'a number'; Value = 42 }
+            @{ Name = 'a text'; Value = 'last Tuesday' }
+        ) {
+            $item = New-TestItem -Override @{ LastContentModifiedDate = $Value }
+
+            { ConvertTo-TestRecord -Item $item } | Should -Throw -ExpectedMessage "*the property 'LastContentModifiedDate'*"
+            { ConvertTo-TestRecord -Item $item } | Should -Throw -ExpectedMessage '*contoso.sharepoint.com/sites/a*'
         }
 
         It 'is no date when the call gives the empty date of .NET, which is not a date of the site' {
@@ -292,6 +321,20 @@ Describe 'Assert-SPSLifecycleSiteLoaded' {
         $null = $item.Unloaded.Add($Name)
 
         { Assert-TestLoaded -Item $item } | Should -Throw -ExpectedMessage "*'$Name'*not been loaded*"
+    }
+
+    It 'says that the site is empty, and does not go on to read its type' {
+        { Assert-TestLoaded -Item $null } | Should -Throw -ExpectedMessage '*empty (null)*'
+    }
+
+    It 'gives the reason of the server, not the one of the reflection that read the property' {
+        $item = [SPSLifecycleTest.Listing.FakeSiteProperties]::new()
+        $null = $item.Unloaded.Add('GroupId')
+
+        $message = try { Assert-TestLoaded -Item $item } catch { $_.Exception.Message }
+
+        $message | Should -BeLike '*reading it fails: The property or field has not been initialized*'
+        $message | Should -Not -BeLike '*target of an invocation*'
     }
 
     It 'accepts an object that has all the properties, whatever their values' {
