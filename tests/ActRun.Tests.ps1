@@ -1,0 +1,1011 @@
+﻿BeforeAll {
+    $script:Manifest = Join-Path -Path $PSScriptRoot -ChildPath '../src/Modules/SPSSiteLifecycle.Common/SPSSiteLifecycle.Common.psd1'
+    $script:Module = Import-Module -Name $script:Manifest -Force -PassThru
+    $script:Now = [System.DateTime]::new(2026, 10, 30, 9, 0, 0, [System.DateTimeKind]::Utc)
+
+    . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/ModuleStub.ps1')
+    . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/Signal.ps1')
+    . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/ActFixture.ps1')
+
+    # A tenant of sites 1 to Count, and a run that decides on the first of them: Decision is a list of the decisions of the rows
+    # ('' is a row without a decision), Override maps the number of a site to what differs in its state.
+    function script:Start-ActScenario {
+        param(
+            [string[]]$Decision,
+            [hashtable]$Override = @{},
+            [string]$ActSettings = '',
+            [string]$Settings = '',
+            [hashtable]$Data = @{},
+            [int]$Count = 0,
+            $Locks = $null,
+            [string]$Delimiter = ','
+        )
+
+        if ($Count -eq 0) { $Count = $Decision.Count }
+        $sites = foreach ($index in 1..$Count) {
+            New-ActSiteState -Index $index -Override $(if ($Override.ContainsKey($index)) { $Override[$index] } else { @{} })
+        }
+
+        Set-ActStub -Site @($sites) -Data $Data
+        $rows = for ($i = 0; $i -lt $Decision.Count; $i++) { @{ Index = $i + 1; Decision = $Decision[$i] } }
+        New-ActRunFolder -Row @($rows) -ActSettings $ActSettings -Settings $Settings -Locks $Locks -Delimiter $Delimiter
+    }
+
+    function script:Get-World {
+        & $script:Module { $script:StubData.World }
+    }
+
+    function script:Get-Calls {
+        param([string]$Pattern)
+        @(Get-StubLog | Where-Object { $_ -like $Pattern })
+    }
+
+    $script:Writes = @('lock *', 'delete site *', 'delete group *', 'archive https*', 'admin *')
+
+    Install-Tripwire
+}
+
+AfterAll {
+    Remove-Tripwire
+}
+
+Describe 'Invoke-SPSLifecycleAct, report only (the default)' {
+    AfterEach {
+        Clear-ModuleStub
+    }
+
+    It 'changes nothing and asks nothing: each decision gets the verdict that it would get, and the outcome WouldDo' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Archive', 'Lock', 'Delete', 'Delete' -Override @{
+            2 = @{ GroupId = '' }
+            4 = @{ LockState = 'Unlock' }
+            5 = @{ IsHubSite = $true }
+            6 = @{ LastContentModified = [System.DateTime]::new(2026, 10, 29, 20, 0, 0, [System.DateTimeKind]::Utc) }
+        }
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.Rows.Verdict) | Should -Be @('DELETE-VIA-GROUP', 'DELETE-SITE', 'ARCHIVE', 'LOCK', 'SKIP-PROTECTED', 'REVIEW-CONTENT-MODIFIED')
+        @($result.Rows.Outcome) | Should -Be @('WouldDo', 'WouldDo', 'WouldDo', 'WouldDo', 'Skipped', 'Review')
+        @($result.Rows.Decision) | Should -Be @('Delete', 'Delete', 'Archive', 'Lock', 'Delete', 'Delete')
+        @($result.Rows.Line) | Should -Be @('2', '3', '4', '5', '6', '7')
+        foreach ($pattern in $script:Writes) {
+            Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+        }
+
+        Get-Calls -Pattern 'ask:*' | Should -HaveCount 0
+        Get-Calls -Pattern 'redirected?' | Should -HaveCount 0
+        Get-Calls -Pattern 'account' | Should -HaveCount 0
+        $result.Summary.Mode | Should -BeExactly 'ReportOnly'
+        $result.Summary.Counts.WouldDo | Should -Be 4
+        $result.Summary.Counts.Skipped | Should -Be 1
+        $result.Summary.Counts.Review | Should -Be 1
+        (Get-World)['https://contoso.sharepoint.com/sites/site4'].LockState | Should -BeExactly 'Unlock'
+        Test-Path -LiteralPath $run.Journal | Should -BeFalse
+    }
+
+    It 'gives the plan and the time that the run took in its summary' {
+        $run = Start-ActScenario -Decision 'Delete', 'Archive'
+
+        $summary = (Invoke-TestAct -Run $run).Summary
+
+        $summary.Plan.PlannedActions | Should -Be 2
+        $summary.Plan.Phrase | Should -BeExactly 'APPLY 2'
+        $summary.ElapsedSeconds | Should -BeGreaterThan 0
+        $summary.StartedOn | Should -Be $script:Now
+        $summary.TenantName | Should -BeExactly 'contoso'
+        $summary.Phase | Should -BeExactly 'Act'
+        $summary.InputFile | Should -Be (Join-Path -Path $run.Folder -ChildPath 'sites.csv')
+    }
+
+    It 'gives the time that the run took when there is nothing to do' {
+        $run = Start-ActScenario -Decision ''
+
+        (Invoke-TestAct -Run $run).Summary.ElapsedSeconds | Should -BeGreaterThan 0
+    }
+
+    It 'reads the dates of the lock date lists in the formats of the settings, and stops before the sign-in when a date is in another one' {
+        $locks = "Url,LockedOn,SiteId`r`nhttps://contoso.sharepoint.com/sites/site1,18/09/2025,00000001-0000-4000-8000-000000000001`r`n"
+        $with = Start-ActScenario -Decision 'Delete' -Settings "CsvDateFormats = @('dd/MM/yyyy')" -Locks $locks
+
+        (Invoke-TestAct -Run $with).Rows[0].Verdict | Should -BeExactly 'DELETE-VIA-GROUP'
+
+        $without = Start-ActScenario -Decision 'Delete' -Locks $locks
+        { Invoke-TestAct -Run $without } | Should -Throw -ExpectedMessage '*CsvDateFormats*'
+        Get-StubLog | Should -HaveCount 0
+    }
+
+    It 'gives no action to a read-only site whose lock date is recent or unknown: the lock dates are read' {
+        $locks = "Url,LockedOn,SiteId`r`nhttps://contoso.sharepoint.com/sites/site1,2026-10-01,00000001-0000-4000-8000-000000000001`r`n"
+        $run = Start-ActScenario -Decision 'Delete', 'Delete' -Locks $locks
+
+        $rows = (Invoke-TestAct -Run $run).Rows
+
+        @($rows.Verdict) | Should -Be @('SKIP-TOO-RECENT-LOCK', 'SKIP-NO-LOCK-DATE')
+    }
+
+    It 'leaves a site that is in an exclusion list alone, whatever the decision' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete'
+        [System.IO.File]::WriteAllText((Join-Path -Path $run.Folder -ChildPath 'exclusions.csv'), "Url`r`nhttps://contoso.sharepoint.com/sites/site2`r`n")
+        $text = (Get-Content -LiteralPath $run.Config -Raw) -replace 'LockDateFiles = @\(''lot1.csv''\)', "LockDateFiles = @('lot1.csv')`r`nExclusionFiles = @('exclusions.csv')"
+        Set-Content -LiteralPath $run.Config -Value $text -NoNewline
+
+        $rows = (Invoke-TestAct -Run $run).Rows
+
+        @($rows.Verdict) | Should -Be @('DELETE-VIA-GROUP', 'SKIP-EXCLUDED')
+    }
+
+    It 'is report only when Execute is not set, and when it is $false' -ForEach @(
+        @{ ActSettings = '' }
+        @{ ActSettings = 'Execute = $false' }
+    ) {
+        $run = Start-ActScenario -Decision 'Delete' -ActSettings $ActSettings
+
+        $result = Invoke-TestAct -Run $run
+
+        $result.Summary.Mode | Should -BeExactly 'ReportOnly'
+        Get-Calls -Pattern 'delete *' | Should -HaveCount 0
+    }
+
+    It 'refuses a setting that is not a boolean, before it signs in: Execute is not read from a text' {
+        $run = Start-ActScenario -Decision 'Delete' -ActSettings "Execute = 'true'"
+
+        { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*Execute*'
+
+        Get-StubLog | Should -HaveCount 0
+    }
+
+    It 'gives the verdict of every row, also beyond MaxActions: the rows past the cap are NotRun, with their verdict' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'MaxActions = 2'
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.Rows.Outcome) | Should -Be @('WouldDo', 'WouldDo', 'NotRun', 'NotRun')
+        @($result.Rows.Verdict) | Should -Be @('DELETE-VIA-GROUP', 'DELETE-VIA-GROUP', 'DELETE-VIA-GROUP', 'DELETE-VIA-GROUP')
+        $result.Rows[2].Detail | Should -BeLike '*MaxActions (2)*would not do*'
+    }
+
+    It 'does not count a row that is not an action toward MaxActions' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'MaxActions = 2' -Override @{ 1 = @{ IsHubSite = $true } }
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.Rows.Outcome) | Should -Be @('Skipped', 'WouldDo', 'WouldDo')
+    }
+
+    It 'says that a site could not be read, with the message, and goes on with the next row' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -Data @{ Fail = @{ read = @{ 'https://contoso.sharepoint.com/sites/site2' = "The site 'https://contoso.sharepoint.com/sites/site2' could not be read from the tenant: Access denied." } } }
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.Rows.Outcome) | Should -Be @('WouldDo', 'ReadError', 'WouldDo')
+        $result.Rows[1].Verdict | Should -BeExactly ''
+        $result.Rows[1].Detail | Should -BeLike '*could not be read from the tenant: Access denied*'
+        $result.Summary.Counts.ReadError | Should -Be 1
+        $result.Summary.StoppedBecause | Should -BeExactly ''
+    }
+
+    It 'stops after 3 errors in a row, here too, and leaves the other rows NotRun' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete', 'Delete' -Data @{ Fail = @{ read = 'The tenant did not answer.' } }
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.Rows.Outcome) | Should -Be @('ReadError', 'ReadError', 'ReadError', 'NotRun', 'NotRun')
+        $result.Summary.StoppedBecause | Should -BeExactly 'ConsecutiveErrors'
+        $result.Rows[3].Detail | Should -BeLike '*stopped after 3 errors in a row*'
+        Get-Calls -Pattern 'read *' | Should -HaveCount 3
+    }
+
+    It 'counts only the errors that follow each other: a row that is read in between starts the count again' {
+        $fail = @{ read = @{
+                'https://contoso.sharepoint.com/sites/site1' = 'x'; 'https://contoso.sharepoint.com/sites/site2' = 'x'
+                'https://contoso.sharepoint.com/sites/site4' = 'x'; 'https://contoso.sharepoint.com/sites/site5' = 'x'
+            }
+        }
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete', 'Delete', 'Delete' -Data @{ Fail = $fail }
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.Rows.Outcome) | Should -Be @('ReadError', 'ReadError', 'WouldDo', 'ReadError', 'ReadError', 'WouldDo')
+        $result.Summary.StoppedBecause | Should -BeExactly ''
+    }
+
+    It 'says nothing is to be done, and does not sign in, when no row has a decision' {
+        $run = Start-ActScenario -Decision '', '', ''
+
+        $result = Invoke-TestAct -Run $run
+
+        Get-StubLog | Should -HaveCount 0
+        $result.Text | Should -Contain 'Nothing to do: no row of the reviewed report has a decision (Delete, Archive or Lock).'
+        $result.Summary.Counts.Done | Should -Be 0
+        $result.Rows | Should -HaveCount 0
+        Test-Path -LiteralPath $run.Reports | Should -BeFalse
+    }
+
+    It 'protects the home site, and a site that is not a site to act on: <Name>' -ForEach @(
+        @{ Name = 'a hub site'; Override = @{ IsHubSite = $true }; HomeSite = ''; Expected = 'SKIP-PROTECTED' }
+        @{ Name = 'the home site'; Override = @{}; HomeSite = 'https://contoso.sharepoint.com/sites/site1'; Expected = 'SKIP-PROTECTED' }
+        @{ Name = 'a system site'; Override = @{ Template = 'APPCATALOG#0' }; HomeSite = ''; Expected = 'SKIP-PROTECTED' }
+        @{ Name = 'a channel site'; Override = @{ Template = 'TEAMCHANNEL#1' }; HomeSite = ''; Expected = 'SKIP-CHANNEL-SITE' }
+        @{ Name = 'a site that is not read-only'; Override = @{ LockState = 'Unlock' }; HomeSite = ''; Expected = 'SKIP-LOCK-STATE' }
+        @{ Name = 'a site that is locked out'; Override = @{ LockState = 'NoAccess' }; HomeSite = ''; Expected = 'SKIP-LOCK-STATE' }
+        @{ Name = 'an archived site'; Override = @{ ArchiveStatus = 'Archived' }; HomeSite = ''; Expected = 'SKIP-ALREADY-ARCHIVED' }
+    ) {
+        $run = Start-ActScenario -Decision 'Delete' -Override @{ 1 = $Override } -Data @{ HomeSite = $HomeSite }
+
+        $result = Invoke-TestAct -Run $run
+
+        $result.Rows[0].Verdict | Should -BeExactly $Expected
+        $result.Rows[0].Outcome | Should -BeExactly 'Skipped'
+        $result.Rows[0].Detail | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-SPSLifecycleAct, with Execute' {
+    AfterEach {
+        Clear-ModuleStub
+    }
+
+    Context 'The confirmation' {
+        It 'shows the banner, asks for the tenant and then the phrase, and only then signs in' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @(Get-StubLog)[0..4] | Should -Be @(
+                'redirected?'
+                'ask: Type the name of the tenant to go on'
+                'ask: Type DELETE 2 to start: the tenant is changed as soon as you do'
+                'open'
+                'home site'
+            )
+            $result.Text[0] | Should -BeExactly 'Act phase on the tenant contoso: EXECUTE. This run changes the tenant.'
+            ($result.Text -join "`n") | Should -BeLike '*Decisions: Delete 2, Archive 0, Lock 0 (2 in all). This run does at most 2 of them (MaxActions 25), 2 s apart.*'
+        }
+
+        It 'stops before the sign-in, with nothing changed and no report, when the confirmation is not right: <Name>' -ForEach @(
+            @{ Name = 'another tenant'; Answers = @('fabrikam', 'DELETE 2'); Redirected = $false; Expected = '*does not match the tenant*' }
+            @{ Name = 'another phrase'; Answers = @('contoso', 'DELETE 3'); Redirected = $false; Expected = '*is not the phrase*DELETE 2*' }
+            @{ Name = 'a redirected input'; Answers = @('contoso', 'DELETE 2'); Redirected = $true; Expected = '*input is redirected*' }
+        ) {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = $Answers; Redirected = $Redirected }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage $Expected
+
+            Get-Calls -Pattern 'open' | Should -HaveCount 0
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+
+            Test-Path -LiteralPath $run.Reports | Should -BeFalse
+        }
+
+        It 'does not ask a thing when the input is redirected' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Redirected = $true }
+
+            { Invoke-TestAct -Run $run } | Should -Throw
+
+            Get-Calls -Pattern 'ask:*' | Should -HaveCount 0
+        }
+
+        It 'gives the phrase of the mix of decisions: APPLY and the number of actions' {
+            $run = Start-ActScenario -Decision 'Delete', 'Archive', 'Lock' -ActSettings 'Execute = $true' -Override @{ 3 = @{ LockState = 'Unlock' } } -Data @{ Answers = @('contoso', 'APPLY 3') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Done', 'Done', 'Done')
+        }
+    }
+
+    Context 'The actions' {
+        It 'does each action of the file in order, a pause apart, and writes the record of each' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 3') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Done', 'Done', 'Done')
+            @($result.Rows.Verdict) | Should -Be @('DELETE-VIA-GROUP', 'DELETE-VIA-GROUP', 'DELETE-VIA-GROUP')
+            $result.Rows[0].Detail | Should -BeExactly 'The group was deleted: SharePoint deletes the site some time later (from minutes to hours).'
+            $log = @(Get-StubLog)
+            $log[5..($log.Count - 1)] | Should -Be @(
+                'home site'
+                'read https://contoso.sharepoint.com/sites/site1'
+                'group 00000001-1111-4111-8111-000000000001'
+                'delete group 00000001-1111-4111-8111-000000000001'
+                'sleep 2'
+                'home site'
+                'read https://contoso.sharepoint.com/sites/site2'
+                'group 00000002-1111-4111-8111-000000000002'
+                'delete group 00000002-1111-4111-8111-000000000002'
+                'sleep 2'
+                'home site'
+                'read https://contoso.sharepoint.com/sites/site3'
+                'group 00000003-1111-4111-8111-000000000003'
+                'delete group 00000003-1111-4111-8111-000000000003'
+                'close'
+            )
+            $result.Summary.Counts.Done | Should -Be 3
+            $result.Summary.ActionsAttempted | Should -Be 3
+            $result.Summary.Mode | Should -BeExactly 'Execute'
+        }
+
+        It 'does not pause when the pause is 0, and not after the last action' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true; DelaySeconds = 0' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'sleep*' | Should -HaveCount 0
+        }
+
+        It 'locks a site that is unlocked, waits for it, and writes its date in the lock journal' {
+            $run = Start-ActScenario -Decision 'Lock' -ActSettings 'Execute = $true' -Override @{ 1 = @{ LockState = 'Unlock' } } -Data @{ Answers = @('contoso', 'APPLY 1') }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Rows[0].Outcome | Should -BeExactly 'Done'
+            $result.Rows[0].Verdict | Should -BeExactly 'LOCK'
+            (Get-World)['https://contoso.sharepoint.com/sites/site1'].LockState | Should -BeExactly 'ReadOnly'
+            $journal = @(Import-Csv -LiteralPath $run.Journal)
+            $journal | Should -HaveCount 1
+            $journal[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/site1'
+            $journal[0].SiteId | Should -BeExactly '00000001-0000-4000-8000-000000000001'
+            $journal[0].LockedOn | Should -BeLike '2026-10-30*'
+        }
+
+        It 'unlocks, deletes a site without a group, and leaves its lock alone when it works' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Override @{ 1 = @{ GroupId = '' } } -Data @{ Answers = @('contoso', 'DELETE 1') }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Rows[0].Verdict | Should -BeExactly 'DELETE-SITE'
+            $result.Rows[0].Outcome | Should -BeExactly 'Done'
+            (Get-World)['https://contoso.sharepoint.com/sites/site1'].Exists | Should -BeFalse
+            Get-Calls -Pattern 'lock *' | Should -Be @('lock Unlock https://contoso.sharepoint.com/sites/site1')
+        }
+
+        It 'archives, unlocking and locking again and adding the administrator, when it is asked to' {
+            $run = Start-ActScenario -Decision 'Archive' -ActSettings 'Execute = $true; UnlockBeforeArchive = $true; GrantSiteAdmin = $true' -Data @{ Answers = @('contoso', 'ARCHIVE 1') }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Rows[0].Outcome | Should -BeExactly 'Done'
+            $result.Rows[0].Detail | Should -BeExactly 'The archive was requested: it takes place later. The site is locked again.'
+            Get-Calls -Pattern 'account' | Should -HaveCount 1
+            (Get-StubLog | Where-Object { $_ -like 'lock *' -or $_ -like 'admin *' -or $_ -like 'archive https*' }) | Should -Be @(
+                'lock Unlock https://contoso.sharepoint.com/sites/site1'
+                'admin admin@contoso.example https://contoso.sharepoint.com/sites/site1'
+                'archive https://contoso.sharepoint.com/sites/site1'
+                'lock ReadOnly https://contoso.sharepoint.com/sites/site1'
+            )
+            (Get-World)['https://contoso.sharepoint.com/sites/site1'].ArchiveStatus | Should -BeExactly 'RecentlyArchived'
+            (Get-World)['https://contoso.sharepoint.com/sites/site1'].LockState | Should -BeExactly 'ReadOnly'
+        }
+
+        It 'does not read the account when no administrator is to be added: <Name>' -ForEach @(
+            @{ Name = 'GrantSiteAdmin is off'; ActSettings = 'Execute = $true'; Decision = 'Archive' }
+            @{ Name = 'no row is to be archived'; ActSettings = 'Execute = $true; UnlockBeforeArchive = $true; GrantSiteAdmin = $true'; Decision = 'Delete' }
+        ) {
+            $run = Start-ActScenario -Decision $Decision -ActSettings $ActSettings -Data @{ Answers = @('contoso', "$($Decision.ToUpperInvariant()) 1") }
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'account' | Should -HaveCount 0
+        }
+    }
+
+    Context 'The home site is read for each row' {
+        It 'reads it with each site, so that an assignment that changes during the run protects the new home site from then on' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{
+                Answers       = @('contoso', 'DELETE 3')
+                HomeSiteQueue = @('', '', '', 'https://contoso.sharepoint.com/sites/site3')
+            }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Done', 'Done', 'Skipped')
+            $result.Rows[2].Verdict | Should -BeExactly 'SKIP-PROTECTED'
+            Get-Calls -Pattern 'home site' | Should -HaveCount 4
+        }
+
+        It 'reads it once before the loop, so that a tenant that cannot say stops the run before the first action' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1'); Fail = @{ 'home site' = 'The home site of the tenant could not be read: Access denied.' } }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*home site*could not be read*'
+
+            Get-Calls -Pattern 'read *' | Should -HaveCount 0
+            @(Get-StubLog)[-1] | Should -BeExactly 'close'
+        }
+
+        It 'counts a home site that cannot be read as an error of the row, and does not act on the row' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 4'); Fail = @{ 'home site from' = 2 } }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('ReadError', 'ReadError', 'ReadError', 'NotRun')
+            $result.Rows[0].Verdict | Should -BeExactly ''
+            $result.Rows[0].Detail | Should -BeLike '*home site*could not be read*Throttled*'
+            $result.Summary.StoppedBecause | Should -BeExactly 'ConsecutiveErrors'
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+        }
+
+        It 'is read in report-only mode too' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -Data @{ HomeSiteQueue = @('', '', 'https://contoso.sharepoint.com/sites/site2') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('WouldDo', 'Skipped')
+        }
+    }
+
+    Context 'The pause between two actions' {
+        It 'comes once after an action, and not again before each row that is not an action' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Override @{ 2 = @{ IsHubSite = $true }; 3 = @{ IsHubSite = $true } } -Data @{ Answers = @('contoso', 'DELETE 4') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Done', 'Skipped', 'Skipped', 'Done')
+            Get-Calls -Pattern 'sleep*' | Should -HaveCount 1
+        }
+
+        It 'is the number of seconds of the settings' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true; DelaySeconds = 7' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'sleep*' | Should -Be @('sleep 7')
+        }
+
+        It 'follows an action that failed too' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2'); Fail = @{ 'delete group' = @{ '00000001-1111-4111-8111-000000000001' = 'x' } } }
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'sleep*' | Should -HaveCount 1
+        }
+
+        It 'does not come in report-only mode' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete'
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'sleep*' | Should -HaveCount 0
+        }
+    }
+
+    Context 'A verdict that the Act phase does not know' {
+        It 'stops the run instead of guessing, and keeps the record of the rows before: <Name>' -ForEach @(
+            @{ Name = 'an unknown word'; Verdict = 'WEIRD' }
+            @{ Name = 'a word that is not exact'; Verdict = 'delete-site' }
+            @{ Name = 'no verdict and no error'; Verdict = '' }
+        ) {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -Data @{ Answers = @() }
+            $existing = & $script:Module { $script:StubData }
+            $existing.Verdicts = 0
+            $existing.Verdict = $Verdict
+            Set-ModuleStub -Stub @{
+                'Get-SPSLifecycleActVerdict' = @'
+param($Row, $Session, $Setting, $LockDateIndex, $ExclusionIndex, $HomeSiteUrl, $Now)
+$script:StubData.Verdicts++
+if ($script:StubData.Verdicts -eq 1) { return [PSCustomObject]@{ Verdict = 'SKIP-LOCK-STATE'; ReadError = ''; Site = $null; GroupState = ''; LockedOn = $null } }
+[PSCustomObject]@{ Verdict = $script:StubData.Verdict; ReadError = ''; Site = $null; GroupState = ''; LockedOn = $null }
+'@
+            } -Data $existing
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage "*line 3*not one that the Act phase knows*"
+
+            $report = @(Get-ChildItem -LiteralPath $run.Reports -Filter 'act-*.csv')
+            @(Import-Csv -LiteralPath $report[0].FullName) | Should -HaveCount 1
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+        }
+    }
+
+    Context 'MaxActions' {
+        It 'does the first actions only, and does not even read the rows after them' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 2' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Done', 'Done', 'NotRun', 'NotRun')
+            $result.Rows[2].Detail | Should -BeLike '*MaxActions (2)*reached*'
+            Get-Calls -Pattern 'read *' | Should -HaveCount 2
+            Get-Calls -Pattern 'delete group *' | Should -HaveCount 2
+            $result.Summary.ActionsAttempted | Should -Be 2
+        }
+
+        It 'does not count a row that is not an action' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 2' -Override @{ 1 = @{ IsHubSite = $true } } -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Skipped', 'Done', 'Done', 'NotRun')
+        }
+
+        It 'counts an action that failed' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 2' -Data @{ Answers = @('contoso', 'DELETE 2'); Fail = @{ 'delete group' = @{ '00000001-1111-4111-8111-000000000001' = 'The group could not be deleted: Forbidden.' } } }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Failed', 'Done', 'NotRun')
+        }
+    }
+
+    Context 'The stop after 3 errors in a row' {
+        It 'stops after 3 actions that fail, and leaves the rows that follow alone, unread' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 5'); Fail = @{ 'delete group' = 'The group could not be deleted: Forbidden.' } }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Failed', 'Failed', 'Failed', 'NotRun', 'NotRun')
+            $result.Rows[0].Detail | Should -BeLike '*could not be deleted: Forbidden*'
+            $result.Rows[3].Detail | Should -BeLike '*stopped after 3 errors in a row*'
+            $result.Summary.StoppedBecause | Should -BeExactly 'ConsecutiveErrors'
+            Get-Calls -Pattern 'read *' | Should -HaveCount 3
+            Get-Calls -Pattern 'delete group *' | Should -HaveCount 3
+        }
+
+        It 'counts the reads that fail with the actions that fail' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{
+                Answers = @('contoso', 'DELETE 4')
+                Fail    = @{
+                    'delete group' = @{ '00000001-1111-4111-8111-000000000001' = 'x' }
+                    read           = @{ 'https://contoso.sharepoint.com/sites/site2' = 'y'; 'https://contoso.sharepoint.com/sites/site3' = 'y' }
+                }
+            }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Failed', 'ReadError', 'ReadError', 'NotRun')
+            $result.Summary.StoppedBecause | Should -BeExactly 'ConsecutiveErrors'
+        }
+
+        It 'does not stop when a row that is not an error comes in between: E E S E E D' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Override @{ 3 = @{ IsHubSite = $true } } -Data @{
+                Answers = @('contoso', 'DELETE 6')
+                Fail    = @{ 'delete group' = @{
+                        '00000001-1111-4111-8111-000000000001' = 'x'; '00000002-1111-4111-8111-000000000002' = 'x'
+                        '00000004-1111-4111-8111-000000000004' = 'x'; '00000005-1111-4111-8111-000000000005' = 'x'
+                    }
+                }
+            }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Failed', 'Failed', 'Skipped', 'Failed', 'Failed', 'Done')
+            $result.Summary.StoppedBecause | Should -BeExactly ''
+        }
+
+        It 'does not stop when a success comes in between: E E D E E D' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{
+                Answers = @('contoso', 'DELETE 6')
+                Fail    = @{ 'delete group' = @{
+                        '00000001-1111-4111-8111-000000000001' = 'x'; '00000002-1111-4111-8111-000000000002' = 'x'
+                        '00000004-1111-4111-8111-000000000004' = 'x'; '00000005-1111-4111-8111-000000000005' = 'x'
+                    }
+                }
+            }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Failed', 'Failed', 'Done', 'Failed', 'Failed', 'Done')
+        }
+
+        It 'locks a site again that was unlocked for a deletion that failed, and the record says so' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Override @{ 1 = @{ GroupId = '' } } -Data @{ Answers = @('contoso', 'DELETE 1'); Fail = @{ 'delete site' = 'The site could not be deleted: Access denied.' } }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Rows[0].Outcome | Should -BeExactly 'Failed'
+            $result.Rows[0].Detail | Should -BeLike '*could not be deleted*The site was locked again.'
+            (Get-World)['https://contoso.sharepoint.com/sites/site1'].LockState | Should -BeExactly 'ReadOnly'
+        }
+    }
+
+    Context 'Each row is read again right before its action' {
+        It 'does not touch a site that changed since the Scan, or that must not be touched: <Name>' -ForEach @(
+            @{ Name = 'a site whose content changed'; Override = @{ LastContentModified = [System.DateTime]::new(2026, 10, 29, 20, 0, 0, [System.DateTimeKind]::Utc) }; Expected = 'REVIEW-CONTENT-MODIFIED'; Outcome = 'Review' }
+            @{ Name = 'a site that has a hold'; Override = @{ HasHolds = $true }; Expected = 'REVIEW-RETENTION'; Outcome = 'Review' }
+            @{ Name = 'a site whose group is in the recycle bin'; Override = @{ GroupState = 'SoftDeleted' }; Expected = 'REVIEW-GROUP-SOFTDELETED'; Outcome = 'Review' }
+            @{ Name = 'a site whose group is gone'; Override = @{ GroupState = 'NotFound' }; Expected = 'REVIEW-GROUP-NOTFOUND'; Outcome = 'Review' }
+            @{ Name = 'a site that is no longer read-only'; Override = @{ LockState = 'Unlock' }; Expected = 'SKIP-LOCK-STATE'; Outcome = 'Skipped' }
+            @{ Name = 'a site that is gone'; Override = @{ Exists = $false }; Expected = 'SKIP-NOT-FOUND'; Outcome = 'Skipped' }
+            @{ Name = 'a site that was replaced by another at its address'; Override = @{ SiteId = '99999999-0000-4000-8000-000000000099' }; Expected = 'SKIP-SITEID-MISMATCH'; Outcome = 'Skipped' }
+            @{ Name = 'a hub site'; Override = @{ IsHubSite = $true }; Expected = 'SKIP-PROTECTED'; Outcome = 'Skipped' }
+            @{ Name = 'a site that is too large to delete'; Override = @{ StorageUsedMB = [System.Int64]5000 }; Expected = 'SKIP-TOO-LARGE-TO-DELETE'; Outcome = 'Skipped' }
+        ) {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Override @{ 1 = $Override } -Data @{ Answers = @('contoso', 'DELETE 1') }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Rows[0].Verdict | Should -BeExactly $Expected
+            $result.Rows[0].Outcome | Should -BeExactly $Outcome
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+
+            Get-Calls -Pattern 'read *' | Should -HaveCount 1
+        }
+
+        It 'reads each site once, right before its action, and not before the run' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $null = Invoke-TestAct -Run $run
+
+            $log = @(Get-StubLog)
+            $log.IndexOf('read https://contoso.sharepoint.com/sites/site1') | Should -BeGreaterThan $log.IndexOf('open')
+            $log.IndexOf('delete group 00000001-1111-4111-8111-000000000001') | Should -Be ($log.IndexOf('read https://contoso.sharepoint.com/sites/site1') + 2)
+            $log.IndexOf('read https://contoso.sharepoint.com/sites/site2') | Should -BeGreaterThan $log.IndexOf('delete group 00000001-1111-4111-8111-000000000001')
+        }
+    }
+
+    Context 'What stops the run before the first action' {
+        It 'stops before it signs in, naming the line, for what the file holds that is wrong: <Name>' -ForEach @(
+            @{ Name = 'a decision that is unknown'; Row = @(@{ Index = 1; Decision = 'Remove' }); Expected = "*line 2*Decision 'Remove'*" }
+            @{ Name = 'a file that is too old'; Row = @(@{ Index = 1; Decision = 'Delete'; GeneratedOn = '20260801T080000Z' }); Expected = '*MaxCsvAgeDays*' }
+            @{ Name = 'a OneDrive address'; Row = @(@{ Index = 1; Decision = 'Delete'; Url = 'https://contoso-my.sharepoint.com/personal/someone_contoso_com' }); Expected = '*OneDrive*' }
+            @{ Name = 'another tenant'; Row = @(@{ Index = 1; Decision = 'Delete'; Url = 'https://fabrikam.sharepoint.com/sites/site1' }); Expected = '*tenant*' }
+            @{ Name = 'a site twice'; Row = @(@{ Index = 1; Decision = 'Delete' }, @{ Index = 1; Decision = 'Archive' }); Expected = '*already*' }
+        ) {
+            Set-ActStub -Site @(New-ActSiteState -Index 1) -Data @{ Answers = @('contoso', 'DELETE 1') }
+            $run = New-ActRunFolder -Row $Row -ActSettings 'Execute = $true'
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage $Expected
+
+            Get-StubLog | Should -HaveCount 0
+        }
+
+        It 'stops before anything for a tenant that is refused' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Settings "RefusedTenants = @('contoso')"
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*refused*'
+
+            Get-StubLog | Should -HaveCount 0
+        }
+
+        It 'stops before anything for a lock journal that is damaged' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true'
+            $null = New-Item -Path $run.Reports -ItemType Directory
+            [System.IO.File]::WriteAllText($run.Journal, "Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a,`"broken`r`n")
+
+            { Invoke-TestAct -Run $run } | Should -Throw
+
+            Get-StubLog | Should -HaveCount 0
+        }
+
+        It 'stops before the first action when Microsoft 365 Archive is off and a row is to be archived' {
+            $run = Start-ActScenario -Decision 'Delete', 'Archive' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'APPLY 2'); ArchiveEnabled = $false }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*Microsoft 365 Archive is off*'
+
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+
+            Get-Calls -Pattern 'read *' | Should -HaveCount 0
+            @(Get-StubLog)[-1] | Should -BeExactly 'close'
+        }
+
+        It 'stops before the first action when it cannot tell whether Microsoft 365 Archive is on: an archive that fails after an unlock would leave its changes' -ForEach @(
+            @{ Name = 'nothing'; Value = $null }
+            @{ Name = 'a text'; Value = 'True' }
+        ) {
+            $run = Start-ActScenario -Decision 'Delete', 'Archive' -ActSettings 'Execute = $true; UnlockBeforeArchive = $true; GrantSiteAdmin = $true' -Data @{ Answers = @('contoso', 'APPLY 2'); ArchiveEnabled = $Value }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*could not tell whether Microsoft 365 Archive is on*Nothing was changed*'
+
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+
+            Get-Calls -Pattern 'read *' | Should -HaveCount 0
+            @(Get-StubLog)[-1] | Should -BeExactly 'close'
+        }
+
+        It 'says so, and goes on, in report-only mode, when it cannot tell whether Microsoft 365 Archive is on' {
+            $run = Start-ActScenario -Decision 'Archive' -Data @{ ArchiveEnabled = $null }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Rows[0].Outcome | Should -BeExactly 'WouldDo'
+            ($result.Text -join "`n") | Should -BeLike '*could not tell whether Microsoft 365 Archive is on*an Execute run would not start*'
+            @($result.Summary.Warnings) | Should -HaveCount 1
+        }
+
+        It 'does not ask about Microsoft 365 Archive when no row is to be archived' {
+            $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1') }
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'archive enabled?' | Should -HaveCount 0
+        }
+
+        It 'only says so, and goes on, in report-only mode, when Microsoft 365 Archive is off' {
+            $run = Start-ActScenario -Decision 'Archive' -Data @{ ArchiveEnabled = $false }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Rows[0].Outcome | Should -BeExactly 'WouldDo'
+            ($result.Text -join "`n") | Should -BeLike '*Microsoft 365 Archive is off*'
+        }
+
+        It 'stops before the first action when the account to add as administrator cannot be read' {
+            $run = Start-ActScenario -Decision 'Archive' -ActSettings 'Execute = $true; UnlockBeforeArchive = $true; GrantSiteAdmin = $true' -Data @{ Answers = @('contoso', 'ARCHIVE 1'); Fail = @{ account = 'The account that signed in cannot be told.' } }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*cannot be told*'
+
+            Get-Calls -Pattern 'read *' | Should -HaveCount 0
+        }
+
+        It 'ends the session when the run stops, and does not when the sign-in fails' {
+            $run = Start-ActScenario -Decision 'Delete' -Data @{ Fail = @{ open = 'The sign-in failed.' } }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*sign-in failed*'
+
+            Get-Calls -Pattern 'close' | Should -HaveCount 0
+        }
+    }
+
+    Context 'The record of the run' {
+        It 'holds one row for each row with a decision, in the order of the file, and none for a row without one' {
+            $run = Start-ActScenario -Decision 'Delete', '', 'Archive', '', 'Delete' -Override @{ 5 = @{ IsHubSite = $true } }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Line) | Should -Be @('2', '4', '6')
+            @($result.Rows.Url) | Should -Be @('https://contoso.sharepoint.com/sites/site1', 'https://contoso.sharepoint.com/sites/site3', 'https://contoso.sharepoint.com/sites/site5')
+            @($result.Rows.SiteId) | Should -Be @('00000001-0000-4000-8000-000000000001', '00000003-0000-4000-8000-000000000003', '00000005-0000-4000-8000-000000000005')
+            @($result.Rows.ProcessedOn | Select-Object -Unique) | Should -Be @('20261030T090000Z')
+        }
+
+        It 'is written in the output folder, as act-<time>.csv, with the delimiter of the settings' {
+            $run = Start-ActScenario -Decision 'Delete' -Delimiter ';'
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Summary.ReportPath | Should -BeExactly (Join-Path -Path $run.Reports -ChildPath 'act-20261030T090000Z.csv')
+            (Get-Content -LiteralPath $result.Summary.ReportPath -TotalCount 1).TrimStart([char]0xFEFF) | Should -BeExactly 'Line;Url;SiteId;Decision;Verdict;Outcome;Detail;ProcessedOn'
+        }
+
+        It 'keeps the record of what was done when a later row throws something that nobody expected' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2') }
+            $existing = & $script:Module { $script:StubData }
+            $existing.Verdicts = 0
+            Set-ModuleStub -Stub @{
+                'Get-SPSLifecycleActVerdict' = @'
+param($Row, $Session, $Setting, $LockDateIndex, $ExclusionIndex, $HomeSiteUrl, $Now)
+$script:StubData.Verdicts++
+if ($script:StubData.Verdicts -eq 2) { throw 'Something nobody expected.' }
+[PSCustomObject]@{ Verdict = 'DELETE-VIA-GROUP'; ReadError = ''; Site = [PSCustomObject]@{ Url = $Row.Url; SiteId = $Row.SiteId; GroupId = '00000001-1111-4111-8111-000000000001'; LockState = 'ReadOnly' }; GroupState = 'Active'; LockedOn = $null }
+'@
+            } -Data $existing
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*Something nobody expected*'
+
+            $report = @(Get-ChildItem -LiteralPath $run.Reports -Filter 'act-*.csv')
+            $report | Should -HaveCount 1
+            $rows = @(Import-Csv -LiteralPath $report[0].FullName)
+            @($rows.Outcome) | Should -Be @('InProgress', 'Done')
+        }
+    }
+
+    Context 'What the run says' {
+        It 'says how it went, in a few lines, and where the record is' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 2' -Override @{ 2 = @{ IsHubSite = $true } } -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Text | Should -Contain "Report: $($result.Summary.ReportPath)"
+            $result.Text | Should -Contain 'Rows with a decision: 3. Done 2, Failed 0, WouldDo 0, Skipped 1, Review 0, ReadError 0, NotRun 0.'
+            @($result.Text | Where-Object { $_ -like 'Act of the tenant contoso ended in *' }) | Should -HaveCount 1
+            ($result.Text -join "`n") | Should -BeLike '*EXECUTE: the tenant was changed.*'
+        }
+
+        It 'says that a report-only run changed nothing' {
+            $run = Start-ActScenario -Decision 'Delete'
+
+            $result = Invoke-TestAct -Run $run
+
+            ($result.Text -join "`n") | Should -BeLike '*REPORT ONLY: nothing was changed.*'
+            $result.Text | Should -Contain 'Rows with a decision: 1. Done 0, Failed 0, WouldDo 1, Skipped 0, Review 0, ReadError 0, NotRun 0.'
+        }
+
+        It 'says why it stopped' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -Data @{ Fail = @{ read = 'x' } }
+
+            $result = Invoke-TestAct -Run $run
+
+            $result.Text | Should -Contain 'The run stopped after 3 errors in a row: the rows that follow were not read.'
+        }
+    }
+}
+
+Describe 'The record of an action, before it is done' {
+    It 'is written to the disk before the tenant is touched, and the row of the outcome comes after it' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2') }
+        $existing = & $script:Module { $script:StubData }
+        $existing.ReportFolder = $run.Reports
+        Set-ModuleStub -Stub @{
+            'Remove-SPSLifecycleGroup' = @'
+param($Session, $GroupId)
+$file = @(Get-ChildItem -LiteralPath $script:StubData.ReportFolder -Filter 'act-*.csv')[0]
+$rows = @(Import-Csv -LiteralPath $file.FullName)
+$script:StubLog.Add("rows when the group is deleted: $(($rows | ForEach-Object { "$($_.Outcome)/$($_.Verdict)/$($_.Line)" }) -join ' ')")
+'@
+        } -Data $existing
+
+        $result = Invoke-TestAct -Run $run
+
+        @(Get-StubLog | Where-Object { $_ -like 'rows when the group is deleted: *' }) | Should -Be @(
+            'rows when the group is deleted: InProgress/DELETE-VIA-GROUP/2'
+            'rows when the group is deleted: InProgress/DELETE-VIA-GROUP/2 Done/DELETE-VIA-GROUP/2 InProgress/DELETE-VIA-GROUP/3'
+        )
+        @($result.AllRows.Outcome) | Should -Be @('InProgress', 'Done', 'InProgress', 'Done')
+        @($result.Rows.Outcome) | Should -Be @('Done', 'Done')
+    }
+
+    It 'says what it means, so that a person who finds it with no outcome after it knows what to do' {
+        $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1') }
+
+        $result = Invoke-TestAct -Run $run
+
+        $result.AllRows[0].Outcome | Should -BeExactly 'InProgress'
+        $result.AllRows[0].Detail | Should -BeLike '*Started*stopped during the action*may still be unlocked*Check the site.'
+        $result.AllRows[0].Url | Should -BeExactly $result.AllRows[1].Url
+        $result.AllRows[0].SiteId | Should -BeExactly $result.AllRows[1].SiteId
+    }
+
+    It 'is followed by the row of the outcome when the action fails' {
+        $run = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1'); Fail = @{ 'delete group' = 'The group could not be deleted: Throttled.' } }
+
+        $result = Invoke-TestAct -Run $run
+
+        @($result.AllRows.Outcome) | Should -Be @('InProgress', 'Failed')
+        $result.AllRows[1].Detail | Should -BeLike '*Throttled*'
+    }
+
+    It 'is not an outcome: the counts, the actions that were tried and MaxActions know nothing of it' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 2' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+        $result = Invoke-TestAct -Run $run
+
+        $result.Summary.Counts.Done | Should -Be 2
+        $result.Summary.Counts.NotRun | Should -Be 1
+        $result.Summary.Counts.Keys | Should -Not -Contain 'InProgress'
+        $result.Summary.ActionsAttempted | Should -Be 2
+        @($result.AllRows.Outcome) | Should -Be @('InProgress', 'Done', 'InProgress', 'Done', 'NotRun')
+    }
+
+    It 'is not written when nothing is done: report only, a skip, a review, a read that fails, a row that is not reached' {
+        $reportOnly = Start-ActScenario -Decision 'Delete', 'Delete'
+        @((Invoke-TestAct -Run $reportOnly).AllRows.Outcome) | Should -Be @('WouldDo', 'WouldDo')
+
+        $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 1' -Override @{ 1 = @{ IsHubSite = $true } } -Data @{ Answers = @('contoso', 'DELETE 1') }
+        @((Invoke-TestAct -Run $run).AllRows.Outcome) | Should -Be @('Skipped', 'InProgress', 'Done', 'NotRun', 'NotRun')
+
+        $unread = Start-ActScenario -Decision 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 1'); Fail = @{ read = 'The site could not be read: Throttled.' } }
+        @((Invoke-TestAct -Run $unread).AllRows.Outcome) | Should -Be @('ReadError')
+    }
+
+    It 'does not do the action when the row cannot be written, and stops the run: nothing is done that is not on record' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2') }
+        $existing = & $script:Module { $script:StubData }
+        Set-ModuleStub -Stub @{
+            'Add-SPSLifecycleActReportRow' = @'
+param($Path, $Row, $Delimiter)
+$script:StubLog.Add("row $($Row.Outcome)")
+if ($Row.Outcome -eq 'InProgress') { throw 'The report is on a disk that is full.' }
+'@
+        } -Data $existing
+
+        { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*disk that is full*'
+
+        @(Get-Calls 'delete group *') | Should -HaveCount 0
+        @(Get-StubLog | Where-Object { $_ -like 'row *' }) | Should -Be @('row InProgress')
+    }
+}
+
+Describe 'A run that is interrupted during an action' {
+    BeforeAll {
+        $script:Pwsh = (Get-Process -Id $PID).Path
+
+        # The loop, in a process of its own, with one row whose action either throws what Ctrl+C raises (Mode inject) or waits to be interrupted
+        # (Mode wait: it writes ready.txt first). A catch does not catch Ctrl+C, so what the loop does about it has to be a finally.
+        function script:New-InterruptedLoopScript {
+            param([string]$Folder, [string]$Mode)
+
+            $template = @'
+$ErrorActionPreference = 'Stop'
+$module = Import-Module -Name '@@MANIFEST@@' -Force -PassThru
+& $module {
+    param($folder, $mode)
+    $script:Folder = $folder
+    $script:Mode = $mode
+    function script:Get-SPSLifecycleHomeSiteUrl { param($Session) '' }
+    function script:Get-SPSLifecycleActVerdict {
+        param($Row, $Session, $Setting, $LockDateIndex, $ExclusionIndex, $HomeSiteUrl, $Now)
+        [PSCustomObject]@{ Verdict = 'DELETE-VIA-GROUP'; ReadError = ''; Site = [PSCustomObject]@{ Url = $Row.Url; SiteId = $Row.SiteId; GroupId = '11111111-1111-4111-8111-111111111111'; LockState = 'ReadOnly' } }
+    }
+    function script:Invoke-SPSLifecycleSiteAction {
+        param($Session, $Setting, $Verdict, $Site, $Account, $Now)
+        if ($script:Mode -eq 'inject') { throw [System.Management.Automation.PipelineStoppedException]::new() }
+        [System.IO.File]::WriteAllText((Join-Path -Path $script:Folder -ChildPath 'ready.txt'), 'ready')
+        Start-Sleep -Seconds 120
+        'not interrupted'
+    }
+    $report = Initialize-SPSLifecycleActReport -OutputFolder $folder -Delimiter ',' -GeneratedOn ([System.DateTime]::UtcNow)
+    $setting = [PSCustomObject]@{ CsvDelimiterChar = [System.Char]','; Act = [PSCustomObject]@{ MaxActions = 5; DelaySeconds = 0 } }
+    $row = [PSCustomObject]@{ Line = 2; Url = 'https://contoso.sharepoint.com/sites/a'; SiteId = 'a6e20079-2d1a-4e9d-bc9f-94e3f2efeb64'; Decision = 'Delete' }
+    $null = Invoke-SPSLifecycleActLoop -Session ([PSCustomObject]@{ Connection = 'c' }) -Setting $setting -Plan ([PSCustomObject]@{ Mode = 'Execute' }) -Row @($row) -LockDateIndex ([PSCustomObject]@{}) -ExclusionIndex ([PSCustomObject]@{}) -ReportPath $report
+} '@@FOLDER@@' '@@MODE@@'
+'@
+            $file = Join-Path -Path $Folder -ChildPath 'run.ps1'
+            [System.IO.File]::WriteAllText($file, $template.Replace('@@MANIFEST@@', $script:Manifest).Replace('@@FOLDER@@', $Folder).Replace('@@MODE@@', $Mode))
+            $file
+        }
+
+        function script:New-InterruptedFolder {
+            $folder = Join-Path -Path $TestDrive -ChildPath ([System.Guid]::NewGuid().ToString('N'))
+            $null = New-Item -Path $folder -ItemType Directory
+            $folder
+        }
+
+        function script:Read-InterruptedReport {
+            param([string]$Folder)
+
+            $report = @(Get-ChildItem -LiteralPath $Folder -Filter 'act-*.csv')
+            if ($report.Count -eq 1) { @(Import-Csv -LiteralPath $report[0].FullName) } else { @() }
+        }
+    }
+
+    It 'leaves a row that says so, after the one that says that the action was started: the tenant may have been changed' {
+        $folder = New-InterruptedFolder
+        $file = New-InterruptedLoopScript -Folder $folder -Mode 'inject'
+
+        $null = & $script:Pwsh -NoProfile -File $file 2>&1
+
+        $rows = Read-InterruptedReport -Folder $folder
+        @($rows.Outcome) | Should -Be @('InProgress', 'Interrupted')
+        $rows[1].Detail | Should -BeLike '*ended during the action*interrupted*tenant may have been changed*Check the site*unlocked*'
+        $rows[1].Verdict | Should -BeExactly 'DELETE-VIA-GROUP'
+        $rows[1].Url | Should -BeExactly $rows[0].Url
+    }
+
+    It 'does the same when the process receives the signal that Ctrl+C sends, while the action waits' -Skip:($IsWindows) {
+        if (-not (Test-ChildHonorsSigint -Pwsh $script:Pwsh)) {
+            Set-ItResult -Skipped -Because 'the signal of Ctrl+C does not reach a child process here: the tests were started in the background of a shell'
+            return
+        }
+
+        $folder = New-InterruptedFolder
+        $file = New-InterruptedLoopScript -Folder $folder -Mode 'wait'
+
+        $info = [System.Diagnostics.ProcessStartInfo]::new($script:Pwsh)
+        foreach ($argument in '-NoProfile', '-NonInteractive', '-File', $file) { $info.ArgumentList.Add($argument) }
+        $info.UseShellExecute = $false
+        $info.RedirectStandardInput = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $process = [System.Diagnostics.Process]::Start($info)
+        try {
+            $output = $process.StandardOutput.ReadToEndAsync()
+            $errors = $process.StandardError.ReadToEndAsync()
+            $ready = Join-Path -Path $folder -ChildPath 'ready.txt'
+            $deadline = [System.DateTime]::UtcNow.AddSeconds(90)
+            while (-not (Test-Path -LiteralPath $ready) -and [System.DateTime]::UtcNow -lt $deadline -and -not $process.HasExited) {
+                Start-Sleep -Milliseconds 200
+            }
+
+            Test-Path -LiteralPath $ready | Should -BeTrue -Because 'the child process has to be in the action before it is interrupted'
+            $null = & /bin/kill -INT $process.Id
+            $process.WaitForExit(60000) | Should -BeTrue -Because 'the interrupted process has to end'
+        }
+        finally {
+            if (-not $process.HasExited) { $process.Kill($true) }
+        }
+
+        $rows = Read-InterruptedReport -Folder $folder
+        @($rows.Outcome) | Should -Be @('InProgress', 'Interrupted')
+    }
+}
