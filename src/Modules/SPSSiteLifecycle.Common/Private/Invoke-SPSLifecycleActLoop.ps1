@@ -112,17 +112,17 @@
     $maxActions = [System.Int32]$Setting.Act.MaxActions
     $delay = [System.Int32]$Setting.Act.DelaySeconds
     $counts = [ordered]@{ Done = 0; Failed = 0; WouldDo = 0; Skipped = 0; Review = 0; ReadError = 0; NotRun = 0 }
-    $meaning = @{}
+    # The words of a verdict are compared as they are written: a hashtable ignores the case, and a verdict that is not exact is not an action.
+    $meaning = [System.Collections.Generic.Dictionary[System.String, System.String]]::new([System.StringComparer]::Ordinal)
     foreach ($entry in Get-SPSLifecycleVerdictCatalog) {
         $meaning[$entry.Verdict] = $entry.Meaning
     }
 
-    $wouldDo = @{
-        'LOCK'             = 'make the site read-only and write its date in the lock journal'
-        'ARCHIVE'          = 'request the archive of the site'
-        'DELETE-SITE'      = 'delete the site'
-        'DELETE-VIA-GROUP' = 'delete the group of the site, and SharePoint would delete the site some time later'
-    }
+    $wouldDo = [System.Collections.Generic.Dictionary[System.String, System.String]]::new([System.StringComparer]::Ordinal)
+    $wouldDo['LOCK'] = 'make the site read-only and write its date in the lock journal'
+    $wouldDo['ARCHIVE'] = 'request the archive of the site'
+    $wouldDo['DELETE-SITE'] = 'delete the site'
+    $wouldDo['DELETE-VIA-GROUP'] = 'delete the group of the site, and SharePoint would delete the site some time later'
 
     $attempted = 0
     $consecutive = 0

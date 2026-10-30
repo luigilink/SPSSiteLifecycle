@@ -442,7 +442,9 @@ $script:StubData.GroupState
             @{ Name = 'a site whose content changed at the very second of the report'; Case = 'modifiedsame'; Expected = 'DELETE-VIA-GROUP' }
             @{ Name = 'a site whose content date cannot be read'; Case = 'nodate'; Expected = 'REVIEW-CONTENT-MODIFIED' }
             @{ Name = 'a site that has a hold'; Case = 'hold'; Expected = 'REVIEW-RETENTION' }
-            @{ Name = 'a site whose hold is not reported'; Case = 'holdunknown'; Expected = 'DELETE-VIA-GROUP' }
+            @{ Name = 'a site whose hold is not reported: an unread safeguard is not a green light'; Case = 'holdunknown'; Expected = 'REVIEW-RETENTION' }
+            @{ Name = 'a site whose hold is reported as something that is not a flag'; Case = 'holdtext'; Expected = 'REVIEW-RETENTION' }
+            @{ Name = 'a site that has no hold'; Case = 'nohold'; Expected = 'DELETE-VIA-GROUP' }
             @{ Name = 'a site that has a hold and was changed: the change is told first'; Case = 'holdmodified'; Expected = 'REVIEW-CONTENT-MODIFIED' }
             @{ Name = 'a site whose group is in the recycle bin'; Case = 'softdeleted'; Expected = 'REVIEW-GROUP-SOFTDELETED' }
             @{ Name = 'a site whose group is not there'; Case = 'groupgone'; Expected = 'REVIEW-GROUP-NOTFOUND' }
@@ -481,6 +483,8 @@ $script:StubData.GroupState
                 'nodate' { $parameters.Live = New-LiveRecord -Override @{ LastContentModified = $null } }
                 'hold' { $parameters.Live = New-LiveRecord -Override @{ HasHolds = $true } }
                 'holdunknown' { $parameters.Live = New-LiveRecord -Override @{ HasHolds = $null } }
+                'holdtext' { $parameters.Live = New-LiveRecord -Override @{ HasHolds = 'False' } }
+                'nohold' { $parameters.Live = New-LiveRecord -Override @{ HasHolds = $false } }
                 'holdmodified' { $parameters.Live = New-LiveRecord -Override @{ HasHolds = $true; LastContentModified = $script:GeneratedOn.AddHours(5) } }
                 'softdeleted' { $parameters.GroupState = 'SoftDeleted' }
                 'groupgone' { $parameters.GroupState = 'NotFound' }

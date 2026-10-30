@@ -49,6 +49,9 @@ Describe 'Assert-SPSLifecycleWriteTarget' {
         @{ Url = 'HTTPS://Contoso.SharePoint.com/Sites/A/' }
         @{ Url = 'https://contoso.sharepoint.com:443/sites/a' }
         @{ Url = 'https://contoso.sharepoint.com/sites/some-team%20site' }
+        @{ Url = 'https://contoso.sharepoint.com/sites/%C3%A9quipe' }
+        @{ Url = 'https://contoso.sharepoint.com/sites/a.b' }
+        @{ Url = 'https://contoso.sharepoint.com/sites/a/b' }
     ) {
         { Assert-Target -Url $Url } | Should -Not -Throw
     }
@@ -59,6 +62,19 @@ Describe 'Assert-SPSLifecycleWriteTarget' {
         @{ Name = 'the admin site'; Url = 'https://contoso-admin.sharepoint.com/sites/a'; Expected = '*another tenant*' }
         @{ Name = 'the root site'; Url = 'https://contoso.sharepoint.com'; Expected = '*root*' }
         @{ Name = 'the root site with a slash'; Url = 'https://contoso.sharepoint.com/'; Expected = '*root*' }
+        @{ Name = 'the root site, as an encoded slash'; Url = 'https://contoso.sharepoint.com/%2f'; Expected = '*encoded*' }
+        @{ Name = 'the root site, as an encoded slash in capitals'; Url = 'https://contoso.sharepoint.com/%2F'; Expected = '*encoded*' }
+        @{ Name = 'an encoded backslash'; Url = 'https://contoso.sharepoint.com/sites%5ca'; Expected = '*encoded*' }
+        @{ Name = 'an encoded slash inside a name'; Url = 'https://contoso.sharepoint.com/sites/a%2fb'; Expected = '*encoded*' }
+        @{ Name = 'a double encoding'; Url = 'https://contoso.sharepoint.com/%252f'; Expected = '*encoded*' }
+        @{ Name = 'a backslash instead of the first slash'; Url = 'https://contoso.sharepoint.com\sites\a'; Expected = '*not the web address*' }
+        @{ Name = 'a backslash in the path'; Url = 'https://contoso.sharepoint.com/sites\a'; Expected = '*backslash*' }
+        @{ Name = 'a dot segment that leads to the root'; Url = 'https://contoso.sharepoint.com/sites/..'; Expected = '*dot segment*' }
+        @{ Name = 'a dot segment inside'; Url = 'https://contoso.sharepoint.com/sites/./a'; Expected = '*dot segment*' }
+        @{ Name = 'a dot segment that leaves the site'; Url = 'https://contoso.sharepoint.com/sites/a/../../b'; Expected = '*dot segment*' }
+        @{ Name = 'an encoded dot segment'; Url = 'https://contoso.sharepoint.com/sites/%2e%2e/a'; Expected = '*dot segment*' }
+        @{ Name = 'two slashes in a row'; Url = 'https://contoso.sharepoint.com/sites//a'; Expected = '*two slashes*' }
+        @{ Name = 'two slashes at the start'; Url = 'https://contoso.sharepoint.com//sites/a'; Expected = '*two slashes*' }
         @{ Name = 'http'; Url = 'http://contoso.sharepoint.com/sites/a'; Expected = '*https*' }
         @{ Name = 'a port'; Url = 'https://contoso.sharepoint.com:8443/sites/a'; Expected = '*port*' }
         @{ Name = 'user information'; Url = 'https://user@contoso.sharepoint.com/sites/a'; Expected = '*user information*' }
@@ -73,6 +89,12 @@ Describe 'Assert-SPSLifecycleWriteTarget' {
         @{ Name = 'an empty text'; Url = ''; Expected = '*not the web address*' }
     ) {
         { Assert-Target -Url $Url } | Should -Throw -ExpectedMessage $Expected
+    }
+
+    It 'names the address that it refuses, with the hidden characters written out' {
+        { Assert-Target -Url "https://contoso.sharepoint.com/sites/a$([char]0x200B)" } | Should -Throw -ExpectedMessage '*sites/a\u200B*'
+        { Assert-Target -Url 'https://fabrikam.sharepoint.com/sites/a' } | Should -Throw -ExpectedMessage "*'https://fabrikam.sharepoint.com/sites/a'*"
+        { Assert-Target -Url 'https://contoso.sharepoint.com/sites/a?x=1' } | Should -Throw -ExpectedMessage "*'https://contoso.sharepoint.com/sites/a?x=1'*"
     }
 
     It 'refuses every address when the tenant of the session is refused or is not a tenant: <Name>' -ForEach @(

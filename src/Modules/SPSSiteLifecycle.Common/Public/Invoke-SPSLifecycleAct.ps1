@@ -17,8 +17,8 @@
         3. With Execute, the confirmation (see Confirm-SPSLifecycleAct): the name of the tenant, then a phrase that carries the number
            of actions. Anything else stops the tool, and so does an input that is redirected.
         4. The Act report is created (see Initialize-SPSLifecycleActReport), then the tool signs in, reads the home site, and, when a row
-           is to be archived, checks that Microsoft 365 Archive is on for sites (with Execute, it stops when it is off; in report-only
-           mode it says so) and, with GrantSiteAdmin, reads the account that signed in.
+           is to be archived, checks that Microsoft 365 Archive is on for sites (with Execute, it stops when it is off or when it cannot
+           tell; in report-only mode it says so) and, with GrantSiteAdmin, reads the account that signed in.
         5. The loop (see Invoke-SPSLifecycleActLoop) reads each row again right before its action, does it or says what it would do,
            and writes its row in the report at once. It stops after 3 errors in a row, and does at most MaxActions actions.
         6. The summary is written as lines of information (see Format-SPSLifecycleActSummary), and returned.
@@ -111,7 +111,11 @@
                 $warnings.Add('Microsoft 365 Archive is off for sites (EnableSiteArchive is False): the archives of a real run would fail.')
             }
             elseif ($archiveEnabled -isnot [System.Boolean]) {
-                $warnings.Add('The tool could not tell whether Microsoft 365 Archive is on for sites (EnableSiteArchive is not reported): an archive may fail.')
+                if ($plan.Mode -eq 'Execute') {
+                    throw 'The tool could not tell whether Microsoft 365 Archive is on for sites (EnableSiteArchive is not reported), and an archive that fails after the site was unlocked and the administrator was added would leave those changes: it does not start. Take the rows to archive out of the file, or update PnP.PowerShell. Nothing was changed.'
+                }
+
+                $warnings.Add('The tool could not tell whether Microsoft 365 Archive is on for sites (EnableSiteArchive is not reported): an archive may fail, and an Execute run would not start.')
             }
         }
 

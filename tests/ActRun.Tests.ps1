@@ -82,6 +82,57 @@ Describe 'Invoke-SPSLifecycleAct, report only (the default)' {
         Test-Path -LiteralPath $run.Journal | Should -BeFalse
     }
 
+    It 'gives the plan and the time that the run took in its summary' {
+        $run = Start-ActScenario -Decision 'Delete', 'Archive'
+
+        $summary = (Invoke-TestAct -Run $run).Summary
+
+        $summary.Plan.PlannedActions | Should -Be 2
+        $summary.Plan.Phrase | Should -BeExactly 'APPLY 2'
+        $summary.ElapsedSeconds | Should -BeGreaterThan 0
+        $summary.StartedOn | Should -Be $script:Now
+        $summary.TenantName | Should -BeExactly 'contoso'
+        $summary.Phase | Should -BeExactly 'Act'
+        $summary.InputFile | Should -Be (Join-Path -Path $run.Folder -ChildPath 'sites.csv')
+    }
+
+    It 'gives the time that the run took when there is nothing to do' {
+        $run = Start-ActScenario -Decision ''
+
+        (Invoke-TestAct -Run $run).Summary.ElapsedSeconds | Should -BeGreaterThan 0
+    }
+
+    It 'reads the dates of the lock date lists in the formats of the settings, and stops before the sign-in when a date is in another one' {
+        $locks = "Url,LockedOn,SiteId`r`nhttps://contoso.sharepoint.com/sites/site1,18/09/2025,00000001-0000-4000-8000-000000000001`r`n"
+        $with = Start-ActScenario -Decision 'Delete' -Settings "CsvDateFormats = @('dd/MM/yyyy')" -Locks $locks
+
+        (Invoke-TestAct -Run $with).Rows[0].Verdict | Should -BeExactly 'DELETE-VIA-GROUP'
+
+        $without = Start-ActScenario -Decision 'Delete' -Locks $locks
+        { Invoke-TestAct -Run $without } | Should -Throw -ExpectedMessage '*CsvDateFormats*'
+        Get-StubLog | Should -HaveCount 0
+    }
+
+    It 'gives no action to a read-only site whose lock date is recent or unknown: the lock dates are read' {
+        $locks = "Url,LockedOn,SiteId`r`nhttps://contoso.sharepoint.com/sites/site1,2026-10-01,00000001-0000-4000-8000-000000000001`r`n"
+        $run = Start-ActScenario -Decision 'Delete', 'Delete' -Locks $locks
+
+        $rows = (Invoke-TestAct -Run $run).Rows
+
+        @($rows.Verdict) | Should -Be @('SKIP-TOO-RECENT-LOCK', 'SKIP-NO-LOCK-DATE')
+    }
+
+    It 'leaves a site that is in an exclusion list alone, whatever the decision' {
+        $run = Start-ActScenario -Decision 'Delete', 'Delete'
+        [System.IO.File]::WriteAllText((Join-Path -Path $run.Folder -ChildPath 'exclusions.csv'), "Url`r`nhttps://contoso.sharepoint.com/sites/site2`r`n")
+        $text = (Get-Content -LiteralPath $run.Config -Raw) -replace 'LockDateFiles = @\(''lot1.csv''\)', "LockDateFiles = @('lot1.csv')`r`nExclusionFiles = @('exclusions.csv')"
+        Set-Content -LiteralPath $run.Config -Value $text -NoNewline
+
+        $rows = (Invoke-TestAct -Run $run).Rows
+
+        @($rows.Verdict) | Should -Be @('DELETE-VIA-GROUP', 'SKIP-EXCLUDED')
+    }
+
     It 'is report only when Execute is not set, and when it is $false' -ForEach @(
         @{ ActSettings = '' }
         @{ ActSettings = 'Execute = $false' }
@@ -337,6 +388,70 @@ Describe 'Invoke-SPSLifecycleAct, with Execute' {
         }
     }
 
+    Context 'The pause between two actions' {
+        It 'comes once after an action, and not again before each row that is not an action' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true' -Override @{ 2 = @{ IsHubSite = $true }; 3 = @{ IsHubSite = $true } } -Data @{ Answers = @('contoso', 'DELETE 4') }
+
+            $result = Invoke-TestAct -Run $run
+
+            @($result.Rows.Outcome) | Should -Be @('Done', 'Skipped', 'Skipped', 'Done')
+            Get-Calls -Pattern 'sleep*' | Should -HaveCount 1
+        }
+
+        It 'is the number of seconds of the settings' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true; DelaySeconds = 7' -Data @{ Answers = @('contoso', 'DELETE 2') }
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'sleep*' | Should -Be @('sleep 7')
+        }
+
+        It 'follows an action that failed too' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'DELETE 2'); Fail = @{ 'delete group' = @{ '00000001-1111-4111-8111-000000000001' = 'x' } } }
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'sleep*' | Should -HaveCount 1
+        }
+
+        It 'does not come in report-only mode' {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete'
+
+            $null = Invoke-TestAct -Run $run
+
+            Get-Calls -Pattern 'sleep*' | Should -HaveCount 0
+        }
+    }
+
+    Context 'A verdict that the Act phase does not know' {
+        It 'stops the run instead of guessing, and keeps the record of the rows before: <Name>' -ForEach @(
+            @{ Name = 'an unknown word'; Verdict = 'WEIRD' }
+            @{ Name = 'a word that is not exact'; Verdict = 'delete-site' }
+            @{ Name = 'no verdict and no error'; Verdict = '' }
+        ) {
+            $run = Start-ActScenario -Decision 'Delete', 'Delete' -Data @{ Answers = @() }
+            $existing = & $script:Module { $script:StubData }
+            $existing.Verdicts = 0
+            $existing.Verdict = $Verdict
+            Set-ModuleStub -Stub @{
+                'Get-SPSLifecycleActVerdict' = @'
+param($Row, $Session, $Setting, $LockDateIndex, $ExclusionIndex, $HomeSiteUrl, $Now)
+$script:StubData.Verdicts++
+if ($script:StubData.Verdicts -eq 1) { return [PSCustomObject]@{ Verdict = 'SKIP-LOCK-STATE'; ReadError = ''; Site = $null; GroupState = ''; LockedOn = $null } }
+[PSCustomObject]@{ Verdict = $script:StubData.Verdict; ReadError = ''; Site = $null; GroupState = ''; LockedOn = $null }
+'@
+            } -Data $existing
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage "*line 3*not one that the Act phase knows*"
+
+            $report = @(Get-ChildItem -LiteralPath $run.Reports -Filter 'act-*.csv')
+            @(Import-Csv -LiteralPath $report[0].FullName) | Should -HaveCount 1
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+        }
+    }
+
     Context 'MaxActions' {
         It 'does the first actions only, and does not even read the rows after them' {
             $run = Start-ActScenario -Decision 'Delete', 'Delete', 'Delete', 'Delete' -ActSettings 'Execute = $true; MaxActions = 2' -Data @{ Answers = @('contoso', 'DELETE 2') }
@@ -522,13 +637,29 @@ Describe 'Invoke-SPSLifecycleAct, with Execute' {
             @(Get-StubLog)[-1] | Should -BeExactly 'close'
         }
 
-        It 'goes on, and says so, when it cannot tell whether Microsoft 365 Archive is on' {
-            $run = Start-ActScenario -Decision 'Archive' -ActSettings 'Execute = $true' -Data @{ Answers = @('contoso', 'ARCHIVE 1'); ArchiveEnabled = $null }
+        It 'stops before the first action when it cannot tell whether Microsoft 365 Archive is on: an archive that fails after an unlock would leave its changes' -ForEach @(
+            @{ Name = 'nothing'; Value = $null }
+            @{ Name = 'a text'; Value = 'True' }
+        ) {
+            $run = Start-ActScenario -Decision 'Delete', 'Archive' -ActSettings 'Execute = $true; UnlockBeforeArchive = $true; GrantSiteAdmin = $true' -Data @{ Answers = @('contoso', 'APPLY 2'); ArchiveEnabled = $Value }
+
+            { Invoke-TestAct -Run $run } | Should -Throw -ExpectedMessage '*could not tell whether Microsoft 365 Archive is on*Nothing was changed*'
+
+            foreach ($pattern in $script:Writes) {
+                Get-Calls -Pattern $pattern | Should -HaveCount 0 -Because $pattern
+            }
+
+            Get-Calls -Pattern 'read *' | Should -HaveCount 0
+            @(Get-StubLog)[-1] | Should -BeExactly 'close'
+        }
+
+        It 'says so, and goes on, in report-only mode, when it cannot tell whether Microsoft 365 Archive is on' {
+            $run = Start-ActScenario -Decision 'Archive' -Data @{ ArchiveEnabled = $null }
 
             $result = Invoke-TestAct -Run $run
 
-            $result.Rows[0].Outcome | Should -BeExactly 'Done'
-            ($result.Text -join "`n") | Should -BeLike '*could not tell whether Microsoft 365 Archive is on*'
+            $result.Rows[0].Outcome | Should -BeExactly 'WouldDo'
+            ($result.Text -join "`n") | Should -BeLike '*could not tell whether Microsoft 365 Archive is on*an Execute run would not start*'
             @($result.Summary.Warnings) | Should -HaveCount 1
         }
 

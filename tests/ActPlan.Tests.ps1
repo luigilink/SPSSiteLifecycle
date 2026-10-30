@@ -96,6 +96,13 @@ Describe 'Get-SPSLifecycleActPlan' {
         $plan.Phrase | Should -BeExactly $Expected
     }
 
+    It 'never gives the phrase of a deletion or of an archive to a run that has no decision: APPLY 0' {
+        $plan = Get-TestPlan -Import (New-PlanImport -Delete 0 -Archive 0 -Lock 0)
+
+        $plan.Phrase | Should -BeExactly 'APPLY 0'
+        $plan.PlannedActions | Should -Be 0
+    }
+
     It 'says whether the Archive options are on' {
         $plan = Get-TestPlan -Setting (New-PlanSetting -UnlockBeforeArchive $true -GrantSiteAdmin $true)
 

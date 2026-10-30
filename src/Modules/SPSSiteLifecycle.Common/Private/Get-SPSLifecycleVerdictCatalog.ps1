@@ -43,7 +43,7 @@
         , @('SKIP-NOT-FOUND', 'Skip', @('Act'), 'The site no longer exists in the tenant.')
         , @('SKIP-SITEID-MISMATCH', 'Skip', @('Act'), 'The URL exists, but with another site ID than in the CSV: the URL was reused by a new site.')
         , @('REVIEW-CONTENT-MODIFIED', 'Review', @('Act'), 'The content of the site changed after the CSV was generated, or the tenant gives no date for it, so a change cannot be ruled out.')
-        , @('REVIEW-RETENTION', 'Review', @('Act'), 'The tenant reports a hold on the site (`HasHolds`). Best effort: a retention policy that the site does not report is not seen, because the tool cannot see every Microsoft Purview policy.')
+        , @('REVIEW-RETENTION', 'Review', @('Act'), 'The tenant reports a hold on the site (`HasHolds`), or does not report the flag at all (a PnP.PowerShell older than 3.4.1), so a hold cannot be ruled out. A retention policy that the site does not report is not seen: the tool cannot see every Microsoft Purview policy.')
     )
 
     foreach ($row in $rows) {

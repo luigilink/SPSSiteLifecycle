@@ -18,9 +18,10 @@
            taken for a state that was not read: the group cannot be confirmed active.
         3. A row that the engine would let through (LOCK, ARCHIVE, DELETE-SITE or DELETE-VIA-GROUP) is then kept back, in this
            order: REVIEW-CONTENT-MODIFIED when the content of the site changed after the report was generated (GeneratedOn), or
-           when its date cannot be read, and REVIEW-RETENTION when the tenant reports a hold on the site. A verdict that
-           already stops the row (a SKIP- or a REVIEW-) is kept: it says more, and the row is not an action either way. A
-           hold that the tenant does not report is not seen: the tool cannot see every Microsoft Purview policy (best effort).
+           when its date cannot be read, and REVIEW-RETENTION when the tenant reports a hold on the site or does not report the
+           flag at all (only a flag that says False lets the row through: an unread safeguard is not a green light). A verdict
+           that already stops the row (a SKIP- or a REVIEW-) is kept: it says more, and the row is not an action either way. A
+           retention policy that the site does not report is not seen: the tool cannot see every Microsoft Purview policy.
 
         A read that fails (throttling, network, access denied) is not a verdict and never leads to an action: the result has the
         message in ReadError and an empty Verdict, which the loop counts for its stop after 3 errors in a row.
@@ -209,7 +210,9 @@
         if ($null -eq $modified -or (ConvertTo-SPSLifecycleUtcDateTime -Value $modified) -gt $generatedOn) {
             $verdict = 'REVIEW-CONTENT-MODIFIED'
         }
-        elseif ($site.HasHolds -eq $true) {
+        elseif ($site.HasHolds -isnot [System.Boolean] -or $site.HasHolds) {
+            # Only a flag that says False lets the row through: a hold that the tenant does not report (an older PnP.PowerShell, a value that is
+            # not a boolean) cannot be ruled out, and an unread safeguard is not a green light.
             $verdict = 'REVIEW-RETENTION'
         }
     }

@@ -13,17 +13,21 @@
           not report in 2 minutes writes no date: the request was sent, and a person checks. A date that cannot be written is an
           error: the site is locked, and the message says that its date is not in the journal.
         - DELETE-SITE (a site without a group): a read-only site refuses a direct deletion, so it is unlocked first (and waited
-          for), then deleted into the recycle bin. When the deletion, or the wait, fails, the site is locked again. An unlocked
-          site is deleted directly.
+          for), then read again, and deleted into the recycle bin only when nothing changed since the verdict (see
+          Get-SPSLifecycleSiteChange: people can write in the site while it is unlocked, and the address may have been reused).
+          When the deletion, the wait or that check fails, the site is locked again, and the tool says it is only when the site
+          reports ReadOnly (see Restore-SPSLifecycleSiteLock); an address that now belongs to another site is not locked.
+          An unlocked site is deleted directly. A run that is interrupted (Ctrl+C) puts the lock back as well.
         - DELETE-VIA-GROUP: the group is deleted by its ID, which deletes the site some time later (from minutes to hours). The
           site is not unlocked.
         - ARCHIVE: the archive is requested (it takes place later). With UnlockBeforeArchive, a read-only site is unlocked first
-          and locked again afterwards (the lab: the lock is accepted on an archived site), and with GrantSiteAdmin the signed-in
-          administrator is added as an administrator of the site collection between the two (a read-only site refuses a change of
-          owners). A site that was not locked is neither unlocked nor locked again.
+          (and read again, as for a deletion) and locked again afterwards, confirmed by what the site reports (the lab: the lock
+          is accepted on an archived site), and with GrantSiteAdmin the signed-in administrator is added as an administrator of
+          the site collection between the two (a read-only site refuses a change of owners). A site that was not locked is
+          neither unlocked nor locked again.
 
         It returns the sentence for the report when everything went as intended, and it throws otherwise, with what failed and
-        what became of the lock of the site ("The site was locked again.", or that it could not be, and to lock it by hand). Any
+        what became of the lock of the site ("The site was locked again.", or that it could not be confirmed, and to lock it by hand). Any
         verdict that is not one of the four actions, a site without an address or an ID, and a lock state that is not
         what the action takes (ReadOnly or Unlock, only Unlock for LOCK) are refused before the tenant is called.
 
@@ -108,7 +112,7 @@
         throw "The lock state of the site is '$(ConvertTo-SPSLifecycleVisibleText -Text $lockState)': only an unlocked site is locked."
     }
 
-    if ($action -ne 'LOCK' -and $action -ne 'DELETE-VIA-GROUP' -and -not ($isReadOnly -or $isUnlocked)) {
+    if ($action -ne 'LOCK' -and -not ($isReadOnly -or $isUnlocked)) {
         throw "The lock state of the site is '$(ConvertTo-SPSLifecycleVisibleText -Text $lockState)', not ReadOnly or Unlock: the tool changes only a site that is in one of the two."
     }
 
@@ -127,31 +131,28 @@
         throw 'GrantSiteAdmin is on, but the account that signed in is not known, so it cannot be added to the administrators of the site collection: nothing was changed.'
     }
 
-    # The lock of a site that this function unlocked: put back when what follows fails, and said so in the message.
-    $relock = {
-        param([System.String]$Failure)
-
-        try {
-            Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State ReadOnly
-            "$Failure The site was locked again."
-        }
-        catch {
-            "$Failure The site could not be locked again: $($_.Exception.Message.Trim().TrimEnd('.')). Lock it by hand."
-        }
-    }
     $unlock = {
         Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State Unlock
     }
+
+    # The site is read again once it is unlocked: for up to 2 minutes people can write in it, and the address may have been reused. Nothing
+    # that the verdict was given from may have changed, or nothing is done.
     $waitForUnlock = {
-        if (-not (Wait-SPSLifecycleLockState -Session $Session -Url $url -State Unlock)) {
+        $after = Wait-SPSLifecycleLockState -Session $Session -Url $url -State Unlock -SiteId $siteId
+        if ($null -eq $after) {
             throw 'The site did not report Unlock within 2 minutes.'
+        }
+
+        $change = Get-SPSLifecycleSiteChange -Before $Site -After $after -CheckSize:($action -eq 'DELETE-SITE') -DeleteMaxSizeGB ([System.Double]$Setting.DeleteMaxSizeGB)
+        if ($change) {
+            throw "The site changed while it was unlocked ($change), so it was not touched."
         }
     }
 
     switch ($action) {
         'LOCK' {
             Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State ReadOnly
-            if (-not (Wait-SPSLifecycleLockState -Session $Session -Url $url -State ReadOnly)) {
+            if ($null -eq (Wait-SPSLifecycleLockState -Session $Session -Url $url -State ReadOnly -SiteId $siteId)) {
                 throw 'The site did not report ReadOnly within 2 minutes. The lock request was sent and may still be applied: check the site, and add its date to a lock date list if it is read-only.'
             }
 
@@ -167,22 +168,39 @@
 
         'DELETE-SITE' {
             $unlocked = $false
+            $lockBackTried = $false
+            $deleted = $false
             try {
-                if ($isReadOnly) {
-                    & $unlock
-                    $unlocked = $true
-                    & $waitForUnlock
-                }
+                try {
+                    if ($isReadOnly) {
+                        & $unlock
+                        $unlocked = $true
+                        & $waitForUnlock
+                    }
 
-                Remove-SPSLifecycleSite -Session $Session -Url $url
+                    Remove-SPSLifecycleSite -Session $Session -Url $url
+                    $deleted = $true
+                }
+                catch {
+                    $message = $_.Exception.Message.Trim()
+                    if ($unlocked) {
+                        $lockBackTried = $true
+                        throw "$message $((Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId).Note)"
+                    }
+
+                    throw
+                }
             }
-            catch {
-                $message = $_.Exception.Message.Trim()
-                if ($unlocked) {
-                    throw (& $relock $message)
+            finally {
+                # Ctrl+C is not caught by the catch above, and it would leave the site unlocked: the lock is put back as well as it can be.
+                if ($unlocked -and -not $lockBackTried -and -not $deleted) {
+                    try {
+                        Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State ReadOnly
+                    }
+                    catch {
+                        $null = $_
+                    }
                 }
-
-                throw
             }
 
             'The site was deleted: it is in the recycle bin of the deleted sites.'
@@ -195,36 +213,51 @@
 
         'ARCHIVE' {
             $unlocked = $false
+            $lockBackTried = $false
             try {
-                if ($unlockBeforeArchive -and $isReadOnly) {
-                    & $unlock
-                    $unlocked = $true
-                    & $waitForUnlock
+                try {
+                    if ($unlockBeforeArchive -and $isReadOnly) {
+                        & $unlock
+                        $unlocked = $true
+                        & $waitForUnlock
+                    }
+
+                    if ($grantSiteAdmin) {
+                        Add-SPSLifecycleSiteAdmin -Session $Session -Url $url -Account $account
+                    }
+
+                    Request-SPSLifecycleSiteArchive -Session $Session -Url $url
+                }
+                catch {
+                    $message = $_.Exception.Message.Trim()
+                    if ($unlocked) {
+                        $lockBackTried = $true
+                        throw "$message $((Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId).Note)"
+                    }
+
+                    throw
                 }
 
-                if ($grantSiteAdmin) {
-                    Add-SPSLifecycleSiteAdmin -Session $Session -Url $url -Account $account
-                }
-
-                Request-SPSLifecycleSiteArchive -Session $Session -Url $url
-            }
-            catch {
-                $message = $_.Exception.Message.Trim()
                 if ($unlocked) {
-                    throw (& $relock $message)
+                    $lockBackTried = $true
+                    $back = Restore-SPSLifecycleSiteLock -Session $Session -Url $url -SiteId $siteId
+                    if (-not $back.Locked) {
+                        throw "The archive was requested. $($back.Note)"
+                    }
                 }
-
-                throw
+            }
+            finally {
+                if ($unlocked -and -not $lockBackTried) {
+                    try {
+                        Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State ReadOnly
+                    }
+                    catch {
+                        $null = $_
+                    }
+                }
             }
 
             if ($unlocked) {
-                try {
-                    Set-SPSLifecycleSiteLockState -Session $Session -Url $url -State ReadOnly
-                }
-                catch {
-                    throw "The archive was requested, but the site could not be locked again: $($_.Exception.Message.Trim().TrimEnd('.')). Lock it by hand."
-                }
-
                 'The archive was requested: it takes place later. The site is locked again.'
             }
             else {

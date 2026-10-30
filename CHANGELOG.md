@@ -181,7 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address, with whether it has a hold) and `Get-SPSLifecycleGroupState` (`None`, `Active`, `SoftDeleted` or `NotFound`, by the ID as a
   GUID). A site that is gone is `SKIP-NOT-FOUND`, an address that now belongs to another site is `SKIP-SITEID-MISMATCH`, and a site
   that the engine would let through is kept back as `REVIEW-CONTENT-MODIFIED` (changed after the report, or no date) or
-  `REVIEW-RETENTION` (a hold). The decision of the person is the action of the engine and never lifts a gate. The group is read only
+  `REVIEW-RETENTION` (a hold, or no hold flag at all: only a flag that says `False` lets a row through). The decision of the
+  person is the action of the engine and never lifts a gate. The group is read only
   when the site has one and every gate before it has been passed. A read that fails is an error, never a verdict, so that it can never
   lead to an action, and only the messages that the tenant gives for a thing that does not exist are read as "not there". The lab
   has not checked these messages, nor `HasHolds`, nor the effect of a lock on the content date (#15).
@@ -194,6 +195,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again right before its action. The Act report `act-<time>.csv` has a row for each decision, written to the disk as it is made.
   The actions follow the lab (27 and 28 October): a read-only site is unlocked, deleted into the recycle bin and locked again when
   that fails; a site with a group is deleted through its group; a lock writes its date in the lock journal; an archive can unlock
-  the site first and lock it again afterwards, and add the administrator who signed in. Every adapter that changes the tenant checks
-  its target again (the tenant of the session, the host of the address, no OneDrive, no root site, a group by its ID), and a structure
-  test checks that each one does. None of these calls has run against a tenant yet.
+  the site first and lock it again afterwards, and add the administrator who signed in. A site that was unlocked is read again, and
+  nothing is done if it changed meanwhile (the site ID, a hold, the content, the size of a deletion); a lock is said to be put back only
+  when the site reports it, an address that another site took is left alone, and an interrupted run puts the lock back too. Execute
+  needs Microsoft 365 Archive to be on for sure before an archive. Every adapter that changes the tenant checks its target again (the
+  tenant of the session, the host of the address, no OneDrive, no root site, no encoded slash, a group by its ID), and a structure test
+  checks that each one does. None of these calls has run against a tenant yet.
