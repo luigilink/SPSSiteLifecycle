@@ -24,7 +24,7 @@ In this order, and the tenant is changed only at the end:
 3. **A person types the name of the tenant.** The script stops when the input is redirected, because a confirmation that a script gave is not a person's. For a certificate, the password of the private key is typed too, twice (12 characters or more), as a `SecureString`: it is never shown, never on a command line, never written in a file or in the output.
 4. **PnP.PowerShell registers the app:** it signs in (a browser window, or a device code with `-DeviceLogin`), stops if an app of that name already exists, creates the app with its permissions, and runs the consent. The script does not look for an existing app itself, because the cmdlet does, and nothing can be read in the tenant before the first app exists.
 5. **It restricts the key to your account,** even when the run is interrupted, and tells what may be left in the tenant. When no app was created (the name is taken, your account is not allowed to) it removes the files that the cmdlet wrote; in every other failure it keeps them, because the key may be the one of an app that exists.
-6. **It shows what to put in the settings file** (`TenantName`, `ClientId`), the thumbprint and the date the certificate ends. No secret is written in the settings or in the repository: the repository ignores `*.pfx`, `*.cer`, `*.pem`, `*.key` and `*.p12`, in case one lands there anyway.
+6. **It shows what to put in the settings file** (`TenantName`, `ClientId`, and for a certificate `Authentication`, `TenantId` and the certificate), the thumbprint and the date the certificate ends. No secret is written in the settings or in the repository: the repository ignores `*.pfx`, `*.cer`, `*.pem`, `*.key` and `*.p12`, in case one lands there anyway.
 
 The script exits with `0` when the app was registered, and with `1` on any error, after a message that says what was and was not created and what to do next.
 
@@ -33,7 +33,7 @@ The script exits with `0` when the app was registered, and with `1` on any error
 | Kind | Who signs in | Certificate | Permissions | Use |
 |------|--------------|-------------|-------------|-----|
 | `Interactive` (the default) | A person, in a browser window | None | Delegated | What the tool uses today: put the `ClientId` in the settings file. The account that signs in has to be a SharePoint administrator. |
-| `Certificate` | The app itself, with no person | Self-signed, 2 years by default (1 to 30 with `-ValidYears`) | Application | The preparation of a run that nobody watches. The sign-in of the tool with the certificate is not available yet. |
+| `Certificate` | The app itself, with no person | Self-signed, 2 years by default (1 to 30 with `-ValidYears`) | Application | A run that nobody watches (a scheduled task, a server): `Authentication = 'Certificate'` in the settings, see below. |
 
 ## Permissions
 
@@ -61,6 +61,25 @@ When the consent cannot be given, the app is created all the same. Ask an admini
 - **Files:** `<name>.pfx` (the private key, protected by the password) and `<name>.cer` (the certificate, public), in a folder outside the repository that only your account can read: the mode `700` and `600` on macOS and Linux, and an access control list on Windows. The default folder is `.spssitelifecycle` in your profile. Keep it out of a synchronized folder.
 - **The Windows store:** with `-UseCertificateStore` (Windows only) the certificate is also added to your `CurrentUser` store after the registration, to be used by its thumbprint. macOS and Linux have no store and use the `.pfx` file.
 - **A key that is lost cannot be given back.** Keep the `.pfx` and its password in a safe place.
+
+## Sign in with the certificate
+
+The app of the `Certificate` kind signs in alone, so that a run can go on with nobody there. Put the lines that the script shows in the settings file (see the [Configuration](Configuration) page):
+
+```powershell
+@{
+    TenantName     = 'contoso'
+    ClientId       = '<the Application (client) ID of the app>'
+    Authentication = 'Certificate'
+    TenantId       = '<the ID of your Microsoft Entra tenant>'
+    CertificatePath = 'C:\Keys\SPSSiteLifecycle.pfx'                         # or CertificateThumbprint = '...' (Windows store)
+    CertificatePasswordVariable = 'SPSSITELIFECYCLE_PFX_PASSWORD'           # the name of an environment variable
+}
+```
+
+- **A password never goes in the settings file.** A key such as `CertificatePassword` is refused. The password of the `.pfx` file is read from the environment variable that `CertificatePasswordVariable` names (set it in the account that runs the task); a variable that is not set stops the run. Without `CertificatePasswordVariable` the tool asks for the password, typed and never shown, which a run that nobody watches cannot answer. A certificate of the Windows store has no password.
+- **The certificate is checked before the sign-in.** The run stops when it has expired, is not valid yet, or has no private key (a `.cer` file is not enough), and warns when it ends in less than 30 days. Renew it as described below.
+- **What does not change.** The refused tenants are refused, and the Act phase with `Execute` still needs a person to type its confirmation: an unattended run is a Scan, or an Act in report-only mode.
 
 ## Without the script
 

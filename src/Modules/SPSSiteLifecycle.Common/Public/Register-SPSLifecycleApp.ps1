@@ -24,8 +24,11 @@
            created, the files and the certificate are checked, the certificate may be added to the CurrentUser store (Windows), and the
            lines to paste in the settings file are shown.
 
-        The password is never shown, logged or returned. It returns the result: TenantName, ApplicationName, Kind, ClientId, and for the
-        Certificate kind Thumbprint, ExpiresOn, PfxPath, CerPath, KeyProtected and StoredInCertificateStore.
+        The password is never shown, logged or returned. For the Certificate kind the ID of the tenant is read from the public
+        OpenID configuration of its domain (see Get-SPSLifecycleTenantId), because the certificate sign-in of the tool asks for it
+        (TenantId): when it cannot be read this is a warning, and the lines for the settings file say where to find it. It returns
+        the result: TenantName, ApplicationName, Kind, ClientId, and for the Certificate kind TenantId, Thumbprint, ExpiresOn,
+        PfxPath, CerPath, KeyProtected and StoredInCertificateStore.
 
         .PARAMETER TenantName
         The name of the tenant (contoso for contoso.sharepoint.com).
@@ -195,6 +198,7 @@
     $expires = $null
     $keyProtected = $false
     $stored = $false
+    $tenantId = ''
     if ($isCertificate) {
         foreach ($file in $pfx, $cer) {
             if (-not (Test-Path -LiteralPath $file)) {
@@ -209,6 +213,13 @@
 
         $expires = if ($null -ne $info) { $info.NotAfter } else { $plan.Certificate.ExpiresOn }
         $keyProtected = Protect-SPSLifecyclePrivateKey -Path $pfx
+        try {
+            $tenantId = Get-SPSLifecycleTenantId -TenantDomain $plan.TenantDomain
+        }
+        catch {
+            Write-Warning -Message "The ID of the tenant could not be read ($($_.Exception.Message.Trim().TrimEnd('.'))): read it on the Overview page of the Microsoft Entra admin center, and put it in TenantId of the settings file."
+        }
+
         if ($plan.Certificate.Store -eq 'CurrentUser') {
             try {
                 $null = Add-SPSLifecycleCertificateToStore -Path $pfx -Password $password
@@ -225,6 +236,7 @@
         ApplicationName          = $plan.ApplicationName
         Kind                     = $plan.Kind
         ClientId                 = $record.ClientId
+        TenantId                 = $tenantId
         Thumbprint               = $record.Thumbprint
         ExpiresOn                = $expires
         PfxPath                  = $pfx

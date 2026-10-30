@@ -144,9 +144,10 @@ Describe 'Format-SPSLifecycleAppResult' {
 
             $plan = New-AppPlan -Kind $Kind
             $values = [ordered]@{
-                ClientId = '4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a'; Thumbprint = ''; ExpiresOn = $null; PfxPath = ''; CerPath = ''; KeyProtected = $false; StoredInCertificateStore = $false
+                ClientId = '4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a'; TenantId = ''; Thumbprint = ''; ExpiresOn = $null; PfxPath = ''; CerPath = ''; KeyProtected = $false; StoredInCertificateStore = $false
             }
             if ($Kind -eq 'Certificate') {
+                $values['TenantId'] = '8f3d2c1b-4a5e-4f60-9b7a-0c1d2e3f4a5b'
                 $values['Thumbprint'] = '0123456789ABCDEF0123456789ABCDEF01234567'
                 $values['ExpiresOn'] = [System.DateTime]::new(2028, 10, 30, 0, 0, 0, [System.DateTimeKind]::Utc)
                 $values['PfxPath'] = '/keys/spslc/SPSSiteLifecycle.pfx'
@@ -174,8 +175,37 @@ Describe 'Format-SPSLifecycleAppResult' {
         $text | Should -BeLike '*thumbprint 0123456789ABCDEF0123456789ABCDEF01234567, and it ends on 2028-10-30: add a new certificate to the app before then*'
         $text | Should -BeLike '*Private key (.pfx): /keys/spslc/SPSSiteLifecycle.pfx*Public key (.cer):  /keys/spslc/SPSSiteLifecycle.cer*'
         $text | Should -BeLike '*can be read by your account only*safe place*'
-        $text | Should -BeLike "*ClientId   = '4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a'*"
-        $text | Should -BeLike '*sign-in of the tool with this certificate is not available in this version*'
+        $text | Should -BeLike "*ClientId       = '4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a'*"
+        $text | Should -Not -BeLike '*not available in this version*'
+    }
+
+    It 'gives the settings of the certificate sign-in for the file: the way, the tenant, the file, and the variable that may hold its password' {
+        $lines = Format-Result -Kind Certificate
+
+        $lines | Should -Contain "    Authentication = 'Certificate'"
+        $lines | Should -Contain "    TenantId       = '8f3d2c1b-4a5e-4f60-9b7a-0c1d2e3f4a5b'"
+        $lines | Should -Contain "    CertificatePath = '/keys/spslc/SPSSiteLifecycle.pfx'"
+        @($lines | Where-Object { $_ -like '*CertificateThumbprint*' }) | Should -HaveCount 0
+        ($lines -join "`n") | Should -BeLike '*# CertificatePasswordVariable = ''SPSSITELIFECYCLE_PFX_PASSWORD''*asks for it*'
+    }
+
+    It 'gives the thumbprint, and not the file, when the certificate is in the store, and no password variable' {
+        $lines = Format-Result -Kind Certificate -Override @{ StoredInCertificateStore = $true }
+
+        $lines | Should -Contain "    CertificateThumbprint = '0123456789ABCDEF0123456789ABCDEF01234567'"
+        @($lines | Where-Object { $_ -like '*CertificatePath = *' -or $_ -like '*CertificatePasswordVariable*' }) | Should -HaveCount 0
+    }
+
+    It 'says where to find the ID of the tenant when it could not be read, and does not make one up' {
+        $lines = Format-Result -Kind Certificate -Override @{ TenantId = '' }
+
+        ($lines -join "`n") | Should -BeLike "*TenantId       = '<the Tenant ID of the Overview page of the Microsoft Entra admin center>'*"
+        @($lines | Where-Object { $_ -match '[0-9a-f]{8}-[0-9a-f]{4}-' -and $_ -like '*TenantId*' }) | Should -HaveCount 0
+    }
+
+    It 'gives no certificate setting for an app that a person signs in with' {
+        ((Format-Result -Kind Interactive) -join "`n") | Should -Not -BeLike '*Certificate*'
+        ((Format-Result -Kind Interactive) -join "`n") | Should -Not -BeLike '*TenantId*'
     }
 
     It 'says that the key could not be restricted, and to do it by hand, when it could not' {

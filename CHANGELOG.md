@@ -222,3 +222,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows the lines for the settings file. The permissions are a table of data with a reason for each, and the generated App-Registration
   page of the wiki says what the script does and how to do the same by hand. `.gitignore` keeps `*.pfx`, `*.cer`, `*.pem`, `*.key` and
   `*.p12` out of a commit. Nothing of it has run against a tenant yet.
+- Sign-in: the tool can sign in with a certificate, for a run that nobody watches (#9). `Authentication` (`Interactive`, the default, or
+  `Certificate`), `TenantId`, `CertificateThumbprint` (a certificate of the Windows store) or `CertificatePath` (a `.pfx` file), exactly
+  one of them, and `CertificatePasswordVariable` (the name of an environment variable) are settings of the schema, with their checks, the
+  example file and the Configuration page. A password never goes in the settings file: a key such as `CertificatePassword` or
+  `ClientSecret` is refused, with why and what to use instead, and with no word of its value. The password of the file comes from the
+  variable (one that is not set stops the run) or is typed, and never appears in a message. The arguments of `Connect-PnPOnline` are built
+  by a pure function. The certificate is read before the sign-in: the run stops on one that has expired, is not valid yet or has no
+  private key, and warns when one ends in less than 30 days. The setup script reads the tenant ID for a certificate app from the public
+  OpenID configuration of its domain, and shows the whole set of lines for the settings file. The Act phase with `Execute` still needs a
+  person to type its confirmation. Nothing of it has run against a tenant yet.

@@ -33,7 +33,7 @@ The inactive site policy of Microsoft 365 can make inactive sites read-only, the
 
 - **PowerShell 7.4 or later** (PnP.PowerShell 3.x does not run on Windows PowerShell 5.1).
 - **PnP.PowerShell 3.x.**
-- **A Microsoft Entra app registration** for the sign-in, as PnP.PowerShell requires your own app. The script `src/Register-SPSSiteLifecycleApp.ps1` makes it in one guided run (see below and the [App registration](https://github.com/luigilink/SPSSiteLifecycle/wiki/App-Registration) page).
+- **A Microsoft Entra app registration** for the sign-in, as PnP.PowerShell requires your own app. The script `src/Register-SPSSiteLifecycleApp.ps1` makes it in one guided run (see below and the [App registration](https://github.com/luigilink/SPSSiteLifecycle/wiki/App-Registration) page). A person signs in by default; a run that nobody watches signs in with a certificate (`Authentication = 'Certificate'` in the settings).
 - **SharePoint Administrator** on the tenant, plus **Groups Administrator** to delete Microsoft 365 groups. Archiving also needs Microsoft 365 Archive turned on (pay-as-you-go billing) and a site collection admin role on each archived site.
 
 ## Usage

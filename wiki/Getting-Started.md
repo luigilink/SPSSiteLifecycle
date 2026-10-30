@@ -30,6 +30,14 @@
 
 The Scan only reads: nothing is changed in the tenant, and a run that stops half-way leaves no report. The exit code is `0` when the run ended and `1` on any error, after a message that says what stopped it.
 
+## Run without a person
+
+A Scan on a very large tenant runs for a long time, and a scheduled task has no one to sign in. Register an app of the `Certificate` kind (`pwsh ./src/Register-SPSSiteLifecycleApp.ps1 -TenantName contoso -Kind Certificate`, see the [App registration](App-Registration) page) and put the lines that the script shows in the settings file: `Authentication = 'Certificate'`, `TenantId`, and `CertificateThumbprint` (a certificate of the Windows store) or `CertificatePath` (a `.pfx` file, on any platform).
+
+* **The password of the `.pfx` file never goes in the settings file.** Name an environment variable in `CertificatePasswordVariable` and set it in the account that runs the task. Without it the tool asks for the password, which nobody can answer.
+* The tool reads the certificate before it signs in: it stops on one that has expired or has no private key, and warns 30 days before one ends.
+* The Act phase with `Execute` still needs a person to type its confirmation. An unattended run is a Scan, or an Act that only says what it would do.
+
 ## Between the two phases
 
 The tool never decides in your place. Open the report (`sites-<time>.csv`) in a spreadsheet, filter it (the `Verdict` and `SuggestedAction` columns help), write `Delete`, `Archive` or `Lock` in the `Decision` column of the sites that you want to act on, and save the file as CSV (UTF-8 or the CSV that your Excel saves: the semicolon of a French Excel is read). An empty `Decision` leaves the site untouched, and any other word stops the tool before the first action. Put the path of the file in `Act.InputFile` of the settings. The file must not be older than `Act.MaxCsvAgeDays` (30 days by default): a site can change in the meantime, and the tool reads each site again anyway.

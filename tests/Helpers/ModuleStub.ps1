@@ -7,7 +7,7 @@
 # test that needs one replaces it with Set-ModuleStub. A stub is defined with the scope modifier script: and is checked
 # before the test goes on, because a function that is defined without it lives in a scope that ends with the script block
 # that defined it, and the real command is then called.
-$script:TenantReadCommand = @('Connect-PnPOnline', 'Get-PnPContext', 'Invoke-PnPQuery', 'Get-PnPTenantSite', 'Get-PnPHomeSite', 'Get-PnPMicrosoft365Group', 'Get-PnPDeletedMicrosoft365Group', 'Get-PnPTenant', 'Get-PnPAccessToken', 'Disconnect-PnPOnline')
+$script:TenantReadCommand = @('Invoke-RestMethod', 'Connect-PnPOnline', 'Get-PnPContext', 'Invoke-PnPQuery', 'Get-PnPTenantSite', 'Get-PnPHomeSite', 'Get-PnPMicrosoft365Group', 'Get-PnPDeletedMicrosoft365Group', 'Get-PnPTenant', 'Get-PnPAccessToken', 'Disconnect-PnPOnline')
 
 # The commands that change a tenant. The Scan reads and never writes, and a test of the Scan stops when one of these is called.
 $script:TenantWriteCommand = @('Set-PnPTenantSite', 'Remove-PnPTenantSite', 'Remove-PnPMicrosoft365Group', 'Set-PnPSiteArchiveState', 'Add-PnPSiteCollectionAdmin', 'Register-PnPEntraIDApp', 'Register-PnPEntraIDAppForInteractiveLogin')

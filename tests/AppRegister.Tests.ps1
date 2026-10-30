@@ -6,6 +6,7 @@
     $script:ClientId = '4d3c2b1a-0f9e-4d8c-8b7a-6f5e4d3c2b1a'
     $script:Thumbprint = '0123456789ABCDEF0123456789ABCDEF01234567'
     $script:Password = 'Correct-Horse-Battery-1'
+    $script:TenantId = '8f3d2c1b-4a5e-4f60-9b7a-0c1d2e3f4a5b'
 
     . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/ModuleStub.ps1')
     . (Join-Path -Path $PSScriptRoot -ChildPath 'Helpers/Signal.ps1')
@@ -18,7 +19,7 @@
         $values = @{
             Redirected = $false; Answers = @('contoso'); AnswerIndex = 0; PnPMissing = $false; PasswordFails = ''; Windows = $false
             Record = [PSCustomObject]@{ ClientId = $script:ClientId; Thumbprint = $script:Thumbprint }
-            Fail = ''; WriteFiles = $true; Protect = $true; StoreFails = ''
+            Fail = ''; WriteFiles = $true; Protect = $true; StoreFails = ''; TenantId = $script:TenantId; TenantIdFails = ''
             Info = [PSCustomObject]@{ Thumbprint = $script:Thumbprint; NotAfter = [System.DateTime]::new(2028, 10, 29, 22, 0, 0, [System.DateTimeKind]::Utc) }
             Password = $script:Password
         }
@@ -78,6 +79,12 @@ if ($script:StubData.StoreFails) { throw $script:StubData.StoreFails }
 '@
             'Test-SPSLifecycleWindowsPlatform'     = @'
 $script:StubData.Windows
+'@
+            'Get-SPSLifecycleTenantId'             = @'
+param($TenantDomain)
+$script:StubLog.Add("tenant id $TenantDomain")
+if ($script:StubData.TenantIdFails) { throw $script:StubData.TenantIdFails }
+$script:StubData.TenantId
 '@
         } -Data $values
 
@@ -308,7 +315,7 @@ Describe 'Register-SPSLifecycleApp: an app that a person signs in with' {
 
         $run.Error | Should -BeNullOrEmpty
         $run.Log | Should -Be @('pnp check', 'redirected?', 'ask: Type the name of the tenant to register the app in it', 'register Interactive contoso.onmicrosoft.com SPSSiteLifecycle password=False folder=False')
-        @($run.Result.PSObject.Properties.Name) | Should -Be @('TenantName', 'ApplicationName', 'Kind', 'ClientId', 'Thumbprint', 'ExpiresOn', 'PfxPath', 'CerPath', 'KeyProtected', 'StoredInCertificateStore')
+        @($run.Result.PSObject.Properties.Name) | Should -Be @('TenantName', 'ApplicationName', 'Kind', 'ClientId', 'TenantId', 'Thumbprint', 'ExpiresOn', 'PfxPath', 'CerPath', 'KeyProtected', 'StoredInCertificateStore')
         $run.Result.ClientId | Should -BeExactly $script:ClientId
         $run.Result.Kind | Should -BeExactly 'Interactive'
         $run.Result.PfxPath | Should -BeExactly ''
@@ -316,12 +323,13 @@ Describe 'Register-SPSLifecycleApp: an app that a person signs in with' {
         $run.Info | Should -Contain "    ClientId   = '$script:ClientId'"
     }
 
-    It 'asks for no password, makes no folder and protects no key' {
+    It 'asks for no password, makes no folder, protects no key, and does not look for the ID of the tenant: a person signs in, in the tenant of the domain' {
         Set-RegisterStub
 
         $run = Invoke-TestRegister -Parameter @{}
 
-        @($run.Log | Where-Object { $_ -like 'password*' -or $_ -like 'protect*' -or $_ -like 'store*' -or $_ -like 'read *' }) | Should -HaveCount 0
+        @($run.Log | Where-Object { $_ -like 'password*' -or $_ -like 'protect*' -or $_ -like 'store*' -or $_ -like 'read *' -or $_ -like 'tenant id*' }) | Should -HaveCount 0
+        $run.Result.TenantId | Should -BeExactly ''
     }
 
     It 'goes through the name that is given, and the device code when it is asked for' {
@@ -372,6 +380,7 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
             'protect SPSSiteLifecycle.pfx'
             'read SPSSiteLifecycle.cer'
             'protect SPSSiteLifecycle.pfx'
+            'tenant id contoso.onmicrosoft.com'
         )
         $run.Result.Thumbprint | Should -BeExactly $script:Thumbprint
         $run.Result.PfxPath | Should -BeExactly (Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx')
@@ -381,6 +390,38 @@ Describe 'Register-SPSLifecycleApp: an app that signs in alone, with a certifica
         $run.Result.StoredInCertificateStore | Should -BeFalse
         ($run.Info -join "`n") | Should -BeLike "*thumbprint $script:Thumbprint, and it ends on 2028-10-29*"
         ($run.Info -join "`n") | Should -BeLike '*can be read by your account only*'
+    }
+
+    It 'reads the ID of the tenant, which the settings of the certificate sign-in ask for, and says it' {
+        Set-RegisterStub
+        $folder = New-KeyFolder
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = $folder }
+
+        $run.Result.TenantId | Should -BeExactly $script:TenantId
+        $run.Info | Should -Contain "    TenantId       = '$script:TenantId'"
+        $run.Info | Should -Contain "    Authentication = 'Certificate'"
+        $run.Info | Should -Contain "    CertificatePath = '$(Join-Path -Path $folder -ChildPath 'SPSSiteLifecycle.pfx')'"
+    }
+
+    It 'warns, and goes on, when the ID of the tenant cannot be read: it is on the Overview page of the Microsoft Entra admin center' {
+        Set-RegisterStub -Data @{ TenantIdFails = 'The remote name could not be resolved.' }
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder) }
+
+        $run.Error | Should -BeNullOrEmpty
+        $run.Result.TenantId | Should -BeExactly ''
+        ($run.Warnings -join ' ') | Should -BeLike '*ID of the tenant could not be read (The remote name could not be resolved)*Overview page*TenantId*'
+        ($run.Info -join "`n") | Should -BeLike '*TenantId       = ''<the Tenant ID of the Overview page*'
+    }
+
+    It 'says to use the thumbprint, and not the file, when the certificate is in the store' {
+        Set-RegisterStub -Data @{ Windows = $true }
+
+        $run = Invoke-TestRegister -Parameter @{ Kind = 'Certificate'; OutputFolder = (New-KeyFolder); UseCertificateStore = $true }
+
+        $run.Info | Should -Contain "    CertificateThumbprint = '$script:Thumbprint'"
+        @($run.Info | Where-Object { $_ -like '*CertificatePath = *' }) | Should -HaveCount 0
     }
 
     It 'makes a folder that only the user can read, before the key is written in it' -Skip:($IsWindows) {
