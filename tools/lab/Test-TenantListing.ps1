@@ -10,7 +10,8 @@
     or a difference to look at, INFO is worth knowing.
 
     The script exists to check on a real tenant what the tests cannot: the paged call of the SharePoint admin API, the way
-    its records are read, and the resume of a listing. Use a lab or demonstration tenant of a few thousand sites, with a
+    its records are read, the resume of a listing, and the read of the home site (Get-PnPHomeSite, which the Scan protects;
+    the report says whether the tenant has one, never its address). Use a lab or demonstration tenant of a few thousand sites, with a
     SharePoint administrator account. Three runs answer the questions of the listing:
 
     1. A run with no switch lists the whole tenant. Compare the number of sites with the one that you know (ExpectedSites),
@@ -1191,6 +1192,13 @@ if ($summary.Source -eq 'Csom') {
 else {
     $why = if ($safeSummary.FallbackReason) { $safeSummary.FallbackReason } else { 'It was asked for.' }
     Add-LabCheck -Name 'source' -Status INFO -Detail "Get-PnPTenantSite was used. $why"
+}
+
+if ($summary.HomeSiteUrl) {
+    Add-LabCheck -Name 'home-site' -Status PASS -Detail 'The home site was read: the tenant has one, and its address is not shown.'
+}
+else {
+    Add-LabCheck -Name 'home-site' -Status INFO -Detail 'The home site was read: the tenant has none.'
 }
 
 if ($summary.Resumed) {

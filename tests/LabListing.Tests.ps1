@@ -167,6 +167,11 @@ $script:StubLog.Add('open')
 if ($script:StubData.OpenError) { throw $script:StubData.OpenError }
 [PSCustomObject]@{ Connection = 'a connection'; TenantName = 'contoso' }
 '@
+            'Get-SPSLifecycleHomeSiteUrl'     = @'
+param($Session)
+if ($script:StubData.HomeSiteError) { throw $script:StubData.HomeSiteError }
+if ($null -eq $script:StubData.HomeSite) { 'https://contoso.sharepoint.com/sites/SyntheticHomeBoard' } else { "$($script:StubData.HomeSite)" }
+'@
             'Close-SPSLifecycleTenantSession' = @'
 param($Session)
 $script:StubLog.Add('close')
@@ -633,11 +638,32 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
             $run = Invoke-Lab
 
             @($run.Report.Checks | ForEach-Object { "$($_.Status) $($_.Name)" }) | Should -Be @(
-                'PASS listing-ended', 'PASS source', 'INFO resume', 'PASS listing-warnings', 'PASS unique-site-ids', 'PASS records-are-complete',
+                'PASS listing-ended', 'PASS source', 'PASS home-site', 'INFO resume', 'PASS listing-warnings', 'PASS unique-site-ids', 'PASS records-are-complete',
                 'PASS no-onedrive-site', 'PASS sizes', 'PASS group-sites-have-a-group', 'PASS dates')
             (Get-LabCheck -Report $run.Report -Name 'unique-site-ids').Detail | Should -BeExactly '5 different site IDs for 5 sites.'
             (Get-LabCheck -Report $run.Report -Name 'records-are-complete').Detail | Should -BeExactly 'Every site has a site ID, an https address, a template and a lock state.'
-            $run.Text | Should -Contain '  9 PASS, 0 FAIL, 1 INFO.'
+            $run.Text | Should -Contain '  10 PASS, 0 FAIL, 1 INFO.'
+        }
+
+        It 'says that the home site was read, since the Scan protects it, and never shows its address' {
+            $null = Set-LabPages
+
+            $run = Invoke-Lab
+
+            (Get-LabCheck -Report $run.Report -Name 'home-site').Status | Should -BeExactly 'PASS'
+            (Get-LabCheck -Report $run.Report -Name 'home-site').Detail | Should -BeExactly 'The home site was read: the tenant has one, and its address is not shown.'
+            Get-LabEverything -Run $run | Should -Not -BeLike '*SyntheticHomeBoard*'
+        }
+
+        It 'says that the tenant has no home site, as information and not as a failure' {
+            $null = Set-LabPages
+            & $script:Module { $script:StubData.HomeSite = '' }
+
+            $run = Invoke-Lab
+
+            (Get-LabCheck -Report $run.Report -Name 'home-site').Status | Should -BeExactly 'INFO'
+            (Get-LabCheck -Report $run.Report -Name 'home-site').Detail | Should -BeExactly 'The home site was read: the tenant has none.'
+            @($run.Report.Checks | Where-Object Status -eq 'FAIL') | Should -HaveCount 0
         }
 
         It 'takes up a checkpoint that holds every page, reads no page from the tenant, and still reports' {

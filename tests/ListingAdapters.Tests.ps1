@@ -162,7 +162,13 @@ Describe 'The tests of the adapters cannot reach a tenant' {
         @{ Name = 'Get-PnPContext' }
         @{ Name = 'Invoke-PnPQuery' }
         @{ Name = 'Get-PnPTenantSite' }
+        @{ Name = 'Get-PnPHomeSite' }
         @{ Name = 'Disconnect-PnPOnline' }
+        @{ Name = 'Set-PnPTenantSite' }
+        @{ Name = 'Remove-PnPTenantSite' }
+        @{ Name = 'Remove-PnPMicrosoft365Group' }
+        @{ Name = 'Set-PnPSiteArchiveState' }
+        @{ Name = 'Add-PnPSiteCollectionAdmin' }
     ) {
         Assert-ModuleStub -Name $Name
 
@@ -590,6 +596,85 @@ Describe 'Close-SPSLifecycleTenantSession' {
     }
 }
 
+Describe 'Get-SPSLifecycleHomeSiteUrl' {
+    BeforeEach {
+        Set-ModuleStub -Stub @{
+            'Get-PnPHomeSite' = @'
+[CmdletBinding()]
+param($Connection)
+$script:StubLog.Add("Get-PnPHomeSite Connection=$Connection")
+if ($script:StubData.Fails) { throw $script:StubData.Fails }
+if ($script:StubData.WritesError) { Write-Error 'Access denied.'; return }
+$script:StubData.Answer
+'@
+        } -Data @{ Fails = ''; WritesError = $false; Answer = 'https://contoso.sharepoint.com/sites/home' }
+    }
+
+    AfterEach {
+        Clear-ModuleStub
+    }
+
+    BeforeAll {
+        function script:Get-TestHomeSiteUrl {
+            & $script:Module { Get-SPSLifecycleHomeSiteUrl -Session ([PSCustomObject]@{ Connection = 'a connection' }) }
+        }
+    }
+
+    It 'asks the tenant through the connection of the session, and gives the address' {
+        Get-TestHomeSiteUrl | Should -BeExactly 'https://contoso.sharepoint.com/sites/home'
+
+        Get-StubLog | Should -Be @('Get-PnPHomeSite Connection=a connection')
+    }
+
+    It 'gives the address without the spaces and the line break around it' {
+        & $script:Module { $script:StubData.Answer = "  https://contoso.sharepoint.com/sites/home`r`n" }
+
+        Get-TestHomeSiteUrl | Should -BeExactly 'https://contoso.sharepoint.com/sites/home'
+    }
+
+    It 'gives an empty text, and does not stop, when the tenant has no home site: <Name>' -ForEach @(
+        @{ Name = 'nothing'; Answer = $null }
+        @{ Name = 'an empty text'; Answer = '' }
+        @{ Name = 'a blank text'; Answer = '   ' }
+    ) {
+        & $script:Module { param($a) $script:StubData.Answer = $a } $Answer
+
+        Get-TestHomeSiteUrl | Should -BeExactly ''
+    }
+
+    It 'stops, and says why, when the tenant does not give the home site: the home site is never touched, and it cannot be recognized without its address' {
+        & $script:Module { $script:StubData.Fails = 'Access denied.' }
+
+        { Get-TestHomeSiteUrl } | Should -Throw -ExpectedMessage '*home site*could not be read*Access denied*'
+    }
+
+    It 'stops when the cmdlet reports an error without throwing' {
+        & $script:Module { $script:StubData.WritesError = $true }
+
+        { Get-TestHomeSiteUrl } | Should -Throw -ExpectedMessage '*home site*could not be read*Access denied*'
+    }
+
+    It 'stops when what it is given is not the web address of a site, so that a home site that is not recognized is not left unprotected: <Name>' -ForEach @(
+        @{ Name = 'an address without a scheme'; Answer = 'contoso.sharepoint.com/sites/home' }
+        @{ Name = 'an address with http'; Answer = 'http://contoso.sharepoint.com/sites/home' }
+        @{ Name = 'a path'; Answer = '/sites/home' }
+        @{ Name = 'an address with a space inside'; Answer = 'https://contoso.sharepoint.com/sites/my home' }
+        @{ Name = 'an address with a hidden character inside'; Answer = "https://contoso.sharepoint.com/sites/ho$([char]0x200B)me" }
+        @{ Name = 'two addresses'; Answer = @('https://contoso.sharepoint.com/sites/home', 'https://contoso.sharepoint.com/sites/home2') }
+        @{ Name = 'an object'; Answer = [PSCustomObject]@{ Url = 'https://contoso.sharepoint.com/sites/home' } }
+    ) {
+        & $script:Module { param($a) $script:StubData.Answer = $a } $Answer
+
+        { Get-TestHomeSiteUrl } | Should -Throw -ExpectedMessage '*home site*not the web address of a site*'
+    }
+
+    It 'does not write the answer in the message when it holds a hidden character' {
+        & $script:Module { $script:StubData.Answer = "https://contoso.sharepoint.com/sites/ho$([char]0x200B)me" }
+
+        { Get-TestHomeSiteUrl } | Should -Throw -ExpectedMessage '*ho\u200Bme*'
+    }
+}
+
 Describe 'Get-SPSLifecycleTenantSitePage with Get-PnPTenantSite' {
     BeforeEach {
         Set-ModuleStub -Stub @{
@@ -772,6 +857,12 @@ $script:StubLog.Add('open')
 if ($script:StubData.OpenFails) { throw $script:StubData.OpenFails }
 [PSCustomObject]@{ Connection = 'a connection'; TenantName = 'contoso' }
 '@
+            'Get-SPSLifecycleHomeSiteUrl'     = @'
+param($Session)
+$script:StubLog.Add("home site connection=$($Session.Connection)")
+if ($script:StubData.HomeSiteFails) { throw $script:StubData.HomeSiteFails }
+$script:StubData.HomeSite
+'@
             'Close-SPSLifecycleTenantSession' = @'
 param($Session)
 $script:StubLog.Add("close session=$($null -ne $Session)")
@@ -793,7 +884,7 @@ if ($script:StubData.FailAt -eq $StartIndex) { throw 'The server did not answer.
 $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
 [PSCustomObject]@{ Items = @($pages[$index]); NextStartIndex = $next }
 '@
-        } -Data @{ OpenFails = ''; ApiAvailable = $true; ApiReason = ''; Pages = @(); FailAt = $null }
+        } -Data @{ OpenFails = ''; ApiAvailable = $true; ApiReason = ''; Pages = @(); FailAt = $null; HomeSite = ''; HomeSiteFails = '' }
     }
 
     AfterEach {
@@ -839,11 +930,54 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
         $result.Summary.SitesReturned | Should -Be 5
         Get-StubLog | Should -Be @(
             'open'
+            'home site connection=a connection'
             'api checked'
             "page source=Csom start=[] filter=[LockState -eq 'ReadOnly']"
             "page source=Csom start=[t1] filter=[LockState -eq 'ReadOnly']"
             'close session=True'
         )
+    }
+
+    It 'reads the home site once, with the session, before the first page, and keeps its address in the summary for the Scan, which never touches it' {
+        Set-TestPages -Sizes 2, 2
+        & $script:Module { $script:StubData.HomeSite = 'https://contoso.sharepoint.com/sites/home' }
+
+        $summary = (Invoke-TestTenantSite).Summary
+
+        $summary.HomeSiteUrl | Should -BeExactly 'https://contoso.sharepoint.com/sites/home'
+        $log = @(Get-StubLog)
+        @($log | Where-Object { $_ -like 'home site*' }) | Should -HaveCount 1
+        $log[0] | Should -BeExactly 'open'
+        $log[1] | Should -BeExactly 'home site connection=a connection'
+    }
+
+    It 'has no home site in the summary when the tenant has none' {
+        Set-TestPages -Sizes 1
+
+        (Invoke-TestTenantSite).Summary.HomeSiteUrl | Should -BeExactly ''
+    }
+
+    It 'stops before any page, and ends the session, when the home site cannot be read: a listing that does not know the home site would let the Scan suggest it' {
+        Set-TestPages -Sizes 2
+        & $script:Module { $script:StubData.HomeSiteFails = 'The home site of the tenant could not be read: Access denied.' }
+
+        { Invoke-TestTenantSite } | Should -Throw -ExpectedMessage '*home site*could not be read*'
+
+        (Get-StubLog | Where-Object { $_ -like 'page source*' }) | Should -HaveCount 0
+        @(Get-StubLog)[-1] | Should -BeExactly 'close session=True'
+    }
+
+    It 'reads the home site again when it takes up an interrupted listing, as it may have changed since' {
+        Set-TestPages -Sizes 2, 2
+        $setting = New-TestSetting
+        & $script:Module { $script:StubData.FailAt = 't1'; $script:StubData.HomeSite = 'https://contoso.sharepoint.com/sites/home' }
+        { Invoke-TestTenantSite -Setting $setting } | Should -Throw
+        & $script:Module { $script:StubData.FailAt = $null; $script:StubData.HomeSite = 'https://contoso.sharepoint.com/sites/home2'; $script:StubLog.Clear() }
+
+        $summary = (Invoke-TestTenantSite -Setting $setting).Summary
+
+        $summary.Resumed | Should -BeTrue
+        $summary.HomeSiteUrl | Should -BeExactly 'https://contoso.sharepoint.com/sites/home2'
     }
 
     It 'says in the summary how the sites were listed, with the OneDrive sites left out and the filter of the server' {

@@ -16,6 +16,8 @@
         - Filter: the filter that the server applied, empty when there was none.
         - PersonalSites: what the call was asked about the OneDrive sites (D12), Excluded when the server was asked to
           leave them out.
+        - HomeSiteUrl: the address of the SharePoint home site, read from the tenant before the first page (empty when
+          the tenant has none), which the Scan protects (see Get-SPSLifecycleHomeSiteUrl).
         - StartedOn, FinishedOn (UTC) and ElapsedSeconds.
         - Resumed: whether the run took up a checkpoint, and StartReason, why it did not when one was there, in words, and
           StartCode, why, as one of a few fixed words that name nothing (damaged, other-version, finished, other-tenant, other-filter,
@@ -40,6 +42,7 @@
         FallbackReason      = ''
         Filter              = ''
         PersonalSites       = ''
+        HomeSiteUrl         = ''
         StartedOn           = $null
         FinishedOn          = $null
         ElapsedSeconds      = 0.0

@@ -62,15 +62,23 @@
         .PARAMETER HomeSiteUrl
         The address of the SharePoint home site, when it is known: it is protected.
 
+        .PARAMETER HomeSiteUrlSource
+        A script block that gives the address of the home site, for a caller that reads it from the tenant while the pipeline
+        runs: the pipeline binds the parameters before the listing signs in, so the address is not there yet. The block is
+        called once, when the first record comes (never when there is none), and gives a text, empty when the tenant has no
+        home site. A failure of the block, or an answer that is not a text, stops the Scan before any row: a home site that
+        is not known would be suggested like the others. It cannot be given together with HomeSiteUrl.
+
         .EXAMPLE
         $summary = Initialize-SPSLifecycleScanSummary
         $sites | ConvertTo-SPSLifecycleScanRow -Setting $setting -ActivityReport $reports -LockDateIndex $locks -ExclusionIndex $exclusions -Summary $summary | Export-SPSLifecycleReport -OutputFolder .\Reports
     #>
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Value')]
     [OutputType([System.Management.Automation.PSObject])]
     param
     (
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = 'Value')]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, ParameterSetName = 'Source')]
         [AllowNull()]
         [AllowEmptyCollection()]
         [System.Object[]]
@@ -101,10 +109,14 @@
         [System.DateTime]
         $Now = [System.DateTime]::UtcNow,
 
-        [Parameter()]
+        [Parameter(ParameterSetName = 'Value')]
         [AllowEmptyString()]
         [System.String]
-        $HomeSiteUrl = ''
+        $HomeSiteUrl = '',
+
+        [Parameter(Mandatory = $true, ParameterSetName = 'Source')]
+        [System.Management.Automation.ScriptBlock]
+        $HomeSiteUrlSource
     )
 
     begin {
@@ -177,6 +189,7 @@
         $runTime = ConvertTo-SPSLifecycleUtcDateTime -Value $Now
         $exclusions = $ExclusionIndex.Keys
         $number = 0
+        $homeSiteKnown = $PSCmdlet.ParameterSetName -ne 'Source'
     }
 
     process {
@@ -187,6 +200,16 @@
         }
 
         foreach ($record in $records) {
+            if (-not $homeSiteKnown) {
+                $answer = @(& $HomeSiteUrlSource)
+                if ($answer.Count -gt 1 -or ($answer.Count -eq 1 -and $null -ne $answer[0] -and $answer[0] -isnot [System.String])) {
+                    throw 'The source of the address of the home site gave something that is not a text, so the home site could not be protected: the Scan stops.'
+                }
+
+                $HomeSiteUrl = if ($answer.Count -eq 1) { "$($answer[0])" } else { '' }
+                $homeSiteKnown = $true
+            }
+
             $number++
             $url = ''
             try {

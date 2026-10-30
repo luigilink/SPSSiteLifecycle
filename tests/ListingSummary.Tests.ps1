@@ -8,7 +8,7 @@ Describe 'Initialize-SPSLifecycleListingSummary' {
         $summary = & $script:Module { Initialize-SPSLifecycleListingSummary }
 
         $summary.PSObject.Properties.Name | Should -Be @(
-            'Source', 'FallbackReason', 'Filter', 'PersonalSites', 'StartedOn', 'FinishedOn', 'ElapsedSeconds',
+            'Source', 'FallbackReason', 'Filter', 'PersonalSites', 'HomeSiteUrl', 'StartedOn', 'FinishedOn', 'ElapsedSeconds',
             'Resumed', 'StartReason', 'StartCode', 'PagesFromCheckpoint', 'SitesFromCheckpoint', 'PagesRead', 'SitesRead',
             'OneDriveDropped', 'DuplicatesDropped', 'SitesReturned', 'Retries', 'PageSecondsTotal', 'PageSecondsMax'
         )
@@ -16,6 +16,7 @@ Describe 'Initialize-SPSLifecycleListingSummary' {
         $summary.FallbackReason | Should -BeExactly ''
         $summary.Filter | Should -BeExactly ''
         $summary.PersonalSites | Should -BeExactly ''
+        $summary.HomeSiteUrl | Should -BeExactly ''
         $null -eq $summary.StartedOn | Should -BeTrue
         $null -eq $summary.FinishedOn | Should -BeTrue
         $summary.ElapsedSeconds | Should -Be 0

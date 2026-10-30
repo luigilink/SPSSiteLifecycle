@@ -6,7 +6,9 @@
         .DESCRIPTION
         This is the one call that the Scan makes to read the tenant. It does, in this order: it turns the lock states of the
         settings into the server filter (see Get-SPSLifecycleListingFilter), signs in (the refused tenants are checked
-        again right before, see Open-SPSLifecycleTenantSession), chooses the call, and gives the records to the pipeline
+        again right before, see Open-SPSLifecycleTenantSession), reads the address of the home site, which the Scan protects,
+        into the summary (HomeSiteUrl; a failure to read it stops the listing before any page, see
+        Get-SPSLifecycleHomeSiteUrl), chooses the call, and gives the records to the pipeline
         as Invoke-SPSLifecycleSiteListing reads them (paged, with a checkpoint in the listing-checkpoint folder of
         OutputFolder, resumed when it was interrupted). The session ends when the listing does, whatever the way.
 
@@ -76,6 +78,7 @@
     $activity = 'Listing the sites of the tenant'
     try {
         $session = Open-SPSLifecycleTenantSession -Setting $Setting
+        $Summary.HomeSiteUrl = Get-SPSLifecycleHomeSiteUrl -Session $session
 
         $resolved = 'Cmdlet'
         $Summary.FallbackReason = ''

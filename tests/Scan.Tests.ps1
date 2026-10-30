@@ -477,6 +477,98 @@ Describe 'ConvertTo-SPSLifecycleScanRow' {
         }
     }
 
+    Context 'The address of the home site, when the listing is what reads it' {
+        BeforeAll {
+            # The source is called by the converter when the first record comes, because the pipeline binds the parameters before the
+            # listing signs in and reads the home site.
+            function script:Invoke-TestScanWithSource {
+                param($Site, [scriptblock]$Source, [hashtable]$Extra = @{})
+
+                $summary = & $script:Module { Initialize-SPSLifecycleScanSummary }
+                $site1 = New-ScanSite
+                $parameters = @{
+                    Setting = (New-ScanSetting); ActivityReport = @($script:QuietReport); LockDateIndex = (New-OldLock -Site $site1)
+                    ExclusionIndex = (New-ExclusionIndex); Summary = $summary; Now = $script:Now; HomeSiteUrlSource = $Source
+                }
+                foreach ($key in $Extra.Keys) { $parameters[$key] = $Extra[$key] }
+                $rows = @(& $script:Module { param($s, $p) $s | ConvertTo-SPSLifecycleScanRow @p } @($Site) $parameters)
+                [PSCustomObject]@{ Rows = $rows; Summary = $summary }
+            }
+        }
+
+        It 'asks for it once, when the first record comes, and protects that site and no other' {
+            $state = @{ Calls = 0 }
+            $source = { $state.Calls++; 'https://contoso.sharepoint.com/sites/home' }.GetNewClosure()
+            $sites = @(
+                (New-ScanSite -Name 'home' -SiteId $script:SiteA)
+                (New-ScanSite -Name 'other' -SiteId $script:SiteB -GroupId '')
+                (New-ScanSite -Name 'third' -SiteId 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')
+            )
+            $lock = New-LockIndex -Entry @(foreach ($s in $sites) { @{ Url = $s.Url; SiteId = $s.SiteId; LockedOn = $script:Old } })
+            $report = New-TestReport -Kind SharePoint -ById @{ $script:SiteA = $null; $script:SiteB = $null; 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' = $null }
+
+            $summary = & $script:Module { Initialize-SPSLifecycleScanSummary }
+            $parameters = @{
+                Setting = (New-ScanSetting); ActivityReport = @($report); LockDateIndex = $lock; ExclusionIndex = (New-ExclusionIndex)
+                Summary = $summary; Now = $script:Now; HomeSiteUrlSource = $source
+            }
+            $rows = @(& $script:Module { param($s, $p) $s | ConvertTo-SPSLifecycleScanRow @p } $sites $parameters)
+
+            $state.Calls | Should -Be 1
+            @($rows.Verdict) | Should -Be @('SKIP-PROTECTED', 'DELETE-SITE', 'DELETE-VIA-GROUP')
+        }
+
+        It 'reads the address that the source gives with the case and the slash of any spelling' {
+            $source = { 'HTTPS://Contoso.SharePoint.com/Sites/A/' }
+            $site = New-ScanSite
+
+            (Invoke-TestScanWithSource -Site $site -Source $source).Rows[0].Verdict | Should -BeExactly 'SKIP-PROTECTED'
+        }
+
+        It 'does not ask for it when the listing gave no site' {
+            $state = @{ Calls = 0 }
+            $source = { $state.Calls++; 'https://contoso.sharepoint.com/sites/home' }.GetNewClosure()
+
+            $result = Invoke-TestScanWithSource -Site @() -Source $source
+
+            $result.Rows | Should -HaveCount 0
+            $state.Calls | Should -Be 0
+        }
+
+        It 'protects nothing as the home site when the tenant has none: <Name>' -ForEach @(
+            @{ Name = 'an empty text'; Value = '' }
+            @{ Name = 'nothing'; Value = $null }
+        ) {
+            $state = @{ Value = $Value }
+            $source = { $state.Value }.GetNewClosure()
+
+            (Invoke-TestScanWithSource -Site (New-ScanSite) -Source $source).Rows[0].Verdict | Should -BeExactly 'DELETE-VIA-GROUP'
+        }
+
+        It 'stops with the message of the source, and gives no row, when the source fails: the home site could be suggested' {
+            $source = { throw 'The home site of the tenant could not be read: Access denied.' }
+
+            { Invoke-TestScanWithSource -Site (New-ScanSite) -Source $source } | Should -Throw -ExpectedMessage 'The home site of the tenant could not be read: Access denied.'
+        }
+
+        It 'stops when the source gives something that is not one address: <Name>' -ForEach @(
+            @{ Name = 'two addresses'; Value = @('https://contoso.sharepoint.com/sites/a', 'https://contoso.sharepoint.com/sites/b') }
+            @{ Name = 'a number'; Value = 42 }
+            @{ Name = 'an object'; Value = [PSCustomObject]@{ Url = 'https://contoso.sharepoint.com/sites/a' } }
+        ) {
+            $state = @{ Value = $Value }
+            $source = { , $state.Value }.GetNewClosure()
+
+            { Invoke-TestScanWithSource -Site (New-ScanSite) -Source $source } | Should -Throw -ExpectedMessage '*home site*not a text*'
+        }
+
+        It 'cannot be given together with the address itself, which would leave it to the order of the two to decide' {
+            $source = { 'https://contoso.sharepoint.com/sites/a' }
+
+            { Invoke-TestScanWithSource -Site (New-ScanSite) -Source $source -Extra @{ HomeSiteUrl = 'https://contoso.sharepoint.com/sites/b' } } | Should -Throw
+        }
+    }
+
     Context 'What the row holds' {
         It 'has the columns of the report, in their order' {
             $site = New-ScanSite

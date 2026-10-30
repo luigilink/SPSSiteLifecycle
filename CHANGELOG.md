@@ -165,3 +165,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewrote), that is in the future (5 minutes of margin for two clocks) or older than `MaxCsvAgeDays`. An empty list of decisions
   is not an error: it says that there is nothing to do. It gives the rows that have a decision with their line, the count of each
   action, and the date and the age of the file (the oldest of its rows), for the banner. It reads the file and nothing else.
+- Scan: the home site of the tenant is read (`Get-PnPHomeSite`, one read after the sign-in) and protected. The verdict engine already
+  protected the home site, but nothing gave it its address, so the Scan would have suggested it. A failure to read it, or an answer that is
+  not the https address of a site, stops the listing before any page. The lab script reports whether the tenant has one.
