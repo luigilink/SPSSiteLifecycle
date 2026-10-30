@@ -23,6 +23,14 @@
 
     The report is also saved as listing-lab-report.json in OutputFolder, which holds the checkpoint too.
 
+    What the script prints and writes names nothing of the tenant: not its name, an address, an account or a title. The text
+    that the module gives is not passed on as it is. The reason why a checkpoint was not taken up is told in one of a few
+    fixed sentences (its code is StartCode in the report), the warnings of the listing are counted and not shown, its
+    verbose lines are not shown, and the message of an error, or the reason why the paged call cannot be used, is cleaned of
+    addresses, accounts, the name of the tenant and the application ID. The values of a site are shown only in a shape that
+    cannot hold a name. The checkpoint in OutputFolder, however, holds the addresses and the titles of the sites: share the
+    report, not that folder.
+
     .PARAMETER TenantName
     The name of the tenant, in lowercase, as in <name>.onmicrosoft.com. The Microsoft corporate tenants are refused.
 
@@ -38,7 +46,8 @@
 
     .PARAMETER OutputFolder
     Where the checkpoint and the report go. A relative path is relative to the location of the PowerShell session. Default: a
-    folder in the temporary folder.
+    folder in the temporary folder. The checkpoint holds the addresses and the titles of the sites: share the report, never
+    this folder.
 
     .PARAMETER StopAfterPages
     Stops after that many pages read from the tenant in this run, and leaves the checkpoint. 0 (the default) does not stop.
@@ -121,6 +130,12 @@ if (-not $PSBoundParameters.ContainsKey('InformationAction')) {
 $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $script:Checks = [System.Collections.Generic.List[System.Object]]::new()
 
+# What stops the lab says its message cleaned, and holds no inner exception that would say it as it was.
+trap {
+    $stopped = ConvertTo-LabSafeText -Text $_.Exception.Message -MaxLength 600
+    throw [System.InvalidOperationException]::new("The lab stopped ($($_.Exception.GetType().Name)): $stopped")
+}
+
 function Write-LabLine {
     param([System.String]$Text = '')
     Write-Information -MessageData $Text
@@ -159,6 +174,201 @@ function Add-LabCheck {
     $script:Checks.Add([PSCustomObject][ordered]@{ Name = $Name; Status = $Status; Detail = $Detail })
 }
 
+# What the module says about a checkpoint that it did not take up is a sentence that can name the tenant it was made for. The
+# lab tells it with its own words, by the code of the reason, and a code that it does not know is not passed on.
+$script:StartWords = @{
+    'restart'       = 'a new listing was asked for (Restart)'
+    'damaged'       = 'the checkpoint was damaged'
+    'other-version' = 'the checkpoint was written by another version of the tool'
+    'finished'      = 'the checkpoint was of a listing that had ended'
+    'other-tenant'  = 'the checkpoint was made for another tenant'
+    'other-filter'  = 'the checkpoint was made with another filter'
+    'other-options' = 'the checkpoint was made with other options'
+    'clock'         = 'the dates of the checkpoint cannot be true (was the clock of this machine changed?)'
+    'too-old'       = 'the checkpoint is too old'
+}
+
+function ConvertTo-LabCode {
+    param($Code)
+
+    $text = "$Code"
+    if ($text -eq '' -or $script:StartWords.ContainsKey($text)) {
+        return $text
+    }
+
+    'unknown'
+}
+
+function Get-LabStartSentence {
+    param([System.String]$Code)
+
+    if ($script:StartWords.ContainsKey($Code)) {
+        return $script:StartWords[$Code]
+    }
+
+    'the checkpoint was not taken up for a reason that this script does not know'
+}
+
+# Text that comes from the tenant, a library or an error: an address, an account, the name of the tenant and the application ID
+# are replaced, and the text is made one line of a length that a report can hold. An account goes first, so that the name in
+# front of the @ goes with it. A name that the lab does not know, such as another tenant, cannot be found: such text must
+# not reach this function when it can hold one.
+function ConvertTo-LabSafeText {
+    param($Text, [System.Int32]$MaxLength = 300)
+
+    $safe = "$Text"
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '(?i)[^\s@''"<>()]+@[^\s@''"<>()]+\.[a-z]{2,}', '(account)')
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '(?i)\b[a-z][a-z0-9+.-]*://[^\s''"<>]+', '(address)')
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '(?i)\b(?:[a-z0-9-]+\.)+(?:sharepoint|onmicrosoft|microsoftonline)\.[a-z]{2,}\b', '(address)')
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, "(?i)(?<![a-z0-9])$([System.Text.RegularExpressions.Regex]::Escape($TenantName))(?![a-z0-9])", '(tenant)')
+    foreach ($form in 'D', 'N') {
+        $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, [System.Text.RegularExpressions.Regex]::Escape($ClientId.ToString($form)), '(client)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
+
+    $safe = [System.Text.RegularExpressions.Regex]::Replace($safe, '[\p{Cc}\s]+', ' ').Trim()
+    if ($safe.Length -gt $MaxLength) {
+        $cut = $MaxLength
+        if ([System.Char]::IsHighSurrogate($safe[$cut - 1])) {
+            $cut--
+        }
+
+        $safe = $safe.Substring(0, $cut) + '...'
+    }
+
+    $safe
+}
+
+# A value that SharePoint names, such as a template or a lock state: it is shown only when it looks like such a name.
+function ConvertTo-LabIdentifier {
+    param($Text)
+
+    $value = "$Text"
+    if ($value -eq '') {
+        return '(none)'
+    }
+
+    if ($value -cnotmatch '^[A-Za-z][A-Za-z0-9_.-]{0,59}(#-?[0-9]{1,4})?$') {
+        return '(not a name)'
+    }
+
+    ConvertTo-LabSafeText -Text $value
+}
+
+# The ID of a site is shown only when it is an ID: any other text can be anything.
+function ConvertTo-LabSiteId {
+    param($Value)
+
+    $guid = [System.Guid]::Empty
+    if ([System.Guid]::TryParse("$Value", [ref]$guid) -and $guid -ne [System.Guid]::Empty) {
+        return $guid.ToString()
+    }
+
+    '(not an ID)'
+}
+
+# No group is an empty text or the empty GUID: the paged call and the cmdlet do not say it the same way. Gives null for no
+# group, the ID of the group, or (not an ID) for a text that is not one.
+function ConvertTo-LabGroup {
+    param($Value)
+
+    $text = "$Value"
+    if ($text -eq '') {
+        return $null
+    }
+
+    $guid = [System.Guid]::Empty
+    if (-not [System.Guid]::TryParse($text, [ref]$guid)) {
+        return '(not an ID)'
+    }
+
+    if ($guid -eq [System.Guid]::Empty) {
+        return $null
+    }
+
+    $guid.ToString()
+}
+
+# A value of a site, in a shape that cannot hold a name: by its type, never as the text that it holds.
+function Format-LabValue {
+    param([System.String]$Name, $Value)
+
+    switch ($Name) {
+        { $_ -in 'Template', 'LockState', 'ArchiveStatus' } {
+            return ConvertTo-LabIdentifier -Text $Value
+        }
+
+        'GroupId' {
+            $group = ConvertTo-LabGroup -Value $Value
+            if ($null -eq $group) {
+                return '(none)'
+            }
+
+            return $group
+        }
+
+        { $_ -in 'IsHubSite', 'IsTeamsConnected', 'IsTeamsChannelConnected' } {
+            if ($Value -is [System.Boolean]) {
+                return "$Value"
+            }
+
+            return '(not a boolean)'
+        }
+
+        'StorageUsedMB' {
+            if ($null -eq $Value) {
+                return '(none)'
+            }
+
+            return ([System.Int64]$Value).ToString($invariant)
+        }
+
+        'LastContentModified' {
+            if ($null -eq $Value) {
+                return '(none)'
+            }
+
+            if ($Value -is [System.DateTime]) {
+                return Format-LabDate -Value $Value
+            }
+
+            return '(not a date)'
+        }
+
+        default {
+            return '(not shown)'
+        }
+    }
+}
+
+# The summary of the listing as the report holds it: the fields that are counts and times, and the two that are text, which are
+# cleaned. The reason why a checkpoint was not taken up is its code, and the text of the module is left out.
+function ConvertTo-LabSummary {
+    param($Summary, [System.Int32]$Warning)
+
+    [PSCustomObject][ordered]@{
+        Source              = ConvertTo-LabSafeText -Text $Summary.Source
+        FallbackReason      = ConvertTo-LabSafeText -Text $Summary.FallbackReason
+        Filter              = ConvertTo-LabSafeText -Text $Summary.Filter
+        PersonalSites       = ConvertTo-LabSafeText -Text $Summary.PersonalSites
+        StartedOn           = $Summary.StartedOn
+        FinishedOn          = $Summary.FinishedOn
+        ElapsedSeconds      = $Summary.ElapsedSeconds
+        Resumed             = $Summary.Resumed
+        StartCode           = ConvertTo-LabCode -Code $Summary.StartCode
+        PagesFromCheckpoint = $Summary.PagesFromCheckpoint
+        SitesFromCheckpoint = $Summary.SitesFromCheckpoint
+        PagesRead           = $Summary.PagesRead
+        SitesRead           = $Summary.SitesRead
+        OneDriveDropped     = $Summary.OneDriveDropped
+        DuplicatesDropped   = $Summary.DuplicatesDropped
+        SitesReturned       = $Summary.SitesReturned
+        Retries             = $Summary.Retries
+        PageSecondsTotal    = $Summary.PageSecondsTotal
+        PageSecondsMax      = $Summary.PageSecondsMax
+        WarningCount        = $Warning
+    }
+}
+
 function Initialize-LabStatistic {
     [PSCustomObject]@{
         Sites                  = 0
@@ -172,6 +382,7 @@ function Initialize-LabStatistic {
         GroupSitesWithoutGroup = 0
         TotalSizeMB            = [System.Int64]0
         NegativeSizes          = 0
+        WithoutSize            = 0
         WithoutDate            = 0
         Oldest                 = $null
         Newest                 = $null
@@ -188,29 +399,41 @@ function Add-LabRecord {
 
     $Statistic.Sites++
     $Statistic.SiteIds.Add("$($Record.SiteId)")
-    $Statistic.LockStates["$($Record.LockState)"] = 1 + [System.Int32]$Statistic.LockStates["$($Record.LockState)"]
-    $Statistic.Templates["$($Record.Template)"] = 1 + [System.Int32]$Statistic.Templates["$($Record.Template)"]
-    $Statistic.Archive["$($Record.ArchiveStatus)"] = 1 + [System.Int32]$Statistic.Archive["$($Record.ArchiveStatus)"]
+    $lockState = ConvertTo-LabIdentifier -Text $Record.LockState
+    $Statistic.LockStates[$lockState] = 1 + [System.Int32]$Statistic.LockStates[$lockState]
+    $template = ConvertTo-LabIdentifier -Text $Record.Template
+    $Statistic.Templates[$template] = 1 + [System.Int32]$Statistic.Templates[$template]
+    $archive = ConvertTo-LabIdentifier -Text $Record.ArchiveStatus
+    $Statistic.Archive[$archive] = 1 + [System.Int32]$Statistic.Archive[$archive]
     if ($Record.IsTeamsConnected) { $Statistic.TeamsConnected++ }
     if ($Record.IsTeamsChannelConnected) { $Statistic.TeamsChannelConnected++ }
     if ($Record.IsHubSite) { $Statistic.HubSites++ }
-    if (-not $Record.GroupId) {
+    $group = ConvertTo-LabGroup -Value $Record.GroupId
+    if ($null -eq $group) {
         $Statistic.WithoutGroup++
         if ("$($Record.Template)".StartsWith('GROUP#', [System.StringComparison]::OrdinalIgnoreCase)) { $Statistic.GroupSitesWithoutGroup++ }
     }
 
-    $Statistic.TotalSizeMB += [System.Int64]$Record.StorageUsedMB
-    if ([System.Int64]$Record.StorageUsedMB -lt 0) { $Statistic.NegativeSizes++ }
+    # A size that is not known is not a size of zero.
+    $storage = $Record.StorageUsedMB
+    if ($null -eq $storage -or "$storage" -eq '') {
+        $Statistic.WithoutSize++
+    }
+    else {
+        $Statistic.TotalSizeMB += [System.Int64]$storage
+        if ([System.Int64]$storage -lt 0) { $Statistic.NegativeSizes++ }
+    }
+
     if ("$($Record.Url)".IndexOf('-my.sharepoint.com', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $Statistic.OneDriveSites++ }
 
-    $guid = [System.Guid]::Empty
-    $complete = [System.Guid]::TryParse("$($Record.SiteId)", [ref]$guid) -and
+    $complete = (ConvertTo-LabSiteId -Value $Record.SiteId) -ne '(not an ID)' -and
         "$($Record.Url)".StartsWith('https://', [System.StringComparison]::OrdinalIgnoreCase) -and
         [bool]$Record.Template -and
-        [bool]$Record.LockState
+        [bool]$Record.LockState -and
+        $group -ne '(not an ID)'
     if (-not $complete) {
         $Statistic.Malformed++
-        if ($Statistic.MalformedExamples.Count -lt 3) { $Statistic.MalformedExamples.Add("$($Record.SiteId)") }
+        if ($Statistic.MalformedExamples.Count -lt 3) { $Statistic.MalformedExamples.Add((ConvertTo-LabSiteId -Value $Record.SiteId)) }
     }
 
     $date = $Record.LastContentModified
@@ -280,7 +503,7 @@ function Invoke-LabListing {
     )
 
     $summary = & $Module { Initialize-SPSLifecycleListingSummary }
-    $state = [PSCustomObject]@{ Pages = 0; Stop = $PagesToRead; Print = $Print; Preference = $InformationPreference }
+    $state = [PSCustomObject]@{ Pages = 0; Stop = $PagesToRead; Print = $Print; Preference = $InformationPreference; Warnings = 0 }
 
     # A closure is cut off from the functions of this script: it holds only what it is given, and cmdlets.
     $onProgress = {
@@ -307,7 +530,22 @@ function Invoke-LabListing {
 
     $completed = $false
     try {
-        & $Module { param($p) Get-SPSLifecycleTenantSite @p } $parameters | ForEach-Object { & $OnRecord $_ }
+        # The warnings and the verbose lines of the listing can name the tenant, a filter or a site: the warnings are counted, and
+        # neither is shown.
+        & $Module {
+            param($p)
+            $WarningPreference = 'Continue'
+            $VerbosePreference = 'SilentlyContinue'
+            Get-SPSLifecycleTenantSite @p
+        } $parameters 3>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.WarningRecord]) {
+                $state.Warnings++
+            }
+            else {
+                & $OnRecord $_
+            }
+        }
+
         $completed = $true
     }
     catch {
@@ -316,17 +554,16 @@ function Invoke-LabListing {
         }
     }
 
-    [PSCustomObject]@{ Summary = $summary; Completed = $completed; Pages = $state.Pages }
+    [PSCustomObject]@{ Summary = $summary; Completed = $completed; Pages = $state.Pages; Warnings = $state.Warnings }
 }
 
 function Compare-LabListing {
     param([System.Collections.IDictionary]$Paged, [System.Collections.IDictionary]$Cmdlet)
 
-    # The values of these fields can be shown in the report; the address and the title name the tenant and the site.
-    $shown = @('Template', 'LockState', 'GroupId', 'ArchiveStatus', 'IsHubSite', 'IsTeamsConnected', 'IsTeamsChannelConnected', 'StorageUsedMB', 'LastContentModified')
+    # The address and the title name the tenant and the site, and Format-LabValue never shows them.
     $fields = [ordered]@{}
     foreach ($name in 'Url', 'Title', 'Template', 'LockState', 'GroupId', 'IsHubSite', 'IsTeamsConnected', 'IsTeamsChannelConnected', 'ArchiveStatus', 'StorageUsedMB', 'LastContentModified') {
-        $fields[$name] = [PSCustomObject]@{ Differing = 0; MaxDifference = 0; Examples = [System.Collections.Generic.List[System.Object]]::new() }
+        $fields[$name] = [PSCustomObject]@{ Differing = 0; OneSided = 0; MaxDifference = 0; Examples = [System.Collections.Generic.List[System.Object]]::new() }
     }
 
     $inBoth = 0
@@ -344,18 +581,27 @@ function Compare-LabListing {
             $a = $left.$name
             $b = $right.$name
             $difference = 0
-            if ($name -eq 'StorageUsedMB') {
-                $difference = [System.Math]::Abs([System.Int64]$a - [System.Int64]$b)
-                $same = $difference -eq 0
-            }
-            elseif ($name -eq 'LastContentModified') {
-                if ($null -eq $a -or $null -eq $b) {
-                    $same = $null -eq $a -and $null -eq $b
+            $oneSided = $false
+            $missingA = $null -eq $a -or "$a" -eq ''
+            $missingB = $null -eq $b -or "$b" -eq ''
+            if ($name -in 'StorageUsedMB', 'LastContentModified') {
+                # A value that is not known is not zero, and is not a date: it differs from every value that is known.
+                if ($missingA -or $missingB) {
+                    $same = $missingA -and $missingB
+                    $oneSided = -not $same
+                }
+                elseif ($name -eq 'StorageUsedMB') {
+                    $difference = [System.Math]::Abs([System.Int64]$a - [System.Int64]$b)
+                    $same = $difference -eq 0
                 }
                 else {
                     $difference = [System.Math]::Abs(([System.DateTime]$a - [System.DateTime]$b).TotalSeconds)
                     $same = $difference -le 1
                 }
+            }
+            elseif ($name -eq 'GroupId') {
+                # No group is an empty text for one listing and the empty GUID for the other.
+                $same = [System.String]::Equals("$(ConvertTo-LabGroup -Value $a)", "$(ConvertTo-LabGroup -Value $b)", [System.StringComparison]::OrdinalIgnoreCase)
             }
             else {
                 $same = [System.String]::Equals("$a", "$b", [System.StringComparison]::OrdinalIgnoreCase)
@@ -364,13 +610,16 @@ function Compare-LabListing {
             if (-not $same) {
                 $entry = $fields[$name]
                 $entry.Differing++
+                if ($oneSided) {
+                    $entry.OneSided++
+                }
+
                 if ($difference -gt $entry.MaxDifference) {
                     $entry.MaxDifference = $difference
                 }
 
                 if ($entry.Examples.Count -lt 3) {
-                    $example = if ($shown -contains $name) { [PSCustomObject]@{ SiteId = $id; Paged = "$a"; Cmdlet = "$b" } } else { [PSCustomObject]@{ SiteId = $id; Paged = '(not shown)'; Cmdlet = '(not shown)' } }
-                    $entry.Examples.Add($example)
+                    $entry.Examples.Add([PSCustomObject]@{ SiteId = ConvertTo-LabSiteId -Value $id; Paged = Format-LabValue -Name $name -Value $a; Cmdlet = Format-LabValue -Name $name -Value $b })
                 }
             }
         }
@@ -443,6 +692,7 @@ $main = Invoke-LabListing -Module $module -Setting $setting -ListingSource $Sour
     }
 }
 $summary = $main.Summary
+$warningCount = $main.Warnings
 
 # The comparison: the same sites with Get-PnPTenantSite.
 $compare = $null
@@ -459,10 +709,11 @@ if ($CompareWithCmdlet) {
         $cmdletSetting = $setting.PSObject.Copy()
         $cmdletSetting.OutputFolder = Join-Path -Path $folder -ChildPath 'cmdlet'
         $other = @{}
-        $null = Invoke-LabListing -Module $module -Setting $cmdletSetting -ListingSource 'Cmdlet' -RestartListing $true -PagesToRead 0 -Print $false -OnRecord {
+        $second = Invoke-LabListing -Module $module -Setting $cmdletSetting -ListingSource 'Cmdlet' -RestartListing $true -PagesToRead 0 -Print $false -OnRecord {
             param($record)
             $other["$($record.SiteId)"] = $record
         }
+        $warningCount += $second.Warnings
         $compare = Compare-LabListing -Paged $paged -Cmdlet $other
     }
 }
@@ -472,7 +723,7 @@ $pagesInThisRun = [System.Int32]$summary.PagesRead
 $averagePage = if ($pagesInThisRun -gt 0) { $summary.PageSecondsTotal / $pagesInThisRun } else { 0.0 }
 $rate = if ($summary.PageSecondsTotal -gt 0) { $summary.SitesRead / $summary.PageSecondsTotal } else { 0.0 }
 $digest = Get-LabDigest -SiteId $statistic.SiteIds
-$newest = @($statistic.NewestSites | ForEach-Object { [PSCustomObject][ordered]@{ SiteId = $_.SiteId; LastContentModified = Format-LabDate -Value $_.Date } })
+$newest = @($statistic.NewestSites | ForEach-Object { [PSCustomObject][ordered]@{ SiteId = ConvertTo-LabSiteId -Value $_.SiteId; LastContentModified = Format-LabDate -Value $_.Date } })
 $statistics = [PSCustomObject][ordered]@{
     Sites                  = $statistic.Sites
     LockStates             = ConvertTo-LabCount -Count $statistic.LockStates
@@ -484,6 +735,8 @@ $statistics = [PSCustomObject][ordered]@{
     WithoutGroup           = $statistic.WithoutGroup
     GroupSitesWithoutGroup = $statistic.GroupSitesWithoutGroup
     TotalSizeMB            = $statistic.TotalSizeMB
+    NegativeSizes          = $statistic.NegativeSizes
+    WithoutSize            = $statistic.WithoutSize
     WithoutDate            = $statistic.WithoutDate
     OldestChange           = Format-LabDate -Value $statistic.Oldest
     NewestChange           = Format-LabDate -Value $statistic.Newest
@@ -491,14 +744,18 @@ $statistics = [PSCustomObject][ordered]@{
     SiteIdDigest           = $digest
 }
 
-$sourceText = $summary.Source
-if ($summary.FallbackReason) { $sourceText += " ($($summary.FallbackReason))" }
-$filterText = if ($summary.Filter) { $summary.Filter } else { '(none)' }
+# The summary that the report holds, and the only one that is printed: its text is cleaned, and the reason why a checkpoint was
+# not taken up is a code, told with the words of this script.
+$safeSummary = ConvertTo-LabSummary -Summary $summary -Warning $warningCount
+$sourceText = $safeSummary.Source
+if ($safeSummary.FallbackReason) { $sourceText += " ($($safeSummary.FallbackReason))" }
+$filterText = if ($safeSummary.Filter) { $safeSummary.Filter } else { '(none)' }
+$startWords = Get-LabStartSentence -Code $safeSummary.StartCode
 if ($summary.Resumed) {
     $checkpointText = "taken up ($($summary.PagesFromCheckpoint) pages, $(Format-LabNumber $summary.SitesFromCheckpoint) sites from it)"
 }
-elseif ($summary.StartReason) {
-    $checkpointText = "not taken up: $($summary.StartReason)"
+elseif ($safeSummary.StartCode) {
+    $checkpointText = "not taken up: $startWords"
 }
 else {
     $checkpointText = 'none to take up'
@@ -514,6 +771,9 @@ Write-LabLine "  Checkpoint: $checkpointText"
 Write-LabLine "  Pages read from the tenant: $(Format-LabNumber $pagesInThisRun), $(Format-LabNumber $summary.SitesRead) sites; retries: $($summary.Retries)"
 Write-LabLine "  Time: $(Format-LabNumber $summary.ElapsedSeconds 1) s in all; a page took $(Format-LabNumber $averagePage 2) s on average and $(Format-LabNumber $summary.PageSecondsMax 2) s at most; $(Format-LabNumber $rate) sites/s"
 Write-LabLine "  Left out by the listing: $(Format-LabNumber $summary.OneDriveDropped) OneDrive sites, $(Format-LabNumber $summary.DuplicatesDropped) sites that came twice"
+if ($warningCount -gt 0) {
+    Write-LabLine "  Warnings of the listing: $(Format-LabNumber $warningCount) (not shown: their text can name the tenant, a filter or a site)"
+}
 Write-LabLine "  Sites returned: $returned"
 Write-LabLine
 Write-LabLine 'The sites'
@@ -541,7 +801,7 @@ if ($summary.Source -eq 'Csom') {
     Add-LabCheck -Name 'source' -Status PASS -Detail 'The paged call of the SharePoint admin API was used.'
 }
 else {
-    $why = if ($summary.FallbackReason) { $summary.FallbackReason } else { 'It was asked for.' }
+    $why = if ($safeSummary.FallbackReason) { $safeSummary.FallbackReason } else { 'It was asked for.' }
     Add-LabCheck -Name 'source' -Status INFO -Detail "Get-PnPTenantSite was used. $why"
 }
 
@@ -549,8 +809,15 @@ if ($summary.Resumed) {
     Add-LabCheck -Name 'resume' -Status PASS -Detail "The listing took up a checkpoint: $($summary.PagesFromCheckpoint) pages ($(Format-LabNumber $summary.SitesFromCheckpoint) sites) came from it; pages read from the tenant: $pagesInThisRun."
 }
 else {
-    $why = if ($summary.StartReason) { " $($summary.StartReason)" } else { '' }
+    $why = if ($safeSummary.StartCode) { " Why it did not take a checkpoint up: $startWords." } else { '' }
     Add-LabCheck -Name 'resume' -Status INFO -Detail "The listing started from the first page.$why"
+}
+
+if ($warningCount -eq 0) {
+    Add-LabCheck -Name 'listing-warnings' -Status PASS -Detail 'The listing gave no warning.'
+}
+else {
+    Add-LabCheck -Name 'listing-warnings' -Status INFO -Detail "The listing gave $(Format-LabNumber $warningCount) warning(s), not shown: their text can name the tenant, a filter or a site. Run the Scan to read them."
 }
 
 if ($main.Completed -and $ExpectedSites -gt 0) {
@@ -572,7 +839,10 @@ else {
 }
 
 Add-LabCheck -Name 'no-onedrive-site' -Status $(if ($statistic.OneDriveSites -eq 0) { 'PASS' } else { 'FAIL' }) -Detail "$(Format-LabNumber $statistic.OneDriveSites) OneDrive sites among the sites that the listing gave."
-Add-LabCheck -Name 'sizes' -Status $(if ($statistic.NegativeSizes -eq 0) { 'PASS' } else { 'FAIL' }) -Detail "$(Format-LabNumber $statistic.NegativeSizes) sites with a size below zero."
+$sizeStatus = if ($statistic.NegativeSizes -gt 0) { 'FAIL' } elseif ($statistic.WithoutSize -gt 0) { 'INFO' } else { 'PASS' }
+$sizeDetail = "$(Format-LabNumber $statistic.NegativeSizes) sites with a size below zero, $(Format-LabNumber $statistic.WithoutSize) sites with no size"
+if ($statistic.WithoutSize -gt 0) { $sizeDetail += ' (the Scan gives them a review verdict)' }
+Add-LabCheck -Name 'sizes' -Status $sizeStatus -Detail "$sizeDetail."
 if ($statistic.GroupSitesWithoutGroup -eq 0) {
     Add-LabCheck -Name 'group-sites-have-a-group' -Status PASS -Detail 'Every site with a group template has a group ID.'
 }
@@ -593,8 +863,9 @@ if ($null -ne $compare) {
     foreach ($name in $compare.Fields.Keys) {
         $field = $compare.Fields[$name]
         $largest = ''
-        if ($field.Differing -gt 0 -and $name -eq 'StorageUsedMB') { $largest = ", largest difference $(Format-LabNumber $field.MaxDifference) MB" }
-        if ($field.Differing -gt 0 -and $name -eq 'LastContentModified') { $largest = ", largest difference $(Format-LabNumber $field.MaxDifference) s" }
+        if ($field.MaxDifference -gt 0 -and $name -eq 'StorageUsedMB') { $largest = ", largest difference $(Format-LabNumber $field.MaxDifference) MB" }
+        if ($field.MaxDifference -gt 0 -and $name -eq 'LastContentModified') { $largest = ", largest difference $(Format-LabNumber $field.MaxDifference) s" }
+        if ($field.OneSided -gt 0) { $largest += ", $(Format-LabNumber $field.OneSided) known in one listing only" }
         Add-LabCheck -Name "compare-$name" -Status $(if ($field.Differing -le $tolerance) { 'PASS' } else { 'FAIL' }) -Detail "$($field.Differing) of $($compare.InBoth) sites differ$largest."
     }
 }
@@ -631,7 +902,7 @@ $report = [PSCustomObject][ordered]@{
         ExpectedSites     = $ExpectedSites
     }
     Completed   = $main.Completed
-    Summary     = $summary
+    Summary     = $safeSummary
     Statistics  = $statistics
     Checks      = $script:Checks.ToArray()
     Compare     = $compare
