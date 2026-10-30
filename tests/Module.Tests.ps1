@@ -100,45 +100,80 @@ Describe 'The SPSSiteLifecycle.Common module' {
                 $errors = $null
                 $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$errors)
 
+                # What holds a script block is kept for each function, and for what is outside the functions: a name that holds one in a
+                # function says nothing about the same name in another. A scope is told by where its function starts, and by -1 outside
+                # the functions. A script block that a function writes belongs to that function.
+                $scopeOf = {
+                    param($node)
+                    for ($parent = $node.Parent; $null -ne $parent; $parent = $parent.Parent) {
+                        if ($parent -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
+                            return $parent.Extent.StartOffset
+                        }
+                    }
+
+                    -1
+                }
+
                 # The names that hold a script block: parameters typed [ScriptBlock], variables that are given a script block that is
                 # written in the file, and copies of those. A name that is also given anything else is not trusted.
-                $blockNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                $blockNames = @{}
                 foreach ($parameter in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParameterAst] }, $true)) {
                     foreach ($attribute in $parameter.Attributes) {
                         if ($attribute -is [System.Management.Automation.Language.TypeConstraintAst] -and $attribute.TypeName.FullName -match '^(System\.Management\.Automation\.)?ScriptBlock$') {
-                            $null = $blockNames.Add($parameter.Name.VariablePath.UserPath)
+                            $key = & $scopeOf $parameter
+                            if (-not $blockNames.ContainsKey($key)) {
+                                $blockNames[$key] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                            }
+
+                            $null = $blockNames[$key].Add($parameter.Name.VariablePath.UserPath)
                         }
                     }
                 }
 
-                $assignments = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left -is [System.Management.Automation.Language.VariableExpressionAst] }, $true))
-                for ($round = 0; $round -lt 3; $round++) {
-                    $candidates = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-                    $others = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-                    foreach ($assignment in $assignments) {
-                        $right = $assignment.Right
-                        if ($right -is [System.Management.Automation.Language.CommandExpressionAst]) {
-                            $right = $right.Expression
-                        }
-
-                        $left = $assignment.Left.VariablePath.UserPath
-                        if ($right -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
-                            ($right -is [System.Management.Automation.Language.VariableExpressionAst] -and $blockNames.Contains($right.VariablePath.UserPath))) {
-                            $null = $candidates.Add($left)
-                        }
-                        else {
-                            $null = $others.Add($left)
-                        }
+                $assignments = @{}
+                foreach ($assignment in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
+                    $key = & $scopeOf $assignment
+                    if (-not $assignments.ContainsKey($key)) {
+                        $assignments[$key] = [System.Collections.Generic.List[System.Object]]::new()
                     }
 
-                    foreach ($name in $candidates) {
-                        if (-not $others.Contains($name)) {
-                            $null = $blockNames.Add($name)
-                        }
+                    $assignments[$key].Add($assignment)
+                }
+
+                foreach ($key in @($assignments.Keys)) {
+                    if (-not $blockNames.ContainsKey($key)) {
+                        $blockNames[$key] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                     }
 
-                    foreach ($name in $others) {
-                        $null = $blockNames.Remove($name)
+                    $names = $blockNames[$key]
+                    for ($round = 0; $round -lt 3; $round++) {
+                        $candidates = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                        $others = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                        foreach ($assignment in $assignments[$key]) {
+                            $right = $assignment.Right
+                            if ($right -is [System.Management.Automation.Language.CommandExpressionAst]) {
+                                $right = $right.Expression
+                            }
+
+                            $left = $assignment.Left.VariablePath.UserPath
+                            if ($right -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
+                                ($right -is [System.Management.Automation.Language.VariableExpressionAst] -and $names.Contains($right.VariablePath.UserPath))) {
+                                $null = $candidates.Add($left)
+                            }
+                            else {
+                                $null = $others.Add($left)
+                            }
+                        }
+
+                        foreach ($name in $candidates) {
+                            if (-not $others.Contains($name)) {
+                                $null = $names.Add($name)
+                            }
+                        }
+
+                        foreach ($name in $others) {
+                            $null = $names.Remove($name)
+                        }
                     }
                 }
 
@@ -154,8 +189,11 @@ Describe 'The SPSSiteLifecycle.Common module' {
                     }
 
                     $target = $command.CommandElements[0]
-                    if ($target -is [System.Management.Automation.Language.VariableExpressionAst] -and $blockNames.Contains($target.VariablePath.UserPath)) {
-                        continue
+                    if ($target -is [System.Management.Automation.Language.VariableExpressionAst]) {
+                        $names = $blockNames[(& $scopeOf $command)]
+                        if ($null -ne $names -and $names.Contains($target.VariablePath.UserPath)) {
+                            continue
+                        }
                     }
 
                     $found.Add("a command that is not named and not a script block: $($target.Extent.Text)")
@@ -167,8 +205,15 @@ Describe 'The SPSSiteLifecycle.Common module' {
                         $found.Add("the method $member")
                     }
 
-                    if ($call.Static -and $member -ceq 'Create' -and $call.Expression.Extent.Text -match 'ScriptBlock|PowerShell') {
-                        $found.Add("the method $($call.Expression.Extent.Text)::Create")
+                    # The names of methods do not depend on the case, and a type that a variable holds, or that is made from a text, is not
+                    # one that this test can read.
+                    if ($call.Static) {
+                        if ($call.Expression -isnot [System.Management.Automation.Language.TypeExpressionAst]) {
+                            $found.Add("a static call on something that is not a type that is written: $($call.Expression.Extent.Text)::$member")
+                        }
+                        elseif ([System.String]::Equals($member, 'Create', [System.StringComparison]::OrdinalIgnoreCase) -and $call.Expression.Extent.Text -match 'ScriptBlock|PowerShell') {
+                            $found.Add("the method $($call.Expression.Extent.Text)::Create")
+                        }
                     }
                 }
 
@@ -244,6 +289,18 @@ Describe 'The SPSSiteLifecycle.Common module' {
             @{ Name = 'a copy of a parameter that is not typed'; Text = "param(`$Source) `$handler = `$Source; & `$handler 1"; Expected = 1 }
             @{ Name = 'a copy that is later given a text'; Text = "param([scriptblock]`$Source) `$handler = `$Source; `$handler = 'Connect-PnPOnline'; & `$handler"; Expected = 1 }
             @{ Name = 'a command called by its name'; Text = "Get-ChildItem -Path ."; Expected = 0 }
+            @{ Name = 'a script block made from a text, with the method in lowercase'; Text = "[scriptblock]::create('Connect-' + 'PnPOnline').Invoke()"; Expected = 1 }
+            @{ Name = 'a script block made from a text, with the method in capitals'; Text = "[ScriptBlock]::CREATE('Connect-PnPOnline')"; Expected = 1 }
+            @{ Name = 'a PowerShell instance that is given a text'; Text = "[powershell]::create().AddScript('Connect-PnPOnline')"; Expected = 2 }
+            @{ Name = 'a static call on a type that a variable holds'; Text = "`$t = [scriptblock]; `$t::Create('Connect-PnPOnline')"; Expected = 1 }
+            @{ Name = 'a static call on a type that is made from a text'; Text = "([type]'System.Management.Automation.ScriptBlock')::Create('Connect-PnPOnline')"; Expected = 1 }
+            @{ Name = 'a static call on a type that is written'; Text = "[System.String]::Equals('a', 'b')"; Expected = 0 }
+            @{ Name = 'a parameter typed as a script block in one function and as a text in another'; Text = "function A { param([scriptblock]`$c) & `$c }`nfunction B { param([string]`$c) & `$c }"; Expected = 1 }
+            @{ Name = 'a parameter typed as a script block in two functions'; Text = "function A { param([scriptblock]`$c) & `$c }`nfunction B { param([scriptblock]`$c) & `$c }"; Expected = 0 }
+            @{ Name = 'a variable that is a script block in one function and a text in another'; Text = "function A { `$b = { 1 }; & `$b }`nfunction B { `$b = 'Connect-PnPOnline'; & `$b }"; Expected = 1 }
+            @{ Name = 'a parameter of a function, used in a script block that the function writes'; Text = "function A { param([scriptblock]`$c) `$x = { & `$c }; & `$x }"; Expected = 0 }
+            @{ Name = 'a parameter of the file, used in a function that does not have it'; Text = "param([scriptblock]`$c)`nfunction A { & `$c }"; Expected = 1 }
+            @{ Name = 'a parameter of a function, with the parameters written after its name'; Text = "function A([scriptblock]`$c) { & `$c }"; Expected = 0 }
         ) {
             @(Find-DynamicCall -Text $Text) | Should -HaveCount $Expected
         }
