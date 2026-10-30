@@ -6,6 +6,40 @@
     # The files that the structure tests read, set here and not in a context, so that a test that is run alone does not read none and
     # pass for want of a file to look at.
     $script:Files = @(Get-ChildItem -Path $script:ModuleRoot -Filter '*.ps1' -Recurse)
+
+    # The name that a command is called by, without the name of its module: Microsoft.PowerShell.Utility\Invoke-Expression is the same
+    # command as Invoke-Expression. Nothing when the name is not written.
+    function script:Get-CommandBaseName {
+        param($Command)
+
+        $name = $Command.GetCommandName()
+        if ($name) {
+            $name.Substring($name.LastIndexOf('\') + 1)
+        }
+    }
+
+    # The name of a variable without its scope: $script:c, $local:c, $global:c and $private:c are written $c in the scope that they
+    # name, and ${local:c} is the same variable as $local:c.
+    function script:Get-VariableBaseName {
+        param([string]$Path)
+
+        [System.Text.RegularExpressions.Regex]::Replace($Path, '^(local|script|global|private|using|variable):', '', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    }
+
+    # The commands that reach the tenant, outside the adapters: by the name that a command is called by.
+    function script:Find-TenantCommandUse {
+        param([string]$Text)
+
+        $forbidden = '^(.+-PnP.+|.+-Mg.+|Connect-.+|Invoke-RestMethod|Invoke-WebRequest)$'
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$errors)
+        foreach ($command in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+            $name = Get-CommandBaseName -Command $command
+            if ($name -and $name -match $forbidden) {
+                $command.GetCommandName()
+            }
+        }
+    }
 }
 
 Describe 'The SPSSiteLifecycle.Common module' {
@@ -64,25 +98,35 @@ Describe 'The SPSSiteLifecycle.Common module' {
         }
 
         It 'lets only the adapter functions reach the tenant (PnP.PowerShell, Microsoft Graph, web calls)' {
-            $forbidden = '^(.+-PnP.+|.+-Mg.+|Connect-.+|Invoke-RestMethod|Invoke-WebRequest)$'
             $offenders = foreach ($file in $script:Files) {
                 if ($file.FullName -match '[\\/]Private[\\/]Adapters[\\/]') {
                     continue
                 }
 
-                $tokens = $null
-                $errors = $null
-                $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
-                $commands = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
-                foreach ($command in $commands) {
-                    $name = $command.GetCommandName()
-                    if ($name -and $name -match $forbidden) {
-                        "$($file.Name): $name"
-                    }
+                foreach ($use in Find-TenantCommandUse -Text ([System.IO.File]::ReadAllText($file.FullName))) {
+                    "$($file.Name): $use"
                 }
             }
 
             @($offenders) | Should -HaveCount 0
+        }
+
+        It 'sees a command that reaches the tenant, whatever the way it is named: <Name>' -ForEach @(
+            @{ Name = 'a command of PnP.PowerShell'; Text = 'Connect-PnPOnline'; Expected = 1 }
+            @{ Name = 'a command of PnP.PowerShell, with the name of its module'; Text = 'PnP.PowerShell\Connect-PnPOnline -Interactive'; Expected = 1 }
+            @{ Name = 'a command of Microsoft Graph'; Text = 'Get-MgSite'; Expected = 1 }
+            @{ Name = 'a command of Microsoft Graph, with the name of its module'; Text = 'Microsoft.Graph.Sites\Get-MgSite'; Expected = 1 }
+            @{ Name = 'a web call'; Text = 'Invoke-WebRequest -Uri $u'; Expected = 1 }
+            @{ Name = 'a web call, with the name of its module'; Text = 'Microsoft.PowerShell.Utility\Invoke-WebRequest -Uri $u'; Expected = 1 }
+            @{ Name = 'another web call, with the name of its module'; Text = 'Microsoft.PowerShell.Utility\Invoke-RestMethod -Uri $u'; Expected = 1 }
+            @{ Name = 'a command of the tenant that is written between quotes, with the name of its module'; Text = "& 'PnP.PowerShell\Connect-PnPOnline'"; Expected = 1 }
+            @{ Name = 'a connection command of another module'; Text = 'Connect-ExchangeOnline'; Expected = 1 }
+            @{ Name = 'a command of the tenant in a script block of another command'; Text = 'Get-Date | ForEach-Object { Connect-PnPOnline }'; Expected = 1 }
+            @{ Name = 'a command that does not reach the tenant'; Text = 'Get-Date'; Expected = 0 }
+            @{ Name = 'a command that does not reach the tenant, with the name of its module'; Text = 'Microsoft.PowerShell.Utility\Get-Date'; Expected = 0 }
+            @{ Name = 'the name of a command in a text'; Text = "'Connect-PnPOnline'"; Expected = 0 }
+        ) {
+            @(Find-TenantCommandUse -Text $Text) | Should -HaveCount $Expected
         }
     }
 
@@ -139,27 +183,45 @@ Describe 'The SPSSiteLifecycle.Common module' {
                         }
                     }
 
-                    $null = (& $nameSet $(if ($typed) { $blockNames } else { $forced }) $key).Add($parameter.Name.VariablePath.UserPath)
+                    $null = (& $nameSet $(if ($typed) { $blockNames } else { $forced }) $key).Add((Get-VariableBaseName -Path $parameter.Name.VariablePath.UserPath))
                 }
 
                 foreach ($loop in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ForEachStatementAst] }, $true)) {
-                    $null = (& $nameSet $forced (& $scopeOf $loop)).Add($loop.Variable.VariablePath.UserPath)
+                    $null = (& $nameSet $forced (& $scopeOf $loop)).Add((Get-VariableBaseName -Path $loop.Variable.VariablePath.UserPath))
                 }
 
                 foreach ($reference in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.ConvertExpressionAst] -and $n.Type.TypeName.Name -eq 'ref' -and $n.Child -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
-                    $null = (& $nameSet $forced (& $scopeOf $reference)).Add($reference.Child.VariablePath.UserPath)
+                    $null = (& $nameSet $forced (& $scopeOf $reference)).Add((Get-VariableBaseName -Path $reference.Child.VariablePath.UserPath))
                 }
 
                 foreach ($command in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
                     $key = & $scopeOf $command
-                    $name = $command.GetCommandName()
+                    $name = Get-CommandBaseName -Command $command
                     $elements = @($command.CommandElements | Select-Object -Skip 1)
+
+                    # The object of a variable can be written, and which one is not followed: Get-Variable (and the object that
+                    # PSVariable gives, below) puts every name of the scope in doubt.
+                    if ($name -match '^(Get-Variable|gv)$') {
+                        $everything[$key] = $true
+                    }
+
                     if ($name -match '^(Set-Variable|New-Variable|Clear-Variable|Remove-Variable|sv|nv|clv|rv|set)$') {
                         foreach ($element in $elements) {
-                            if ($element -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                                $null = (& $nameSet $forced $key).Add($element.Value)
+                            # An argument that is bound to its parameter by a colon (-Name:c) is the argument of the parameter, not
+                            # an element of the command.
+                            $value = $element
+                            if ($element -is [System.Management.Automation.Language.CommandParameterAst]) {
+                                if ($null -eq $element.Argument) {
+                                    continue
+                                }
+
+                                $value = $element.Argument
                             }
-                            elseif ($element -isnot [System.Management.Automation.Language.CommandParameterAst]) {
+
+                            if ($value -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                                $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $value.Value))
+                            }
+                            else {
                                 $everything[$key] = $true
                             }
                         }
@@ -169,12 +231,41 @@ Describe 'The SPSSiteLifecycle.Common module' {
                         if ($elements[$i] -is [System.Management.Automation.Language.CommandParameterAst] -and $elements[$i].ParameterName -match '^((Out|Error|Warning|Information|Info|Pipeline)[A-Za-z]*|ov|ev|wv|iv|pv)$') {
                             $value = if ($null -ne $elements[$i].Argument) { $elements[$i].Argument } elseif ($i + 1 -lt $elements.Count) { $elements[$i + 1] } else { $null }
                             if ($value -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-                                $null = (& $nameSet $forced $key).Add($value.Value.TrimStart('+'))
+                                $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $value.Value.TrimStart('+')))
                             }
                             elseif ($null -ne $value -and $value -isnot [System.Management.Automation.Language.CommandParameterAst]) {
                                 $everything[$key] = $true
                             }
                         }
+                    }
+                }
+
+                # A variable can be written by a path of its drive ('variable:c'): a path that names one puts that name in doubt, and one that
+                # does not (the drive alone, or a text that holds a variable) puts every name of the scope in doubt. The drive of the
+                # aliases makes a command that goes by another name, and PSVariable gives the object of a variable, which can be written.
+                $drives = [System.Collections.Generic.List[string]]::new()
+                $textOptions = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+                foreach ($literal in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true)) {
+                    $drive = [System.Text.RegularExpressions.Regex]::Match($literal.Value, '^\s*variable:[\\/]?(?<name>.*)$', $textOptions)
+                    if ($drive.Success) {
+                        $key = & $scopeOf $literal
+                        if ($drive.Groups['name'].Value -and $literal -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+                            $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $drive.Groups['name'].Value))
+                        }
+                        else {
+                            $everything[$key] = $true
+                        }
+                    }
+
+                    if ([System.Text.RegularExpressions.Regex]::IsMatch($literal.Value, '^\s*alias:', $textOptions)) {
+                        $drives.Add("the drive of the aliases: $($literal.Extent.Text)")
+                    }
+                }
+
+                foreach ($member in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst] }, $true)) {
+                    if ($member.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and [System.String]::Equals($member.Member.Value, 'PSVariable', [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $everything[(& $scopeOf $member)] = $true
+                        $drives.Add('the object of a variable, from PSVariable')
                     }
                 }
 
@@ -199,7 +290,7 @@ Describe 'The SPSSiteLifecycle.Common module' {
                         }
 
                         if ($target -is [System.Management.Automation.Language.VariableExpressionAst]) {
-                            $null = (& $nameSet $forced $key).Add($target.VariablePath.UserPath)
+                            $null = (& $nameSet $forced $key).Add((Get-VariableBaseName -Path $target.VariablePath.UserPath))
                         }
                     }
                 }
@@ -215,9 +306,9 @@ Describe 'The SPSSiteLifecycle.Common module' {
                                 $right = $right.Expression
                             }
 
-                            $left = $assignment.Left.VariablePath.UserPath
+                            $left = Get-VariableBaseName -Path $assignment.Left.VariablePath.UserPath
                             if ($right -is [System.Management.Automation.Language.ScriptBlockExpressionAst] -or
-                                ($right -is [System.Management.Automation.Language.VariableExpressionAst] -and $names.Contains($right.VariablePath.UserPath))) {
+                                ($right -is [System.Management.Automation.Language.VariableExpressionAst] -and $names.Contains((Get-VariableBaseName -Path $right.VariablePath.UserPath)))) {
                                 $null = $candidates.Add($left)
                             }
                             else {
@@ -237,11 +328,11 @@ Describe 'The SPSSiteLifecycle.Common module' {
                     }
                 }
 
-                $found = [System.Collections.Generic.List[string]]::new()
+                $found = [System.Collections.Generic.List[string]]::new($drives)
                 foreach ($command in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
-                    $name = $command.GetCommandName()
+                    $name = Get-CommandBaseName -Command $command
                     if ($name) {
-                        if ($name -match '^(Invoke-Expression|iex|Invoke-Command|icm|Add-Type|New-Object)$') {
+                        if ($name -match '^(Invoke-Expression|iex|Invoke-Command|icm|Add-Type|New-Object|Set-Alias|New-Alias|Import-Alias|sal|nal|ipal)$') {
                             $found.Add("the command $name")
                         }
 
@@ -251,7 +342,7 @@ Describe 'The SPSSiteLifecycle.Common module' {
                     $target = $command.CommandElements[0]
                     if ($target -is [System.Management.Automation.Language.VariableExpressionAst]) {
                         $key = & $scopeOf $command
-                        $variable = $target.VariablePath.UserPath
+                        $variable = Get-VariableBaseName -Path $target.VariablePath.UserPath
                         if (-not $everything.ContainsKey($key) -and (& $nameSet $blockNames $key).Contains($variable) -and -not (& $nameSet $forced $key).Contains($variable)) {
                             continue
                         }
@@ -296,7 +387,7 @@ Describe 'The SPSSiteLifecycle.Common module' {
                 $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$null, [ref]$errors)
                 $found = [System.Collections.Generic.List[string]]::new()
                 foreach ($command in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
-                    $name = $command.GetCommandName()
+                    $name = Get-CommandBaseName -Command $command
                     if (-not $name -or $name -notmatch '^(.+-PnP.+|.+-Mg.+|Connect-.+|Invoke-RestMethod|Invoke-WebRequest)$') {
                         continue
                     }
@@ -313,7 +404,7 @@ Describe 'The SPSSiteLifecycle.Common module' {
                     }
 
                     if (-not $stops) {
-                        $found.Add("$name")
+                        $found.Add($command.GetCommandName())
                     }
                 }
 
@@ -390,6 +481,68 @@ Describe 'The SPSSiteLifecycle.Common module' {
             @{ Name = 'a call operator on a member of an object'; Text = "& `$object.Command 'x'"; Expected = 1 }
             @{ Name = 'a script block that is written in the file and a foreach with another name'; Text = "`$c = { 1 }; foreach (`$item in 1..3) { & `$c }"; Expected = 0 }
             @{ Name = 'a script block that is written in the file and a parameter that writes another name'; Text = "`$c = { 1 }; Get-Date -OutVariable other | Out-Null; & `$c"; Expected = 0 }
+            @{ Name = 'Set-Variable with its arguments bound by a colon'; Text = "`$c = { 1 }; Set-Variable -Name:c -Value:'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'Set-Variable with the name bound by a colon and the value after it'; Text = "`$c = { 1 }; Set-Variable -Name:c 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'Set-Variable with a name that is not written, bound by a colon'; Text = "`$c = { 1 }; `$n = 'c'; Set-Variable -Name:`$n -Value:'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'Set-Variable with a list of names, bound by a colon'; Text = "`$c = { 1 }; Set-Variable -Name:@('c', 'd') -Value 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'its alias with the short names of the parameters, bound by a colon'; Text = "`$c = { 1 }; sv -n:c -va:'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'Set-Variable with a colon, for a name that is not the script block'; Text = "`$c = { 1 }; Set-Variable -Name:other -Value:'x'; & `$c"; Expected = 0 }
+            @{ Name = 'Set-Variable called with the name of its module'; Text = "`$c = { 1 }; Microsoft.PowerShell.Utility\Set-Variable -Name c -Value 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'its alias called with the name of its module'; Text = "`$c = { 1 }; Microsoft.PowerShell.Utility\sv c 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'Invoke-Expression called with the name of its module'; Text = "Microsoft.PowerShell.Utility\Invoke-Expression 'Connect-PnPOnline'"; Expected = 1 }
+            @{ Name = 'Invoke-Command called with the name of its module'; Text = "Microsoft.PowerShell.Core\Invoke-Command -ScriptBlock { 1 }"; Expected = 1 }
+            @{ Name = 'New-Object called with the name of its module'; Text = "Microsoft.PowerShell.Utility\New-Object 'Microsoft.SharePoint.Client.ClientContext'"; Expected = 1 }
+            @{ Name = 'a command that is not dangerous, called with the name of its module'; Text = "Microsoft.PowerShell.Utility\Get-Date"; Expected = 0 }
+            @{ Name = 'a variable that is a script block, and a variable of the local scope gives it a text'; Text = "`$c = { 1 }; `$local:c = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a variable of the script scope gives it a text'; Text = "`$c = { 1 }; `$script:c = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a variable of the global scope gives it a text'; Text = "`$c = { 1 }; `$global:c = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a private variable gives it a text'; Text = "`$c = { 1 }; `$private:c = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a variable between braces gives it a text'; Text = "`$c = { 1 }; `${local:c} = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable of the script scope that is a script block, and is called with its scope'; Text = "`$script:c = { 1 }; & `$script:c"; Expected = 0 }
+            @{ Name = 'a variable that is a script block, and is called with a scope'; Text = "`$c = { 1 }; & `$script:c"; Expected = 0 }
+            @{ Name = 'a variable of the script scope that is a script block, and is called without it'; Text = "`$script:c = { 1 }; & `$c"; Expected = 0 }
+            @{ Name = 'a parameter typed as a script block, and called with a scope'; Text = "function A { param([scriptblock]`$c) & `$local:c }"; Expected = 0 }
+            @{ Name = 'a variable that is a script block, and a foreach holds it with a scope'; Text = "`$c = { 1 }; foreach (`$script:c in @('Connect-' + 'PnPOnline')) { & `$c }"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a list assignment gives it a text with a scope'; Text = "`$c = { 1 }; `$a, `$script:c = 'x', 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a typed assignment gives it a text with a scope'; Text = "`$c = { 1 }; [string]`$script:c = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a reference to it is given with a scope'; Text = "`$c = { 1 }; Update-Something ([ref]`$script:c); & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and Set-Variable gives a text by a name with a scope'; Text = "`$c = { 1 }; Set-Variable -Name script:c -Value 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a parameter writes a variable of that name with a scope'; Text = "`$c = { 1 }; Get-Date -OutVariable script:c | Out-Null; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and Set-Item writes it by the drive of the variables'; Text = "`$c = { 1 }; Set-Item variable:c 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a path of the drive of the variables is in quotes'; Text = "`$c = { 1 }; Set-Item -Path 'Variable:\c' -Value 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a path of the drive of the variables is bound by a colon'; Text = "`$c = { 1 }; Set-Item -Path:variable:c 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and New-Item gives the drive of the variables and a name'; Text = "`$c = { 1 }; New-Item -Path variable: -Name c -Value 'Connect-PnPOnline' -Force; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and a path of the drive of the variables is a string with a variable'; Text = "`$c = { 1 }; `$n = 'c'; Set-Item `"variable:`$n`" 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a path that is not the drive of the variables'; Text = "`$c = { 1 }; Get-Content 'file.txt'; & `$c"; Expected = 0 }
+            @{ Name = 'a variable that is a script block, and the object of another variable is written'; Text = "`$c = { 1 }; (Get-Variable c).Value = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and the object of another variable is written, by the alias'; Text = "`$c = { 1 }; (gv c).Value = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and PSVariable writes it'; Text = "`$c = { 1 }; `$ExecutionContext.SessionState.PSVariable.Set('c', 'Connect-PnPOnline'); & `$c"; Expected = 2 }
+            @{ Name = 'an alias that is made for a command'; Text = "Set-Alias Get-Thing Connect-PnPOnline"; Expected = 1 }
+            @{ Name = 'an alias that is made with New-Alias'; Text = "New-Alias -Name Get-Thing -Value Connect-PnPOnline"; Expected = 1 }
+            @{ Name = 'an alias that is made with its own alias'; Text = "nal Get-Thing Connect-PnPOnline"; Expected = 1 }
+            @{ Name = 'an alias that is made with the name of its module'; Text = "Microsoft.PowerShell.Utility\Set-Alias Get-Thing Connect-PnPOnline"; Expected = 1 }
+            @{ Name = 'an alias that is made by the drive of the aliases'; Text = "Set-Item alias:Get-Thing Connect-PnPOnline"; Expected = 1 }
+            @{ Name = 'a script block of a command that holds a foreach that writes the variable'; Text = "`$c = { 1 }; Get-Date | ForEach-Object { foreach (`$c in @('Connect-' + 'PnPOnline')) { } }; & `$c"; Expected = 1 }
+            @{ Name = 'a script block of a command that gives a reference to the variable'; Text = "`$c = { 1 }; Get-Date | ForEach-Object { Update-Something ([ref]`$c) }; & `$c"; Expected = 1 }
+            @{ Name = 'a script block of a command that gives a text to the variable with Set-Variable'; Text = "`$c = { 1 }; Get-Date | ForEach-Object { Set-Variable -Name c -Value 'Connect-PnPOnline' }; & `$c"; Expected = 1 }
+            @{ Name = 'a script block of a command that writes the variable by the drive of the variables'; Text = "`$c = { 1 }; Get-Date | ForEach-Object { Set-Item variable:c 'Connect-PnPOnline' }; & `$c"; Expected = 1 }
+            @{ Name = 'a script block of a command that writes the variable through PSVariable'; Text = "`$c = { 1 }; Get-Date | ForEach-Object { `$ExecutionContext.SessionState.PSVariable.Set('c', 'x') }; & `$c"; Expected = 2 }
+            @{ Name = 'a script block of a command that makes a script block from a text'; Text = "Get-Date | ForEach-Object { [scriptblock]::Create('Connect-PnPOnline') }"; Expected = 1 }
+            @{ Name = 'a script block of a command that evaluates a text'; Text = "Get-Date | ForEach-Object { Invoke-Expression 'Connect-PnPOnline' }"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, written with another case, and called with a third'; Text = "`$Handler = { 1 }; `$handler = 'Connect-PnPOnline'; & `$HANDLER"; Expected = 1 }
+            @{ Name = 'a copy of a script block, written with another case'; Text = "`$c = { 1 }; `$d = `$C; & `$D"; Expected = 0 }
+            @{ Name = 'PSVariable written in lowercase'; Text = "`$c = { 1 }; `$ExecutionContext.SessionState.psvariable.Set('c', 'x'); & `$c"; Expected = 2 }
+            @{ Name = 'a variable that is a script block, and a cast of it to another type'; Text = "`$c = { 1 }; `$x = [object]`$c; & `$c"; Expected = 0 }
+            @{ Name = 'a variable that is a script block, and Set-Variable writes another name'; Text = "`$c = { 1 }; Set-Variable -Name d -Value 'y'; & `$c"; Expected = 0 }
+            @{ Name = 'a variable that is a script block, and OutVariable writes a name that is a variable'; Text = "`$c = { 1 }; `$n = 'c'; Get-Date -OutVariable `$n | Out-Null; & `$c"; Expected = 1 }
+            @{ Name = 'a function whose variable is written by the drive of the variables, and a command outside it'; Text = "function A { `$c = { 1 }; Set-Item variable:c 'Connect-PnPOnline'; & `$c }`n`$d = 'x'; Get-Date"; Expected = 1 }
+            @{ Name = 'a parameter that is typed as a script block, and is given a text'; Text = "param([scriptblock]`$c) `$c = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a parameter of a function that is typed as a script block, and is given a text'; Text = "function A { param([scriptblock]`$c) `$c = 'Connect-PnPOnline'; & `$c }"; Expected = 1 }
+            @{ Name = 'a static method of a type that a variable holds, whose name is a variable'; Text = "`$t = [scriptblock]; `$name = 'Create'; `$t::`$name('x')"; Expected = 1 }
+            @{ Name = 'a static method Create of another type'; Text = "[System.IO.File]::Create('a')"; Expected = 0 }
+            @{ Name = 'a static method of the type of a script block, that is not Create'; Text = "[scriptblock]::Equals('a', 'b')"; Expected = 0 }
+            @{ Name = 'a variable that is a script block, and the same variable written with another case is given a text'; Text = "`$c = { 1 }; `$C = 'Connect-PnPOnline'; & `$c"; Expected = 1 }
+            @{ Name = 'a variable that is a script block, and OutVariable has no value but is followed by another parameter'; Text = "`$c = { 1 }; Get-Date -OutVariable -Verbose; & `$c"; Expected = 0 }
         ) {
             @(Find-DynamicCall -Text $Text) | Should -HaveCount $Expected
         }
@@ -419,6 +572,13 @@ Describe 'The SPSSiteLifecycle.Common module' {
             @{ Name = 'a web call'; Text = 'Invoke-RestMethod -Uri $u'; Expected = 1 }
             @{ Name = 'a command that is not a call to the tenant'; Text = 'Get-Date'; Expected = 0 }
             @{ Name = 'two calls, one of them stopping'; Text = 'Get-PnPContext -ErrorAction Stop; Invoke-PnPQuery'; Expected = 1 }
+            @{ Name = 'a call with the name of its module, and no ErrorAction'; Text = 'PnP.PowerShell\Connect-PnPOnline -Url $u'; Expected = 1 }
+            @{ Name = 'a call with the name of its module, and ErrorAction Stop'; Text = 'PnP.PowerShell\Connect-PnPOnline -Url $u -ErrorAction Stop'; Expected = 0 }
+            @{ Name = 'a web call with the name of its module, and no ErrorAction'; Text = 'Microsoft.PowerShell.Utility\Invoke-RestMethod -Uri $u'; Expected = 1 }
+            @{ Name = 'a web call with the name of its module, and ErrorAction Stop'; Text = 'Microsoft.PowerShell.Utility\Invoke-WebRequest -Uri $u -ErrorAction Stop'; Expected = 0 }
+            @{ Name = 'a call of Graph with the name of its module, and no ErrorAction'; Text = 'Microsoft.Graph.Sites\Get-MgSite'; Expected = 1 }
+            @{ Name = 'a call in a script block of another command, and no ErrorAction'; Text = 'Get-Date | ForEach-Object { Connect-PnPOnline -Url $u }'; Expected = 1 }
+            @{ Name = 'a call in which another parameter is given Stop'; Text = 'Connect-PnPOnline -Url $u -Mode Stop'; Expected = 1 }
         ) {
             @(Find-TenantCallThatDoesNotStop -Text $Text) | Should -HaveCount $Expected
         }
