@@ -46,10 +46,6 @@
     )
 
     $sites = @(if ($null -ne $Item) { $Item })
-    if ($sites.Count -gt 0) {
-        Assert-SPSLifecycleSiteLoaded -Item $sites[0] -Source $Source
-    }
-
     $records = [System.Collections.Generic.List[System.Object]]::new($sites.Count)
     foreach ($site in $sites) {
         $records.Add((ConvertTo-SPSLifecycleSiteRecord -Item $site -Source $Source))

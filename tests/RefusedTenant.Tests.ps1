@@ -151,11 +151,11 @@ Describe 'Assert-SPSLifecycleTenantAllowed' {
     ) {
         $setting = New-TestSetting -Override @{ AdminUrl = $Admin }
 
-        { Assert-TestAllowed -Setting $setting } | Should -Throw -ExpectedMessage '*AdminUrl*'
+        { Assert-TestAllowed -Setting $setting } | Should -Throw -ExpectedMessage "AdminUrl: '*' is not the address of the admin site of a tenant (https://<tenant>-admin.sharepoint.com)."
     }
 
     It 'stops when there is no tenant name' {
-        { Assert-TestAllowed -Setting (New-TestSetting -Override @{ TenantName = '' }) } | Should -Throw -ExpectedMessage '*TenantName*'
+        { Assert-TestAllowed -Setting (New-TestSetting -Override @{ TenantName = '' }) } | Should -Throw -ExpectedMessage 'TenantName: no tenant name was given, so the tool cannot tell which tenant it would sign in to.'
     }
 
     It 'refuses the Microsoft tenants even when the settings forgot the list' {

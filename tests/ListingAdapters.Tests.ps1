@@ -979,6 +979,54 @@ $next = if ($index + 1 -lt $pages.Count) { 't' + ($index + 1) } else { '' }
         (Get-StubLog | Where-Object { $_ -like 'close*' }) | Should -HaveCount 0
     }
 
+    It 'does not end a session that its caller happens to hold in a variable of the same name, when the sign-in fails' {
+        & $script:Module { $script:StubData.OpenFails = 'The sign-in failed.' }
+        $summary = & $script:Module { Initialize-SPSLifecycleListingSummary }
+
+        {
+            & $script:Module {
+                param($setting, $sum, $now)
+                $session = 'a session of the caller'
+                $null = Get-SPSLifecycleTenantSite -Setting $setting -Summary $sum -Source Auto -Now $now
+            } (New-TestSetting) $summary $script:Now
+        } | Should -Throw -ExpectedMessage '*sign-in failed*'
+
+        (Get-StubLog | Where-Object { $_ -like 'close*' }) | Should -HaveCount 0
+    }
+
+    It 'gives no reason for the cmdlet when the paged call is used, also in a summary that held one' {
+        Set-TestPages -Sizes 2
+        $summary = & $script:Module { Initialize-SPSLifecycleListingSummary }
+        $summary.FallbackReason = 'a reason of an earlier listing'
+
+        $null = @(& $script:Module { param($sum, $now, $setting) Get-SPSLifecycleTenantSite -Setting $setting -Summary $sum -Source Auto -Now $now } $summary $script:Now (New-TestSetting))
+
+        $summary.Source | Should -BeExactly 'Csom'
+        $summary.FallbackReason | Should -BeExactly ''
+    }
+
+    It 'ends the progress that it showed, under the same activity, also when the caller gives none' {
+        Set-TestPages -Sizes 3, 2
+        & $script:Module {
+            $script:Progress = [System.Collections.Generic.List[System.Object]]::new()
+            Invoke-Expression 'function script:Write-Progress { param($Activity, $Status, $PercentComplete, [switch]$Completed) $script:Progress.Add([PSCustomObject]@{ Activity = $Activity; Completed = [bool]$Completed }) }'
+        }
+
+        try {
+            $null = Invoke-TestTenantSite
+            $progress = @(& $script:Module { $script:Progress.ToArray() })
+        }
+        finally {
+            & $script:Module { Remove-Item -Path 'Function:\Write-Progress' -ErrorAction SilentlyContinue }
+        }
+
+        @($progress | Where-Object { -not $_.Completed }) | Should -HaveCount 2
+        @($progress | Where-Object { $_.Completed }) | Should -HaveCount 1
+        foreach ($record in $progress) {
+            $record.Activity | Should -BeExactly 'Listing the sites of the tenant'
+        }
+    }
+
     It 'tells its progress to the caller after each page' {
         Set-TestPages -Sizes 3, 2
         $log = [System.Collections.Generic.List[object]]::new()
