@@ -91,3 +91,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant tables of the verdict engine are built once, and the lock date entries are hashtables, because the
   garbage collector took four fifths of the time. The tests run 5,000 and 20,000 sites and compare the times, so that
   a time that grows with the square of the size fails on any system.
+- The listing of the tenant (`Get-SPSLifecycleTenantSite`), which the Scan reads the sites with (#6). It lists
+  the sites page by page (about 1,500 a page) with the paged call of the SharePoint admin API, filtered on the
+  server by the lock state when a single one is asked, and falls back on `Get-PnPTenantSite`, saying why, when
+  the installed PnP.PowerShell does not have the types and members that the paged call needs. After each page
+  it saves a checkpoint (a manifest, one file per page with its SHA-256, and a lock file), and an interrupted
+  run takes it up where it stopped when it is for the same tenant, filter and way of asking, is less than 24
+  hours old and holds every page intact; otherwise it says why and starts again, and a listing that finished
+  is never reused. The pages go down the pipeline one at a time. A page that fails is asked again, a token
+  that was already asked stops the listing, and the OneDrive sites that came anyway, the addresses that
+  SharePoint does not give and the sites that come twice are left out and counted. A property that the call
+  did not load reads as `$null` in PowerShell and would have hidden a safeguard for every site, so the first
+  site of each page is read through reflection and a page with a property that is not loaded stops the
+  listing. Everything that touches the tenant is in `Private/Adapters` (the check of PnP.PowerShell 3.0 or
+  later, the sign-in, which checks the refused tenants and the address of the admin site again right before
+  it, the sign-out and the read of a page), and a test fails when a command that signs in, or a type of the
+  admin API, is written anywhere else. The refused tenants are one rule that the settings and the sign-in
+  share. The tests never reach a tenant: the commands of PnP.PowerShell are replaced by stubs that are checked
+  before each test, throwing tripwires stand on the sign-in, and the one test that looks at the real types
+  loads the libraries of types only, in a process of its own. Without a tenant, the checkpoint takes 22 microseconds to
+  write and 32 to read a record, and 259,500 sites in 173 pages are listed in 10 s (9 s when the run
+  resumes at the half). The call has not run against a tenant yet: the first run is the lab.
