@@ -5,6 +5,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The lock date lists and the exclusion lists are read with a strict structure (#22), as the lock journal is: a quote
+  that is never closed (it swallows the rows after it), a stray quote, a row that is cut short or has a value too many
+  (they were dropped without a message) and a value under a column that has no name stop the tool and name the
+  file and the line, because a row that is lost protects no site (exclusions) or leaves an older lock date in force (lock
+  dates). The encoding stays the one that Excel writes (UTF-8, UTF-16, Windows-1252), except that a byte order mark is a
+  declaration: an invalid byte after a UTF-8 mark, or a lone surrogate after a UTF-16 mark, stops the tool instead of
+  becoming U+FFFD in a web address. What stays tolerant is the meaning of a row (a lock date row without a date is
+  ignored, `SiteId` is optional, the empty rows that Excel adds are ignored), and the activity reports are read as before.
+  A list whose rows were shorter than its header, which was read, now stops the tool. The messages of a lock date that
+  cannot be read name the line, and so do the first values of an exclusion list that are not addresses.
+
 ### Fixed
 
 - The tenant name and the names of the settings are read one character at a time (#24). `TenantName` accepted

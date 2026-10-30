@@ -23,8 +23,8 @@
     }
 
     function script:Read-TestStrict {
-        param([string]$Path, [string[]]$Required = @(), [string[]]$Optional = @())
-        & $script:Module { param($p, $r, $o) Read-SPSLifecycleStrictCsv -Path $p -RequiredColumn $r -OptionalColumn $o } $Path $Required $Optional
+        param([string]$Path, [string[]]$Required = @(), [string[]]$Optional = @(), [switch]$TolerantEncoding)
+        & $script:Module { param($p, $r, $o, $t) Read-SPSLifecycleStrictCsv -Path $p -RequiredColumn $r -OptionalColumn $o -TolerantEncoding:$t } $Path $Required $Optional ([bool]$TolerantEncoding)
     }
 }
 
@@ -156,6 +156,78 @@ Describe 'Read-SPSLifecycleStrictCsv' {
             }
 
             $table.Rows[0].Url | Should -BeExactly 'https://contoso.sharepoint.com/sites/right'
+        }
+    }
+
+    Context 'With TolerantEncoding, as the files that a person gives are read' {
+        It 'reads a file saved by Excel as <Name>' -ForEach @(
+            @{ Name = 'Windows-1252 with an accented letter (French, semicolons)'; Encoding = 'cp1252'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;A6E2;29/10/2026`r`n"; Url = 'https://contoso.sharepoint.com/sites/équipe' }
+            @{ Name = 'UTF-16 with a byte order mark (Unicode text, tabs)'; Encoding = 'utf16'; Text = "Url`tSiteId`tLockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe`tA6E2`t29/10/2026`r`n"; Url = 'https://contoso.sharepoint.com/sites/équipe' }
+            @{ Name = 'UTF-8 without a byte order mark'; Encoding = 'utf8'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;A6E2;29/10/2026`r`n"; Url = 'https://contoso.sharepoint.com/sites/équipe' }
+            @{ Name = 'UTF-8 with a byte order mark'; Encoding = 'utf8bom'; Text = "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;A6E2;29/10/2026`r`n"; Url = 'https://contoso.sharepoint.com/sites/équipe' }
+        ) {
+            $path = Write-TestFile -Name 'excel.csv' -Text $Text -Encoding $Encoding
+
+            $table = Read-TestStrict -Path $path -Required 'Url', 'SiteId', 'LockedOn' -TolerantEncoding
+
+            $table.Rows | Should -HaveCount 1
+            $table.Rows[0].Url | Should -BeExactly $Url
+            $table.Rows[0].LockedOn | Should -BeExactly '29/10/2026'
+        }
+
+        It 'still refuses a file that is not UTF-8 without it, as the lock journal is read' {
+            $path = Write-TestFile -Name 'excel.csv' -Text "Url;SiteId;LockedOn`r`nhttps://contoso.sharepoint.com/sites/équipe;A6E2;29/10/2026`r`n" -Encoding cp1252
+
+            { Read-TestStrict -Path $path -Required 'Url' } | Should -Throw -ExpectedMessage '*excel.csv*not UTF-8*CSV UTF-8*'
+        }
+
+        It 'stops on <Name>, because the byte order mark says what the file is, and a byte that does not fit is a damage that would change a web address' -ForEach @(
+            @{ Name = 'a byte that is not UTF-8 after a UTF-8 byte order mark'; Mark = [byte[]]@(0xEF, 0xBB, 0xBF); Tail = [byte[]]@(0xFF); Utf16 = $false }
+            @{ Name = 'a sequence cut short after a UTF-8 byte order mark'; Mark = [byte[]]@(0xEF, 0xBB, 0xBF); Tail = [byte[]]@(0xC3); Utf16 = $false }
+            @{ Name = 'a lone surrogate in UTF-16'; Mark = [byte[]]@(0xFF, 0xFE); Tail = [byte[]]@(0x00, 0xD8); Utf16 = $true }
+        ) {
+            $encoding = if ($Utf16) { [System.Text.UnicodeEncoding]::new($false, $false) } else { [System.Text.Encoding]::ASCII }
+            $head = $encoding.GetBytes("Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a")
+            $rest = $encoding.GetBytes(",,2026-10-29`r`n")
+            $path = Write-TestBytes -Name 'damaged.csv' -Byte ([byte[]]($Mark + $head + $Tail + $rest))
+
+            { Read-TestStrict -Path $path -Required 'Url', 'SiteId', 'LockedOn' -TolerantEncoding } | Should -Throw -ExpectedMessage "*damaged.csv*byte order mark*damaged*"
+        }
+
+        It 'does not call a damaged file not UTF-8, which it may legitimately not be' {
+            $head = [System.Text.Encoding]::ASCII.GetBytes("Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a")
+            $path = Write-TestBytes -Name 'damaged.csv' -Byte ([byte[]]([byte[]]@(0xEF, 0xBB, 0xBF) + $head + [byte[]]@(0xFF) + [System.Text.Encoding]::ASCII.GetBytes(",,2026-10-29`r`n")))
+
+            $thrown = $null
+            try {
+                $null = Read-TestStrict -Path $path -Required 'Url' -TolerantEncoding
+            }
+            catch {
+                $thrown = $_.Exception.Message
+            }
+
+            $thrown | Should -Not -BeLike '*not UTF-8*'
+            $thrown | Should -BeLike '*CSV UTF-8*'
+        }
+
+        It 'reads a damaged byte of a file that has no mark as Windows-1252, where it can be nothing but a letter of a name' {
+            $head = [System.Text.Encoding]::ASCII.GetBytes("Url,SiteId,LockedOn`r`nhttps://contoso.sharepoint.com/sites/a")
+            $path = Write-TestBytes -Name 'nomark.csv' -Byte ([byte[]]($head + [byte[]]@(0xE9) + [System.Text.Encoding]::ASCII.GetBytes(",,2026-10-29`r`n")))
+
+            $table = Read-TestStrict -Path $path -Required 'Url' -TolerantEncoding
+
+            $table.Rows[0].Url | Should -BeExactly "https://contoso.sharepoint.com/sites/a$([char]0xE9)"
+        }
+
+        It 'is as strict about the structure as without it: <Name>' -ForEach @(
+            @{ Name = 'a row cut short'; Text = "Url;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;2026-10-29`r`nhttps://contoso.sharepoint.com/sites/b`r`n"; Message = '*structure.csv*line 3*1 value(s)*2 column(s)*' }
+            @{ Name = 'a value too many'; Text = "Url;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;2026-10-29;x`r`n"; Message = '*structure.csv*line 2*3 value(s)*2 column(s)*' }
+            @{ Name = 'a stray quote'; Text = "Url;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;2026`"10-29`r`n"; Message = '*structure.csv*line 2*CSV rules*' }
+            @{ Name = 'a quote that is never closed'; Text = "Url;LockedOn`r`nhttps://contoso.sharepoint.com/sites/a;`"2026-10-29`r`n"; Message = '*structure.csv*line 2*' }
+        ) {
+            $path = Write-TestFile -Name 'structure.csv' -Text $Text -Encoding cp1252
+
+            { Read-TestStrict -Path $path -Required 'Url' -TolerantEncoding } | Should -Throw -ExpectedMessage $Message
         }
     }
 

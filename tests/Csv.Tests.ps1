@@ -437,7 +437,11 @@ Describe 'ConvertTo-SPSLifecycleBoolean' {
 Describe 'ConvertFrom-SPSLifecycleCsvByte' {
     BeforeAll {
         function script:ConvertFrom-TestByte {
-            param([byte[]]$Byte, [switch]$Strict)
+            param([byte[]]$Byte, [switch]$Strict, [switch]$StrictAfterMark)
+            if ($StrictAfterMark) {
+                return & $script:Module { param($b) ConvertFrom-SPSLifecycleCsvByte -Bytes $b -StrictAfterMark } $Byte
+            }
+
             & $script:Module { param($b, $s) ConvertFrom-SPSLifecycleCsvByte -Bytes $b -Strict:$s } $Byte ([bool]$Strict)
         }
 
@@ -448,10 +452,10 @@ Describe 'ConvertFrom-SPSLifecycleCsvByte' {
         }
 
         function script:Test-DecoderRefusal {
-            param([byte[]]$Byte)
+            param([byte[]]$Byte, [switch]$StrictAfterMark)
             $thrown = $null
             try {
-                $null = ConvertFrom-TestByte -Byte $Byte -Strict
+                $null = if ($StrictAfterMark) { ConvertFrom-TestByte -Byte $Byte -StrictAfterMark } else { ConvertFrom-TestByte -Byte $Byte -Strict }
             }
             catch {
                 $thrown = $_.Exception
@@ -507,8 +511,92 @@ Describe 'ConvertFrom-SPSLifecycleCsvByte' {
             @{ Name = 'UTF-16 big endian with a byte order mark'; Byte = [byte[]]@(0xFE, 0xFF, 0x00, 0x61) }
             @{ Name = 'a byte order mark that is cut short'; Byte = [byte[]]@(0xEF, 0xBB) }
             @{ Name = 'two bytes of a byte order mark and a letter'; Byte = [byte[]]@(0xEF, 0xBB, 0x41, 0x42) }
+            @{ Name = 'the last two bytes of a byte order mark after a letter'; Byte = [byte[]]@(0x41, 0xBB, 0xBF) }
+            @{ Name = 'the last byte of a byte order mark after two letters'; Byte = [byte[]]@(0x41, 0x42, 0xBF) }
         ) {
             (Test-DecoderRefusal -Byte $Byte) | Should -BeTrue
+        }
+    }
+
+    Context 'A byte order mark is the whole mark, whatever the way that the file is read' {
+        It 'does not take <Name> for a mark: <Mode>' -ForEach @(
+            foreach ($mode in 'tolerant', 'marked') {
+                @{ Mode = $mode; Name = 'the first two bytes of the UTF-8 mark'; Byte = [byte[]]@(0xEF, 0xBB); Expected = '00EF 00BB' }
+                @{ Mode = $mode; Name = 'the first two bytes of the UTF-8 mark and two letters'; Byte = [byte[]]@(0xEF, 0xBB, 0x41, 0x42); Expected = '00EF 00BB 0041 0042' }
+                @{ Mode = $mode; Name = 'the first byte of the UTF-8 mark and two letters'; Byte = [byte[]]@(0xEF, 0x41, 0x42); Expected = '00EF 0041 0042' }
+                @{ Mode = $mode; Name = 'the last two bytes of the UTF-8 mark after a letter'; Byte = [byte[]]@(0x41, 0xBB, 0xBF); Expected = '0041 00BB 00BF' }
+                @{ Mode = $mode; Name = 'a letter between the first and the last bytes of the UTF-8 mark'; Byte = [byte[]]@(0xEF, 0x41, 0xBF); Expected = '00EF 0041 00BF' }
+                @{ Mode = $mode; Name = 'one byte of the UTF-16 little endian mark'; Byte = [byte[]]@(0xFF); Expected = '00FF' }
+                @{ Mode = $mode; Name = 'the first byte of the UTF-16 little endian mark and a letter'; Byte = [byte[]]@(0xFF, 0x41); Expected = '00FF 0041' }
+                @{ Mode = $mode; Name = 'the last byte of the UTF-16 little endian mark after a letter'; Byte = [byte[]]@(0x41, 0xFE); Expected = '0041 00FE' }
+                @{ Mode = $mode; Name = 'the first byte of the UTF-16 little endian mark twice'; Byte = [byte[]]@(0xFF, 0xFF); Expected = '00FF 00FF' }
+                @{ Mode = $mode; Name = 'one byte of the UTF-16 big endian mark'; Byte = [byte[]]@(0xFE); Expected = '00FE' }
+                @{ Mode = $mode; Name = 'the first byte of the UTF-16 big endian mark and a letter'; Byte = [byte[]]@(0xFE, 0x41); Expected = '00FE 0041' }
+                @{ Mode = $mode; Name = 'the last byte of the UTF-16 big endian mark after a letter'; Byte = [byte[]]@(0x41, 0xFF); Expected = '0041 00FF' }
+                @{ Mode = $mode; Name = 'the first byte of the UTF-16 big endian mark twice'; Byte = [byte[]]@(0xFE, 0xFE); Expected = '00FE 00FE' }
+            }
+        ) {
+            $text = if ($Mode -eq 'marked') { ConvertFrom-TestByte -StrictAfterMark -Byte $Byte } else { ConvertFrom-TestByte -Byte $Byte }
+
+            ConvertTo-TestCode $text | Should -BeExactly $Expected
+        }
+
+        It 'reads a file that is only a byte order mark as an empty text, for each mark: <Mode>' -ForEach @(
+            foreach ($mode in 'tolerant', 'marked') {
+                @{ Mode = $mode; Byte = [byte[]]@(0xEF, 0xBB, 0xBF) }
+                @{ Mode = $mode; Byte = [byte[]]@(0xFF, 0xFE) }
+                @{ Mode = $mode; Byte = [byte[]]@(0xFE, 0xFF) }
+            }
+        ) {
+            $text = if ($Mode -eq 'marked') { ConvertFrom-TestByte -StrictAfterMark -Byte $Byte } else { ConvertFrom-TestByte -Byte $Byte }
+
+            ConvertTo-TestCode $text | Should -BeExactly ''
+        }
+    }
+
+    Context 'With StrictAfterMark, as a list that a person gives is read, where a byte order mark is a declaration' {
+        It 'reads UTF-8 with a byte order mark, and drops the mark' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte ([byte[]]@(0xEF, 0xBB, 0xBF) + [System.Text.Encoding]::UTF8.GetBytes("Url,é$([char]0x65E5)"))) | Should -BeExactly (ConvertTo-TestCode "Url,é$([char]0x65E5)")
+        }
+
+        It 'reads UTF-16 with a byte order mark, little endian and big endian, and drops the mark' {
+            $little = [System.Text.UnicodeEncoding]::new($false, $true).GetPreamble() + [System.Text.UnicodeEncoding]::new($false, $false).GetBytes("a$([char]0x00E9)b")
+            $big = [System.Text.UnicodeEncoding]::new($true, $true).GetPreamble() + [System.Text.UnicodeEncoding]::new($true, $false).GetBytes("a$([char]0x00E9)b")
+
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte $little) | Should -BeExactly (ConvertTo-TestCode "a$([char]0x00E9)b")
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte $big) | Should -BeExactly (ConvertTo-TestCode "a$([char]0x00E9)b")
+        }
+
+        It 'reads a surrogate pair that is whole, in UTF-16' {
+            $bytes = [System.Text.UnicodeEncoding]::new($false, $true).GetPreamble() + [System.Text.UnicodeEncoding]::new($false, $false).GetBytes("a$([char]::ConvertFromUtf32(0x1F600))")
+
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte $bytes) | Should -BeExactly (ConvertTo-TestCode "a$([char]::ConvertFromUtf32(0x1F600))")
+        }
+
+        It 'keeps the guess of a file that has no mark: UTF-8, and Windows-1252 when it is not UTF-8' {
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte ([System.Text.Encoding]::UTF8.GetBytes('Équipe'))) | Should -BeExactly (ConvertTo-TestCode 'Équipe')
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte ([byte[]]@(0x61, 0xE9))) | Should -BeExactly '0061 00E9'
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte ([byte[]]@(0x61, 0xFF, 0x62))) | Should -BeExactly '0061 00FF 0062'
+            ConvertTo-TestCode (ConvertFrom-TestByte -StrictAfterMark -Byte ([byte[]]@())) | Should -BeExactly ''
+        }
+
+        It 'refuses, instead of replacing it by U+FFFD, <Name>, because the mark says what the file is and a byte that does not fit is a damage' -ForEach @(
+            @{ Name = 'a byte that is not UTF-8 after a UTF-8 byte order mark'; Byte = [byte[]]@(0xEF, 0xBB, 0xBF, 0x61, 0xFF, 0x62) }
+            @{ Name = 'a sequence cut short after a UTF-8 byte order mark'; Byte = [byte[]]@(0xEF, 0xBB, 0xBF, 0x61, 0xC3) }
+            @{ Name = 'an overlong sequence after a UTF-8 byte order mark'; Byte = [byte[]]@(0xEF, 0xBB, 0xBF, 0xC0, 0xAF) }
+            @{ Name = 'half of a surrogate pair after a UTF-8 byte order mark'; Byte = [byte[]]@(0xEF, 0xBB, 0xBF, 0xED, 0xA0, 0x80) }
+            @{ Name = 'Windows-1252 with an accented letter after a UTF-8 byte order mark'; Byte = [byte[]]@(0xEF, 0xBB, 0xBF, 0x61, 0xE9) }
+            @{ Name = 'a lone high surrogate in UTF-16 little endian'; Byte = [byte[]]@(0xFF, 0xFE, 0x61, 0x00, 0x00, 0xD8, 0x62, 0x00) }
+            @{ Name = 'a lone low surrogate in UTF-16 little endian'; Byte = [byte[]]@(0xFF, 0xFE, 0x61, 0x00, 0x00, 0xDC, 0x62, 0x00) }
+            @{ Name = 'a byte that is left over at the end of UTF-16 little endian'; Byte = [byte[]]@(0xFF, 0xFE, 0x61, 0x00, 0x62) }
+            @{ Name = 'a lone high surrogate in UTF-16 big endian'; Byte = [byte[]]@(0xFE, 0xFF, 0x00, 0x61, 0xD8, 0x00, 0x00, 0x62) }
+            @{ Name = 'a byte that is left over at the end of UTF-16 big endian'; Byte = [byte[]]@(0xFE, 0xFF, 0x00, 0x61, 0x00) }
+        ) {
+            (Test-DecoderRefusal -Byte $Byte -StrictAfterMark) | Should -BeTrue
+        }
+
+        It 'cannot be given with Strict: one says UTF-8 only, the other reads a list' {
+            { & $script:Module { ConvertFrom-SPSLifecycleCsvByte -Bytes ([byte[]]@(0x61)) -Strict -StrictAfterMark } } | Should -Throw
         }
     }
 }
