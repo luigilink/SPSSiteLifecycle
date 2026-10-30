@@ -109,6 +109,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin API, is written anywhere else. The refused tenants are one rule that the settings and the sign-in
   share. The tests never reach a tenant: the commands of PnP.PowerShell are replaced by stubs that are checked
   before each test, throwing tripwires stand on the sign-in, and the one test that looks at the real types
-  loads the libraries of types only, in a process of its own. Without a tenant, the checkpoint takes 22 microseconds to
-  write and 32 to read a record, and 259,500 sites in 173 pages are listed in 10 s (9 s when the run
-  resumes at the half). The call has not run against a tenant yet: the first run is the lab.
+  loads the libraries of types only, in a process of its own. Without a tenant, the checkpoint takes 22
+  microseconds to write and 32 to read a record, and 259,500 sites in 173 pages are listed in 10 s (9 s when
+  the run resumes at the half). A lab script, `tools/lab/Test-TenantListing.ps1`, runs the listing against a
+  tenant and only reads: it reports the pages, the times, counts and checks (a resume after a stop gives the
+  same sites as a run that starts again, and the sites can be compared field by field with
+  `Get-PnPTenantSite`), with no tenant name, address or title in the report, and its logic is tested offline.
+  The call has not run against a tenant yet: the first run is the lab.
